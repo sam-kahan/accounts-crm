@@ -3,16 +3,30 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
 
-const NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: '◧' },
-  { to: '/companies', label: 'Companies', icon: '▤' },
-  { to: '/tasks', label: 'Tasks', icon: '✓' },
+const AREAS = [
+  {
+    heading: 'Accounts',
+    items: [
+      { to: '/dashboard', label: 'Dashboard', icon: '◧' },
+      { to: '/companies', label: 'Companies', icon: '▤' },
+      { to: '/tasks', label: 'Tasks', icon: '✓' },
+    ],
+  },
+  {
+    heading: 'Complaints',
+    items: [
+      { to: '/complaints', label: 'Complaints', icon: '⚑' },
+      { to: '/organisations', label: 'Organisations', icon: '☰' },
+    ],
+  },
 ];
 
 const TITLES = {
-  '/dashboard': 'Dashboard',
+  '/dashboard': 'Accounts — Dashboard',
   '/companies': 'Companies',
   '/tasks': 'Tasks',
+  '/complaints': 'Complaints',
+  '/organisations': 'Organisations',
 };
 
 export default function App() {
@@ -21,7 +35,8 @@ export default function App() {
   const [showChangePw, setShowChangePw] = useState(false);
   const title =
     TITLES[pathname] ||
-    (pathname.startsWith('/companies/') ? 'Company' : 'Accounts CRM');
+    (pathname.startsWith('/companies/') ? 'Company' :
+      pathname.startsWith('/complaints/') ? 'Complaint' : 'Greenco CRM');
 
   return (
     <div className="app">
@@ -30,15 +45,20 @@ export default function App() {
           <img src="/brand/wordmark-on-navy.svg" alt="Greenco" />
         </div>
         <nav>
-          {NAV.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              className={({ isActive }) => (isActive ? 'active' : '')}
-            >
-              <span aria-hidden>{n.icon}</span>
-              {n.label}
-            </NavLink>
+          {AREAS.map((area) => (
+            <div className="nav-group" key={area.heading}>
+              <div className="nav-heading">{area.heading}</div>
+              {area.items.map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  className={({ isActive }) => (isActive ? 'active' : '')}
+                >
+                  <span aria-hidden>{n.icon}</span>
+                  {n.label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="foot">

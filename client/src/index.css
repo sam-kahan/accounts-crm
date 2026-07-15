@@ -64,6 +64,15 @@ a { color: inherit; text-decoration: none; }
 }
 .sidebar .brand img { height: 52px; width: auto; max-width: 100%; display: block; }
 .sidebar nav { padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar .nav-group { margin-bottom: 14px; }
+.sidebar .nav-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 700;
+  padding: 6px 14px;
+}
 .sidebar nav a {
   padding: 10px 14px;
   border-radius: 8px;

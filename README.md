@@ -21,6 +21,9 @@ dates pulled automatically from **Companies House**.
 | **Companies** | Register of limited companies. Add by searching **Companies House** (auto-imports name, status, **financial year end**, accounts due date, confirmation statement due date) or enter manually. |
 | **Key dates** | Statutory / important dates per company (year end, accounts, confirmation statement, VAT, PAYE, corporation tax, custom). Recurring dates roll forward automatically when marked done. |
 | **Tasks** | Ad-hoc to-dos, optionally linked to a company, with due date & priority. |
+| **Complaints** | Track complaints against councils/suppliers. Auto-computes statutory response deadlines (working days + UK bank holidays), flags ignored/overdue complaints, tells you the next legal step, tracks the ombudsman referral window, and keeps a timeline/evidence trail. Escalation Stage 1 → Stage 2 → Ombudsman. |
+| **Organisations** | The bodies you complain to, each with a complaints-procedure profile (ombudsman, timescales, legal basis). Can be **AI-researched** per organisation (Claude + web search) and edited. |
+| **PWA** | Installable on phone/desktop (standalone window, Greenco icon, offline app shell). |
 
 ## Integrations
 

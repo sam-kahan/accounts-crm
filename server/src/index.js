@@ -15,6 +15,8 @@ import companies from './routes/companies.js';
 import keyDates from './routes/keyDates.js';
 import tasks from './routes/tasks.js';
 import dashboard from './routes/dashboard.js';
+import organisations from './routes/organisations.js';
+import complaints from './routes/complaints.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -71,6 +73,8 @@ app.use('/api/auth', auth);
 app.use('/api/companies', requireAuth, companies);
 app.use('/api/key-dates', requireAuth, keyDates);
 app.use('/api/tasks', requireAuth, tasks);
+app.use('/api/organisations', requireAuth, organisations);
+app.use('/api/complaints', requireAuth, complaints);
 app.use('/api/dashboard', dashboard); // send-reminders allows a cron key; see route
 
 // 404 for unmatched API routes

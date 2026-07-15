@@ -46,4 +46,13 @@ export const config = {
 
   // Public base URL, used to build password-reset links in emails.
   appUrl: process.env.APP_BASE_URL || 'https://accounts.greenco.co.uk',
+
+  // Anthropic API — used to research an organisation's complaints procedure.
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    get enabled() {
+      return Boolean(this.apiKey);
+    },
+  },
 };

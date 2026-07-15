@@ -98,6 +98,45 @@ export const api = {
       request(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     remove: (id) => request(`/tasks/${id}`, { method: 'DELETE' }),
   },
+
+  organisations: {
+    list: () => request('/organisations'),
+    get: (id) => request(`/organisations/${id}`),
+    create: (data) =>
+      request('/organisations', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id, data) =>
+      request(`/organisations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (id) => request(`/organisations/${id}`, { method: 'DELETE' }),
+    researchConfig: () => request('/organisations/research/config'),
+    research: (data) =>
+      request('/organisations/research', { method: 'POST', body: JSON.stringify(data) }),
+    defaults: (type) => request(`/organisations/defaults/${type}`),
+  },
+
+  complaints: {
+    dashboard: () => request('/complaints/dashboard'),
+    list: (state = '') =>
+      request(`/complaints${state ? `?state=${state}` : ''}`),
+    get: (id) => request(`/complaints/${id}`),
+    create: (data) =>
+      request('/complaints', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id, data) =>
+      request(`/complaints/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (id) => request(`/complaints/${id}`, { method: 'DELETE' }),
+    addEvent: (id, data) =>
+      request(`/complaints/${id}/events`, { method: 'POST', body: JSON.stringify(data) }),
+    escalate: (id, date) =>
+      request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
+  },
+};
+
+export const ORG_TYPE_LABEL = {
+  council: 'Council',
+  housing_association: 'Housing association',
+  water: 'Water supplier',
+  energy: 'Energy supplier',
+  supplier: 'Supplier',
+  other: 'Other',
 };
 
 // --- shared date helpers ---------------------------------------------------
