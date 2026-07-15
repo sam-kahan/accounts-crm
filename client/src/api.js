@@ -34,6 +34,16 @@ export const api = {
         body: JSON.stringify({ email, password }),
       }),
     logout: () => request('/auth/logout', { method: 'POST' }),
+    forgot: (email) =>
+      request('/auth/forgot', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      }),
+    reset: (token, password) =>
+      request('/auth/reset', {
+        method: 'POST',
+        body: JSON.stringify({ token, password }),
+      }),
   },
   dashboard: (days = 30) => request(`/dashboard?days=${days}`),
   sendReminders: (days = 14) =>

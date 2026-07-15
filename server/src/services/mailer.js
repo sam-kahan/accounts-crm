@@ -47,6 +47,33 @@ export async function sendReminderEmail({ subject, html, text, to }) {
   return { sent: true, to: recipients };
 }
 
+// Send a password-reset link. Returns { sent } — never throws to the caller so
+// a mail hiccup can't reveal whether an address exists.
+export async function sendPasswordResetEmail({ to, link }) {
+  const transport = getTransport();
+  if (!transport) return { sent: false, reason: 'SMTP2GO not configured' };
+  await transport.sendMail({
+    from: config.smtp.from,
+    to,
+    subject: 'Reset your Greenco Accounts CRM password',
+    text:
+      `Someone requested a password reset for your Greenco Accounts CRM account.\n\n` +
+      `Reset it here (valid for 1 hour):\n${link}\n\n` +
+      `If you didn't request this, you can ignore this email.`,
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;">
+        <h2 style="color:#1e2235;">Reset your password</h2>
+        <p>Someone requested a password reset for your Greenco Accounts CRM account.</p>
+        <p><a href="${link}" style="display:inline-block;background:#a2c533;color:#1e2235;
+          font-weight:600;padding:11px 20px;border-radius:8px;text-decoration:none;">
+          Reset password</a></p>
+        <p style="color:#6b7280;font-size:13px;">This link is valid for 1 hour. If you
+          didn't request it, you can ignore this email.</p>
+      </div>`,
+  });
+  return { sent: true };
+}
+
 // Build a simple digest email body from a list of due/overdue items.
 export function buildDigest(items) {
   if (items.length === 0) {

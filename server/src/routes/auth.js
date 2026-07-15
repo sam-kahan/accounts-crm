@@ -1,10 +1,15 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { config } from '../config.js';
+import { sendPasswordResetEmail } from '../services/mailer.js';
 
 const router = Router();
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 const loginInput = z.object({
   email: z.string().email(),
@@ -63,6 +68,70 @@ router.post(
       res.clearCookie('accounts.sid');
       res.json({ ok: true });
     });
+  }),
+);
+
+// --- password reset --------------------------------------------------------
+const forgotInput = z.object({ email: z.string().email() });
+const resetInput = z.object({
+  token: z.string().min(10),
+  password: z.string().min(8),
+});
+
+// Request a reset link. Always responds 200 (never reveals whether the address
+// exists). In non-production the token is returned to ease testing.
+router.post(
+  '/forgot',
+  asyncHandler(async (req, res) => {
+    const { email } = parse(forgotInput, req.body);
+    const { rows } = await query(
+      'SELECT id, email FROM users WHERE lower(email) = lower($1)',
+      [email],
+    );
+    const user = rows[0];
+    let devToken;
+    if (user) {
+      const token = randomBytes(32).toString('hex');
+      await query(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, now() + interval '1 hour')`,
+        [user.id, sha256(token)],
+      );
+      const link = `${config.appUrl}/reset?token=${token}`;
+      try {
+        await sendPasswordResetEmail({ to: user.email, link });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Password reset email failed:', err.message);
+      }
+      if (process.env.NODE_ENV !== 'production') devToken = token;
+    }
+    res.json({ ok: true, ...(devToken ? { devToken } : {}) });
+  }),
+);
+
+// Complete a reset with a valid token.
+router.post(
+  '/reset',
+  asyncHandler(async (req, res) => {
+    const { token, password } = parse(resetInput, req.body);
+    const { rows } = await query(
+      `SELECT * FROM password_reset_tokens
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+      [sha256(token)],
+    );
+    const rec = rows[0];
+    if (!rec) throw new HttpError(400, 'This reset link is invalid or has expired.');
+
+    const hash = await bcrypt.hash(password, 12);
+    await query('UPDATE users SET password_hash = $2 WHERE id = $1', [
+      rec.user_id,
+      hash,
+    ]);
+    await query('UPDATE password_reset_tokens SET used_at = now() WHERE id = $1', [
+      rec.id,
+    ]);
+    res.json({ ok: true });
   }),
 );
 
