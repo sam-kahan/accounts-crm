@@ -1,0 +1,41 @@
+# systemd unit for the Greenco Accounts CRM.
+# Runs the Node server (API + built React client) on 127.0.0.1:4000; nginx
+# reverse-proxies to it (deploy/nginx-accounts.conf). Same pattern as the
+# greenco-web Next.js service.
+#
+# Install on the server (deliver via git, do NOT paste):
+#   git -C /var/www/accounts-crm show origin/main:deploy/accounts-crm.service \
+#     | sudo tee /etc/systemd/system/accounts-crm.service >/dev/null
+#   sudo systemctl daemon-reload && sudo systemctl enable --now accounts-crm
+#   systemctl status accounts-crm --no-pager
+#
+# Prereqs: Node 20+ at /usr/bin/node, deps installed and client built
+#   (cd /var/www/accounts-crm && npm ci && npm run build -w client), a local
+#   PostgreSQL, and server/.env filled in (see server/.env.example).
+
+[Unit]
+Description=Greenco Accounts CRM (Node API + React client)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=sam
+Group=www-data
+# cwd = server workspace so dotenv loads server/.env (secrets, DATABASE_URL).
+WorkingDirectory=/var/www/accounts-crm/server
+Environment=NODE_ENV=production
+Environment=PORT=4000
+Environment=PATH=/usr/bin:/usr/local/bin
+ExecStart=/usr/bin/node src/index.js
+
+Restart=always
+RestartSec=3
+TimeoutStartSec=30
+
+# Hardening (relax if it interferes with anything).
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

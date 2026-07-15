@@ -13,7 +13,11 @@ Built module-by-module. The first module tracks limited companies + their key
 dates and tasks, with statutory dates from Companies House.
 
 Stack: **Node + Express** (API) · **React + Vite** (UI) · **PostgreSQL**.
-Hosted on **Hetzner** via Docker Compose (Postgres + app + Caddy/TLS).
+Hosted on **Hetzner** (`greenco-web-1`, 178.105.235.25) next to the existing
+greenco.co.uk sites — **systemd service** `accounts-crm` on 127.0.0.1:4000 +
+**nginx** vhost + **certbot** TLS + **git auto-pull** deploy. NOT Docker (the box
+uses bare-metal nginx/systemd/certbot; Docker/Caddy would clash on 80/443). Full
+runbook: `deploy/DEPLOY.md`.
 
 ## Brand
 

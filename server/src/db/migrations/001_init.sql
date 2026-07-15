@@ -4,7 +4,8 @@
 -- their statutory key dates + ad-hoc tasks.
 -- ---------------------------------------------------------------------------
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto; -- for gen_random_uuid()
+-- gen_random_uuid() is a core function since PostgreSQL 13, so no extension is
+-- needed — this keeps the app's DB user free of any superuser requirement.
 
 -- Shared trigger to keep updated_at fresh
 CREATE OR REPLACE FUNCTION set_updated_at()

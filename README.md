@@ -7,7 +7,8 @@ dates pulled automatically from **Companies House**.
 
 - **Stack:** Node + Express (API) · React + Vite (UI) · PostgreSQL
 - **Integrations:** Companies House (statutory dates), SMTP2GO (email reminders)
-- **Hosting:** Docker Compose on Hetzner, TLS via Caddy
+- **Hosting:** Hetzner (`greenco-web-1`) — systemd service + nginx + certbot,
+  alongside the existing greenco.co.uk sites. See [`deploy/DEPLOY.md`](./deploy/DEPLOY.md).
 
 ---
 
@@ -66,24 +67,21 @@ Open http://localhost:5173. The Vite dev server proxies `/api` to the API on
 
 ## Deployment (Hetzner)
 
-The whole stack runs via Docker Compose: Postgres + the app (API + built SPA) +
-Caddy for automatic HTTPS.
+Runs on `greenco-web-1` next to the existing greenco.co.uk sites, using the same
+proven pattern as the Next.js app: a **systemd service** (`accounts-crm`) on
+`127.0.0.1:4000`, an **nginx** reverse-proxy vhost for `accounts.greenco.co.uk`,
+**certbot** for TLS, and **git auto-pull** deploys (push to `main` → rebuild +
+migrate + restart within ~2 min). PostgreSQL runs locally.
 
-```bash
-# On the Hetzner box, with DNS accounts.greenco.co.uk -> this server's IP:
-cp .env.production.example .env.production   # then fill it in
-docker compose --env-file .env.production up -d --build
-```
+Full step-by-step (phone-friendly, git-delivered one-liners) is in
+**[`deploy/DEPLOY.md`](./deploy/DEPLOY.md)**. Deploy files:
+- [`deploy/accounts-crm.service`](./deploy/accounts-crm.service) — systemd unit
+- [`deploy/nginx-accounts.conf`](./deploy/nginx-accounts.conf) — nginx vhost
+- [`deploy/deploy.sh`](./deploy/deploy.sh) — build + migrate + restart
+- [`deploy/auto-pull.sh`](./deploy/auto-pull.sh) — cron-driven git deploy
 
-Caddy provisions and renews the Let's Encrypt certificate automatically. See
-[`docker-compose.yml`](./docker-compose.yml) and
-[`deploy/Caddyfile`](./deploy/Caddyfile).
-
-To send the reminder digest on a schedule, add a cron entry on the host:
-
-```
-0 8 * * *  curl -fsS -X POST https://accounts.greenco.co.uk/api/dashboard/send-reminders
-```
+The reminder digest is sent by a morning cron hitting
+`POST /api/dashboard/send-reminders` (see the runbook, Phase 9).
 
 ---
 
@@ -100,9 +98,8 @@ accounts-crm/
 │   └── src/
 │       ├── pages/        Dashboard, Companies, CompanyDetail, Tasks
 │       └── components/
-├── deploy/               Caddyfile
-├── Dockerfile            multi-stage build (client) + runtime (server)
-└── docker-compose.yml    db + app + caddy
+└── deploy/               systemd unit, nginx vhost, deploy + auto-pull scripts,
+                          and DEPLOY.md (the server runbook)
 ```
 
 ## Adding the next module
