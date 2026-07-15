@@ -1,0 +1,7 @@
+# Caddy reverse proxy for the Accounts CRM.
+# Caddy automatically provisions and renews a Let's Encrypt certificate for
+# this hostname, so all you need is the DNS A record pointing here.
+accounts.greenco.co.uk {
+	encode gzip
+	reverse_proxy app:4000
+}
