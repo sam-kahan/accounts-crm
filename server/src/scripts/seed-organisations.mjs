@@ -29,13 +29,34 @@ const PROVIDERS = [
   { name: 'Utilita', type: 'energy' },
 ];
 
-async function api(path, options = {}) {
-  const res = await fetch(API + path, {
-    headers: { ...baseHeaders, ...(cookie ? { Cookie: cookie } : {}) },
-    ...options,
-  });
-  const body = await res.json().catch(() => ({}));
-  return { status: res.status, body };
+async function api(path, options = {}, timeoutMs = 0) {
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const t = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(API + path, {
+      headers: { ...baseHeaders, ...(cookie ? { Cookie: cookie } : {}) },
+      signal: ctrl?.signal,
+      ...options,
+    });
+    const body = await res.json().catch(() => ({}));
+    return { status: res.status, body };
+  } catch (e) {
+    return { status: 0, body: { error: e.name === 'AbortError' ? 'timed out' : e.message } };
+  } finally {
+    if (t) clearTimeout(t);
+  }
+}
+
+// Run `worker` over items with limited concurrency.
+async function runPool(items, size, worker) {
+  const queue = items.map((item, i) => ({ item, i }));
+  async function next() {
+    while (queue.length) {
+      const { item, i } = queue.shift();
+      await worker(item, i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, next));
 }
 
 async function login() {
@@ -77,45 +98,50 @@ async function main() {
     (await api('/api/organisations')).body.map((o) => o.name.toLowerCase()),
   );
 
-  let researched = 0, created = 0, skipped = 0, failed = 0;
-  for (const p of PROVIDERS) {
-    if (existing.has(p.name.toLowerCase())) {
-      console.log(`• ${p.name} — already present, skipped`);
-      skipped += 1;
-      continue;
-    }
+  const todo = PROVIDERS.filter((p) => !existing.has(p.name.toLowerCase()));
+  const already = PROVIDERS.length - todo.length;
+  if (already) console.log(`${already} already present — skipping those.`);
+  if (canResearch && todo.length) {
+    console.log(`Researching ${todo.length} providers (up to 4 at a time)…\n`);
+  }
 
+  const stats = { researched: 0, created: 0, failed: 0 };
+  const CONCURRENCY = canResearch ? 4 : 8;
+
+  await runPool(todo, CONCURRENCY, async (p) => {
     if (canResearch) {
-      const r = await api('/api/organisations/research-and-create', {
-        method: 'POST',
-        body: JSON.stringify(p),
-      });
+      console.log(`  → researching ${p.name}…`);
+      // 3-minute ceiling per provider so one slow search can't stall the batch.
+      const r = await api(
+        '/api/organisations/research-and-create',
+        { method: 'POST', body: JSON.stringify(p) },
+        180000,
+      );
       if (r.status === 201 || r.status === 200) {
         console.log(`✓ ${p.name} — researched (${r.body.ombudsman_name || 'procedure set'})`);
-        researched += 1;
-        continue;
+        stats.researched += 1;
+        return;
       }
-      console.log(`  ${p.name} — research failed (${r.status}), creating with defaults`);
+      console.log(`  ${p.name} — research ${r.body.error || 'failed'} (${r.status}); using defaults`);
     }
-
-    // Plain create (no research, or research failed).
     const c = await api('/api/organisations', {
       method: 'POST',
       body: JSON.stringify({ ...p, research_status: 'none' }),
     });
     if (c.status === 201) {
       console.log(`✓ ${p.name} — created (${p.type} defaults)`);
-      created += 1;
+      stats.created += 1;
     } else {
       console.log(`✗ ${p.name} — failed (${c.status}): ${c.body.error || ''}`);
-      failed += 1;
+      stats.failed += 1;
     }
-  }
+  });
 
   console.log(
-    `\nDone. Researched ${researched}, created ${created}, skipped ${skipped}, failed ${failed}.`,
+    `\nDone. Researched ${stats.researched}, created ${stats.created}, ` +
+      `skipped ${already}, failed ${stats.failed}.`,
   );
-  if (!canResearch && created > 0) {
+  if (!canResearch && stats.created > 0) {
     console.log(
       'Tip: set ANTHROPIC_API_KEY on the server, then open each organisation and click ' +
         '“Research procedure” to tailor its deadlines — or re-run this after deleting them.',
