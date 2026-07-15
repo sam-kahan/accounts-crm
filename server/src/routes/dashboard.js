@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { query } from '../db/pool.js';
-import { asyncHandler } from '../lib/http.js';
+import { asyncHandler, HttpError } from '../lib/http.js';
+import { config } from '../config.js';
+import { requireAuth } from '../middleware/auth.js';
 import {
   sendReminderEmail,
   buildDigest,
@@ -8,6 +10,15 @@ import {
 } from '../services/mailer.js';
 
 const router = Router();
+
+// Allow either a logged-in session or a matching cron key (for the nightly
+// reminder job, which runs without a browser session).
+function sessionOrCronKey(req, res, next) {
+  if (req.session?.userId) return next();
+  const key = req.query.key || req.body?.key;
+  if (config.reminderCronKey && key === config.reminderCronKey) return next();
+  return next(new HttpError(401, 'Not authenticated'));
+}
 
 // Collect pending key dates + open tasks that have a due date, flagged overdue,
 // within `days` ahead (plus everything already overdue).
@@ -59,6 +70,7 @@ async function collectDueItems(days = 30) {
 
 router.get(
   '/',
+  requireAuth,
   asyncHandler(async (req, res) => {
     const days = Number(req.query.days) || 30;
     const items = await collectDueItems(days);
@@ -93,6 +105,7 @@ router.get(
 // scheduler can hit this endpoint daily later.
 router.post(
   '/send-reminders',
+  sessionOrCronKey,
   asyncHandler(async (req, res) => {
     const days = Number(req.body?.days) || 14;
     const items = await collectDueItems(days);

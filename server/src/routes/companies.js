@@ -17,6 +17,7 @@ const companyInput = z.object({
   status: z.enum(['active', 'dormant', 'dissolved', 'other']).optional(),
   incorporation_date: z.string().optional().nullable(),
   accounts_next_due: z.string().optional().nullable(),
+  accounts_next_made_up_to: z.string().optional().nullable(),
   confirmation_statement_next_due: z.string().optional().nullable(),
   registered_office: z.string().optional().nullable(),
   sic_codes: z.array(z.string()).optional().nullable(),
@@ -24,8 +25,8 @@ const companyInput = z.object({
 });
 
 const COLS = `id, name, company_number, status, incorporation_date,
-  accounts_next_due, confirmation_statement_next_due, registered_office,
-  sic_codes, notes, ch_last_synced_at, created_at, updated_at`;
+  accounts_next_due, accounts_next_made_up_to, confirmation_statement_next_due,
+  registered_office, sic_codes, notes, ch_last_synced_at, created_at, updated_at`;
 
 // --- Companies House lookup (search + profile preview) ---------------------
 // These come before /:id so "search" isn't treated as an id.
@@ -171,7 +172,8 @@ router.post(
         `UPDATE companies SET
            name = $2, status = $3, incorporation_date = $4,
            accounts_next_due = $5, confirmation_statement_next_due = $6,
-           registered_office = $7, sic_codes = $8, ch_last_synced_at = now()
+           registered_office = $7, sic_codes = $8, accounts_next_made_up_to = $9,
+           ch_last_synced_at = now()
          WHERE id = $1`,
         [
           req.params.id,
@@ -182,6 +184,7 @@ router.post(
           company.confirmation_statement_next_due,
           company.registered_office,
           company.sic_codes,
+          company.accounts_next_made_up_to,
         ],
       );
       await upsertKeyDates(req.params.id, keyDates, client);
@@ -209,7 +212,8 @@ router.put(
       `UPDATE companies SET
          name = $2, company_number = $3, status = $4, incorporation_date = $5,
          accounts_next_due = $6, confirmation_statement_next_due = $7,
-         registered_office = $8, sic_codes = $9, notes = $10
+         registered_office = $8, sic_codes = $9, notes = $10,
+         accounts_next_made_up_to = $11
        WHERE id = $1 RETURNING ${COLS}`,
       [
         req.params.id,
@@ -222,6 +226,7 @@ router.put(
         data.registered_office || null,
         data.sic_codes || null,
         data.notes || null,
+        data.accounts_next_made_up_to || null,
       ],
     );
     if (!rows[0]) throw new HttpError(404, 'Company not found');
@@ -247,8 +252,8 @@ async function insertCompany(data, client = { query }) {
     `INSERT INTO companies
        (name, company_number, status, incorporation_date, accounts_next_due,
         confirmation_statement_next_due, registered_office, sic_codes, notes,
-        ch_last_synced_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, ${
+        accounts_next_made_up_to, ch_last_synced_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, ${
        data.ch_last_synced_at ? 'now()' : 'NULL'
      })
      RETURNING ${COLS}`,
@@ -262,6 +267,7 @@ async function insertCompany(data, client = { query }) {
       data.registered_office || null,
       data.sic_codes || null,
       data.notes || null,
+      data.accounts_next_made_up_to || null,
     ],
   );
   return rows[0];

@@ -4,8 +4,14 @@ const BASE = '/api';
 async function request(path, options = {}) {
   const res = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     ...options,
   });
+  // A 401 on any non-auth call means the session expired — tell the app to
+  // drop back to the login screen.
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    window.dispatchEvent(new Event('auth:unauthorized'));
+  }
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -19,6 +25,16 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request('/health'),
+
+  auth: {
+    me: () => request('/auth/me'),
+    login: (email, password) =>
+      request('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }),
+    logout: () => request('/auth/logout', { method: 'POST' }),
+  },
   dashboard: (days = 30) => request(`/dashboard?days=${days}`),
   sendReminders: (days = 14) =>
     request('/dashboard/send-reminders', {

@@ -9,6 +9,7 @@ const input = z.object({
   company_id: z.string().uuid(),
   category: z
     .enum([
+      'year_end',
       'accounts',
       'confirmation_statement',
       'corporation_tax',

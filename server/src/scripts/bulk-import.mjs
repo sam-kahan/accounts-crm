@@ -21,13 +21,45 @@ const norm = (s) =>
   s.toUpperCase().replace(/\bLIMITED\b/g, 'LTD').replace(/[^A-Z0-9]/g, '');
 const isNumber = (s) => /^[A-Z0-9]{8}$/i.test(s.replace(/\s/g, ''));
 
-async function api(path, options) {
+let cookie = '';
+
+async function api(path, options = {}) {
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
     ...options,
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };
+}
+
+// The API requires a login session. Authenticate with CRM_EMAIL / CRM_PASSWORD.
+async function login() {
+  const email = process.env.CRM_EMAIL;
+  const password = process.env.CRM_PASSWORD;
+  if (!email || !password) {
+    console.error(
+      'This CRM requires login. Re-run with your credentials, e.g.:\n' +
+        "  CRM_EMAIL=you@greenco.co.uk CRM_PASSWORD='...' node server/src/scripts/bulk-import.mjs",
+    );
+    process.exit(1);
+  }
+  const res = await fetch(API + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    console.error(`Login failed (${res.status}) for ${email}.`);
+    process.exit(1);
+  }
+  const set = res.headers.getSetCookie
+    ? res.headers.getSetCookie()
+    : [res.headers.get('set-cookie')].filter(Boolean);
+  cookie = set.map((c) => c.split(';')[0]).join('; ');
+  console.log(`Logged in as ${email}\n`);
 }
 
 async function resolveNumber(name) {
@@ -56,6 +88,8 @@ async function main() {
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('#'));
+
+  await login();
 
   console.log(`Importing ${entries.length} companies via ${API}\n`);
   const summary = { imported: 0, exists: 0, notfound: 0, failed: 0 };

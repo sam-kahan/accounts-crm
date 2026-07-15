@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useAuth } from './auth.jsx';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧' },
@@ -14,6 +15,7 @@ const TITLES = {
 
 export default function App() {
   const { pathname } = useLocation();
+  const { user, logout } = useAuth();
   const title =
     TITLES[pathname] ||
     (pathname.startsWith('/companies/') ? 'Company' : 'Accounts CRM');
@@ -37,9 +39,15 @@ export default function App() {
           ))}
         </nav>
         <div className="foot">
-          Greenco Accounts CRM
-          <br />
-          accounts.greenco.co.uk
+          {user && (
+            <div className="user-box">
+              <div className="user-name">{user.name || user.email}</div>
+              <button className="signout" onClick={logout}>
+                Sign out
+              </button>
+            </div>
+          )}
+          <div className="foot-app">Accounts CRM · accounts.greenco.co.uk</div>
         </div>
       </aside>
       <div className="main">

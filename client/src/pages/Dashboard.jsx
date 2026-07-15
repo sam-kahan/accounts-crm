@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, formatDate, daysUntil } from '../api';
 
 const CATEGORY_LABEL = {
+  year_end: 'Year end',
   accounts: 'Accounts',
   confirmation_statement: 'Confirmation stmt',
   corporation_tax: 'Corp tax',

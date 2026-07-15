@@ -31,4 +31,16 @@ export const config = {
       return Boolean(this.user && this.pass);
     },
   },
+
+  session: {
+    secret: process.env.SESSION_SECRET || 'dev-only-insecure-secret-change-me',
+    // Secure cookies once behind TLS (production). Off locally so login works
+    // over plain http://localhost.
+    secure: process.env.NODE_ENV === 'production',
+    maxAgeMs: 1000 * 60 * 60 * 12, // 12 hours
+  },
+
+  // Lets the nightly reminder cron call /api/dashboard/send-reminders without a
+  // login session: POST ...?key=<REMINDER_CRON_KEY>.
+  reminderCronKey: process.env.REMINDER_CRON_KEY || '',
 };

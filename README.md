@@ -16,9 +16,10 @@ dates pulled automatically from **Companies House**.
 
 | Area | What it does |
 |------|--------------|
+| **Login** | Individual user accounts (email + password, hashed with bcrypt), server-side sessions. All data is behind login. Manage users with `server/src/scripts/create-user.mjs`. |
 | **Dashboard** | The "remind me" view — overdue and upcoming key dates & tasks (next 90 days), plus a one-click email digest. |
-| **Companies** | Register of limited companies. Add by searching **Companies House** (auto-imports name, status, accounts due date, confirmation statement due date) or enter manually. |
-| **Key dates** | Statutory / important dates per company (accounts, confirmation statement, VAT, PAYE, corporation tax, custom). Recurring dates roll forward automatically when marked done. |
+| **Companies** | Register of limited companies. Add by searching **Companies House** (auto-imports name, status, **financial year end**, accounts due date, confirmation statement due date) or enter manually. |
+| **Key dates** | Statutory / important dates per company (year end, accounts, confirmation statement, VAT, PAYE, corporation tax, custom). Recurring dates roll forward automatically when marked done. |
 | **Tasks** | Ad-hoc to-dos, optionally linked to a company, with due date & priority. |
 
 ## Integrations

@@ -53,6 +53,8 @@ export function mapProfile(profile) {
     status: profile.company_status || 'active',
     incorporation_date: profile.date_of_creation || null,
     accounts_next_due: profile.accounts?.next_due || null,
+    // Financial year end (accounting period end date).
+    accounts_next_made_up_to: profile.accounts?.next_made_up_to || null,
     confirmation_statement_next_due:
       profile.confirmation_statement?.next_due || null,
     registered_office: formatAddress(profile.registered_office_address),
@@ -61,6 +63,16 @@ export function mapProfile(profile) {
 
   // Statutory key dates worth surfacing as reminders.
   const keyDates = [];
+  // Financial year end — comes before the filing deadline, so track it too.
+  if (profile.accounts?.next_made_up_to) {
+    keyDates.push({
+      category: 'year_end',
+      title: 'Financial year end (accounting period ends)',
+      due_date: profile.accounts.next_made_up_to,
+      recurrence: 'annual',
+      source: 'companies_house',
+    });
+  }
   if (profile.accounts?.next_due) {
     keyDates.push({
       category: 'accounts',

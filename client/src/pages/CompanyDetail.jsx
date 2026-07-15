@@ -4,6 +4,7 @@ import { api, formatDate, dueClass, daysUntil } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const CATEGORY_LABEL = {
+  year_end: 'Year end',
   accounts: 'Accounts',
   confirmation_statement: 'Confirmation statement',
   corporation_tax: 'Corporation tax',
@@ -176,6 +177,11 @@ export default function CompanyDetail() {
           <div className="form-grid">
             <Info label="Status" value={<span className="badge navy">{company.status}</span>} />
             <Info label="Incorporated" value={formatDate(company.incorporation_date)} />
+            <Info label="Financial year end" value={
+              <span className={`due ${dueClass(company.accounts_next_made_up_to)}`}>
+                {formatDate(company.accounts_next_made_up_to)}
+              </span>
+            } />
             <Info label="Accounts next due" value={
               <span className={`due ${dueClass(company.accounts_next_due)}`}>
                 {formatDate(company.accounts_next_due)}

@@ -48,6 +48,18 @@ From the Greenco logo — use these, don't invent colours:
   - Dev proxies `/api` to `:4000` (see `vite.config.js`); in production the
     Express server serves the built SPA.
 
+## Auth
+
+- Individual users in the `users` table (bcryptjs-hashed passwords). Sessions via
+  express-session + connect-pg-simple (`session` table). `SESSION_SECRET` required
+  in prod; `app.set('trust proxy', 1)` + secure cookies behind nginx TLS.
+- All `/api/*` data routes are behind `requireAuth`. Public: `/api/health`,
+  `/api/auth/*`. The reminder cron endpoint accepts a session OR
+  `?key=REMINDER_CRON_KEY`.
+- Manage users: `node server/src/scripts/create-user.mjs <email> [name]`
+  (re-run to reset a password). Scripts that hit the API (bulk-import) log in
+  with `CRM_EMAIL` / `CRM_PASSWORD`.
+
 ## Integrations
 
 - **Companies House** (`COMPANIES_HOUSE_API_KEY`) — company profile + statutory

@@ -76,6 +76,8 @@ Set:
 - `COMPANIES_HOUSE_API_KEY=` your key (or leave blank to add later)
 - `SMTP_USER` / `SMTP_PASS` — SMTP2GO (leave blank to add later)
 - `REMINDER_TO=sam.kahan@greenco.co.uk`
+- `SESSION_SECRET=` — **required for login.** Generate one: `openssl rand -hex 32`
+- `REMINDER_CRON_KEY=` — for the nightly reminder cron: `openssl rand -hex 24`
 
 ## Phase 4 — First build + migrate
 
@@ -121,6 +123,17 @@ Then issue the certificate (adds the 443 block + redirect automatically):
 sudo certbot --nginx -d accounts.greenco.co.uk --redirect && sudo nginx -t
 ```
 
+## Phase 7.5 — Create your login
+
+The app requires a login. Create your user (generates a password and prints it
+once; or set your own with `USER_PASSWORD=...`):
+```
+node /var/www/accounts-crm/server/src/scripts/create-user.mjs sam.kahan@greenco.co.uk "Sam Kahan"
+```
+Log in at https://accounts.greenco.co.uk with that email + password. Add
+colleagues later by re-running with their email; re-running an existing email
+resets that user's password.
+
 ## Phase 8 — Auto-deploy cron
 
 ```
@@ -130,9 +143,10 @@ sudo certbot --nginx -d accounts.greenco.co.uk --redirect && sudo nginx -t
 
 ## Phase 9 — Reminder digest cron (optional)
 
-Emails the upcoming/overdue digest each morning via SMTP2GO:
+Emails the upcoming/overdue digest each morning via SMTP2GO. It authenticates
+with the `REMINDER_CRON_KEY` you set in `server/.env` (replace `THEKEY`):
 ```
-( crontab -l 2>/dev/null; echo 'CRON_TZ=Europe/London' ; echo '0 8 * * * curl -fsS -X POST https://accounts.greenco.co.uk/api/dashboard/send-reminders >/dev/null' ) | crontab -
+( crontab -l 2>/dev/null; echo 'CRON_TZ=Europe/London' ; echo '0 8 * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/dashboard/send-reminders?key=THEKEY" >/dev/null' ) | crontab -
 ```
 
 ## Phase 10 — Verify
