@@ -63,6 +63,46 @@ router.post(
   }),
 );
 
+// Research a provider AND save it as an organisation in one step. If one with
+// the same name already exists, return that instead of duplicating.
+router.post(
+  '/research-and-create',
+  asyncHandler(async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    const type = ORG_TYPES.includes(req.body?.type) ? req.body.type : 'council';
+    const location = req.body?.location || null;
+    if (!name) throw new HttpError(400, 'name is required');
+
+    const existing = await query(
+      `SELECT ${COLS} FROM organisations WHERE lower(name) = lower($1) LIMIT 1`,
+      [name],
+    );
+    if (existing.rows[0]) {
+      return res.status(200).json({ ...existing.rows[0], existed: true });
+    }
+
+    const p = await researchOrganisation({ name, type, location });
+    const { rows } = await query(
+      `INSERT INTO organisations
+        (name, type, location, complaints_email, complaints_url, phone,
+         ombudsman_name, ombudsman_url, ombudsman_referral_months,
+         stage1_response_days, stage2_response_days, ack_days,
+         procedure_summary, legal_basis, sources, research_status, researched_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'researched',now())
+       RETURNING ${COLS}`,
+      [
+        name, type, location, p.complaints_email || null, p.complaints_url || null,
+        p.phone || null, p.ombudsman_name || null, p.ombudsman_url || null,
+        p.ombudsman_referral_months ?? null, p.stage1_response_days ?? null,
+        p.stage2_response_days ?? null, p.ack_days ?? null,
+        p.procedure_summary || null, p.legal_basis || null,
+        p.sources ? JSON.stringify(p.sources) : null,
+      ],
+    );
+    res.status(201).json(rows[0]);
+  }),
+);
+
 // Type defaults (used to show the "why" and as a manual fallback).
 router.get(
   '/defaults/:type',

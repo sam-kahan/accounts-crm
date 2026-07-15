@@ -110,6 +110,11 @@ export const api = {
     researchConfig: () => request('/organisations/research/config'),
     research: (data) =>
       request('/organisations/research', { method: 'POST', body: JSON.stringify(data) }),
+    researchAndCreate: (data) =>
+      request('/organisations/research-and-create', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
     defaults: (type) => request(`/organisations/defaults/${type}`),
   },
 

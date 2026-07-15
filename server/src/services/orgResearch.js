@@ -70,15 +70,28 @@ ${fallback.ackDays} working days, Stage 1 response within ${fallback.stage1Days}
 Stage 2 within ${fallback.stage2Days} working days, escalate to ${fallback.ombudsman} within
 ${fallback.referralMonths} months. Confirm or correct these for THIS organisation.`;
 
-  const res = await anthropic.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 4000,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium' },
-    system: SYSTEM,
-    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
-    messages: [{ role: 'user', content: prompt }],
-  });
+  const messages = [{ role: 'user', content: prompt }];
+  let res;
+  // The web-search server tool runs a server-side loop; if it hits its
+  // iteration cap it returns stop_reason 'pause_turn' and must be resumed by
+  // re-sending the conversation. Loop a few times until it finishes.
+  for (let i = 0; i < 4; i += 1) {
+    res = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: 4000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium' },
+      system: SYSTEM,
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
+      messages,
+    });
+    if (res.stop_reason !== 'pause_turn') break;
+    messages.push({ role: 'assistant', content: res.content });
+  }
+
+  if (res.stop_reason === 'refusal') {
+    throw new HttpError(502, 'Research request was declined.');
+  }
 
   const text = res.content
     .filter((b) => b.type === 'text')

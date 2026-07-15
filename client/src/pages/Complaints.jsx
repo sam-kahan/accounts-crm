@@ -19,12 +19,14 @@ function StatusBadge({ c }) {
   return <span className="badge amber">{c.label}</span>;
 }
 
-function NewComplaintModal({ orgs, onClose, onCreated }) {
+function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCreated }) {
   const today = new Date().toISOString().slice(0, 10);
+  const [orgs, setOrgs] = useState(initialOrgs);
   const [form, setForm] = useState({
     organisation_id: '',
     org_name: '',
     org_type: 'council',
+    location: '',
     subject: '',
     property: '',
     category: '',
@@ -35,15 +37,43 @@ function NewComplaintModal({ orgs, onClose, onCreated }) {
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [researching, setResearching] = useState(false);
+  const [note, setNote] = useState(null);
 
   function pickOrg(id) {
     const org = orgs.find((o) => o.id === id);
+    setNote(null);
     setForm({
       ...form,
       organisation_id: id,
       org_name: org ? org.name : form.org_name,
       org_type: org ? org.type : form.org_type,
     });
+  }
+
+  // Research this provider, save it as an organisation, and link the complaint
+  // to it so its tailored deadlines apply.
+  async function researchOrg() {
+    if (!form.org_name.trim()) { setError('Enter the organisation name first.'); return; }
+    setResearching(true);
+    setError(null);
+    setNote(null);
+    try {
+      const org = await api.organisations.researchAndCreate({
+        name: form.org_name, type: form.org_type, location: form.location,
+      });
+      setOrgs((prev) => (prev.some((o) => o.id === org.id) ? prev : [...prev, org]));
+      setForm((f) => ({ ...f, organisation_id: org.id, org_name: org.name, org_type: org.type }));
+      setNote(
+        org.existed
+          ? `Linked to existing organisation “${org.name}”.`
+          : `Researched “${org.name}” — ${org.ombudsman_name || 'procedure'} and deadlines tailored.`,
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResearching(false);
+    }
   }
 
   async function save(e) {
@@ -96,6 +126,31 @@ function NewComplaintModal({ orgs, onClose, onCreated }) {
               ))}
             </select>
           </label>
+          {!form.organisation_id && (
+            <div className="full flex-between" style={{ marginBottom: 12, gap: 12 }}>
+              <input
+                style={{ maxWidth: 220 }}
+                placeholder="Location / area (helps research)"
+                value={form.location}
+                onChange={(e) => setForm({ ...form, location: e.target.value })}
+              />
+              <button
+                type="button"
+                className="btn-navy btn-sm"
+                onClick={researchOrg}
+                disabled={researching || !researchEnabled}
+                title={researchEnabled ? '' : 'Set ANTHROPIC_API_KEY on the server to enable'}
+              >
+                {researching ? 'Researching…' : '🔎 Research & tailor this provider'}
+              </button>
+            </div>
+          )}
+          {note && <div className="inline-note full" style={{ marginBottom: 12 }}>{note}</div>}
+          {form.organisation_id && (
+            <div className="inline-note full" style={{ marginBottom: 12 }}>
+              ✓ Linked to a saved organisation — its tailored deadlines will apply.
+            </div>
+          )}
           <label className="field full">
             <span className="lbl">Subject *</span>
             <input
@@ -171,6 +226,7 @@ function NewComplaintModal({ orgs, onClose, onCreated }) {
 export default function Complaints() {
   const [items, setItems] = useState(null);
   const [orgs, setOrgs] = useState([]);
+  const [researchEnabled, setResearchEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
   const [showNew, setShowNew] = useState(false);
   const navigate = useNavigate();
@@ -179,6 +235,7 @@ export default function Complaints() {
   useEffect(() => {
     load();
     api.organisations.list().then(setOrgs);
+    api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled));
   }, []);
 
   if (!items) return <div className="spinner">Loading complaints…</div>;
@@ -258,6 +315,7 @@ export default function Complaints() {
       {showNew && (
         <NewComplaintModal
           orgs={orgs}
+          researchEnabled={researchEnabled}
           onClose={() => setShowNew(false)}
           onCreated={(c) => {
             setShowNew(false);
