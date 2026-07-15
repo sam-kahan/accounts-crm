@@ -57,14 +57,21 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 \
 ```
 (No superuser/extension needed — the schema uses core `gen_random_uuid()`.)
 
+**Confirm the port.** This box already runs another Postgres on 5432, so the
+cluster with our DB is on **5434**. Always use the port from `pg_lsclusters`:
+```
+pg_lsclusters      # note the PORT column (5434 on greenco-web-1)
+```
+
 ## Phase 3 — Server env / secrets (gitignored)
 
 ```
 cp /var/www/accounts-crm/server/.env.example /var/www/accounts-crm/server/.env && chmod 640 /var/www/accounts-crm/server/.env && nano /var/www/accounts-crm/server/.env
 ```
 Set:
-- `DATABASE_URL=postgres://accounts:THE-DBPASS@localhost:5432/accounts_crm`
-  (use the `$DBPASS` from Phase 2; URL-encode any special characters)
+- `DATABASE_URL=postgres://accounts:THE-DBPASS@localhost:5434/accounts_crm`
+  (use the `$DBPASS` from Phase 2 and the **port from `pg_lsclusters`** — 5434 on
+  this box, not the usual 5432; URL-encode any special characters)
 - `CORS_ORIGIN=https://accounts.greenco.co.uk`
 - `COMPANIES_HOUSE_API_KEY=` your key (or leave blank to add later)
 - `SMTP_USER` / `SMTP_PASS` — SMTP2GO (leave blank to add later)
