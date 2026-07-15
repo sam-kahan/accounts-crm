@@ -21,7 +21,9 @@ function DueBadge({ date }) {
   return <span className="badge grey">in {n}d</span>;
 }
 
-function ItemRow({ item }) {
+function ItemRow({ item, onDismiss }) {
+  const [busy, setBusy] = useState(false);
+  const recurring = item.type === 'key_date' && item.category === 'year_end';
   return (
     <tr>
       <td className={`due ${item.overdue ? 'overdue' : 'soon'}`}>
@@ -41,8 +43,28 @@ function ItemRow({ item }) {
         )}
       </td>
       <td className="muted">{item.company_name || '—'}</td>
-      <td style={{ textAlign: 'right' }}>
+      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
         <DueBadge date={item.due_date} />
+        <button
+          className="btn-ghost btn-sm"
+          style={{ marginLeft: 8 }}
+          disabled={busy}
+          title={
+            recurring
+              ? 'Dismiss — rolls forward to next year'
+              : 'Dismiss this reminder'
+          }
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await onDismiss(item);
+            } catch {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? '…' : 'Dismiss'}
+        </button>
       </td>
     </tr>
   );
@@ -57,6 +79,17 @@ export default function Dashboard() {
   useEffect(() => {
     load();
   }, []);
+
+  // Dismiss a dashboard reminder. Recurring key dates (year end) roll forward
+  // to next year; one-off key dates are marked done; tasks are marked done.
+  async function dismiss(item) {
+    if (item.type === 'key_date') {
+      await api.keyDates.complete(item.id);
+    } else {
+      await api.tasks.update(item.id, { status: 'done' });
+    }
+    await load();
+  }
 
   async function sendReminders() {
     setSending(true);
@@ -122,7 +155,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {overdue.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} />
+                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} />
               ))}
             </tbody>
           </table>
@@ -140,7 +173,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {upcoming.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} />
+                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} />
               ))}
             </tbody>
           </table>
