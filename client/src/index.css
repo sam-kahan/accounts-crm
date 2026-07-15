@@ -103,7 +103,18 @@ a { color: inherit; text-decoration: none; }
   width: 100%;
 }
 .sidebar .signout:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.sidebar .foot-app { color: rgba(255, 255, 255, 0.35); }
+.sidebar .user-actions { display: flex; flex-direction: column; gap: 6px; }
+.sidebar .linkish {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.sidebar .linkish:hover { color: var(--green); background: none; }
+.sidebar .foot-app { color: rgba(255, 255, 255, 0.35); margin-top: 10px; }
 
 /* --- Login screen --------------------------------------------------------- */
 .login-screen {

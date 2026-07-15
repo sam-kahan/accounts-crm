@@ -8,12 +8,17 @@
 const API = process.env.API_URL || 'http://localhost:4000';
 let cookie = '';
 
+// The session cookie is Secure in production. When we talk to the app directly
+// over http://localhost (bypassing nginx), tell it the request arrived over
+// https so it will issue the cookie. Safe: this runs locally on the same box.
+const baseHeaders = {
+  'Content-Type': 'application/json',
+  'X-Forwarded-Proto': 'https',
+};
+
 async function api(path, options = {}) {
   const res = await fetch(API + path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: cookie } : {}),
-    },
+    headers: { ...baseHeaders, ...(cookie ? { Cookie: cookie } : {}) },
     ...options,
   });
   const body = await res.json().catch(() => ({}));
@@ -32,7 +37,7 @@ async function login() {
   }
   const res = await fetch(API + '/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: baseHeaders,
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {

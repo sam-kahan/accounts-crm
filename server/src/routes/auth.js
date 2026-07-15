@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config } from '../config.js';
+import { requireAuth } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
 
 const router = Router();
@@ -130,6 +131,34 @@ router.post(
     ]);
     await query('UPDATE password_reset_tokens SET used_at = now() WHERE id = $1', [
       rec.id,
+    ]);
+    res.json({ ok: true });
+  }),
+);
+
+// Change password while logged in (requires the current password).
+const changeInput = z.object({
+  current_password: z.string().min(1),
+  new_password: z.string().min(8),
+});
+
+router.post(
+  '/change-password',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { current_password, new_password } = parse(changeInput, req.body);
+    const { rows } = await query('SELECT * FROM users WHERE id = $1', [
+      req.session.userId,
+    ]);
+    const user = rows[0];
+    if (!user) throw new HttpError(401, 'Not authenticated');
+    const ok = await bcrypt.compare(current_password, user.password_hash);
+    if (!ok) throw new HttpError(400, 'Current password is incorrect.');
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await query('UPDATE users SET password_hash = $2 WHERE id = $1', [
+      user.id,
+      hash,
     ]);
     res.json({ ok: true });
   }),

@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
+import ChangePasswordModal from './components/ChangePasswordModal.jsx';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧' },
@@ -16,6 +18,7 @@ const TITLES = {
 export default function App() {
   const { pathname } = useLocation();
   const { user, logout } = useAuth();
+  const [showChangePw, setShowChangePw] = useState(false);
   const title =
     TITLES[pathname] ||
     (pathname.startsWith('/companies/') ? 'Company' : 'Accounts CRM');
@@ -42,9 +45,14 @@ export default function App() {
           {user && (
             <div className="user-box">
               <div className="user-name">{user.name || user.email}</div>
-              <button className="signout" onClick={logout}>
-                Sign out
-              </button>
+              <div className="user-actions">
+                <button className="linkish" onClick={() => setShowChangePw(true)}>
+                  Change password
+                </button>
+                <button className="signout" onClick={logout}>
+                  Sign out
+                </button>
+              </div>
             </div>
           )}
           <div className="foot-app">Accounts CRM · accounts.greenco.co.uk</div>
@@ -58,6 +66,9 @@ export default function App() {
           <Outlet />
         </div>
       </div>
+      {showChangePw && (
+        <ChangePasswordModal onClose={() => setShowChangePw(false)} />
+      )}
     </div>
   );
 }

@@ -44,6 +44,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ token, password }),
       }),
+    changePassword: (current_password, new_password) =>
+      request('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password, new_password }),
+      }),
   },
   dashboard: (days = 30) => request(`/dashboard?days=${days}`),
   sendReminders: (days = 14) =>

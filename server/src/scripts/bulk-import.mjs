@@ -23,12 +23,16 @@ const isNumber = (s) => /^[A-Z0-9]{8}$/i.test(s.replace(/\s/g, ''));
 
 let cookie = '';
 
+// Tell the app the request arrived over https so it issues the Secure session
+// cookie even when we hit http://localhost directly (bypassing nginx).
+const baseHeaders = {
+  'Content-Type': 'application/json',
+  'X-Forwarded-Proto': 'https',
+};
+
 async function api(path, options = {}) {
   const res = await fetch(API + path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: cookie } : {}),
-    },
+    headers: { ...baseHeaders, ...(cookie ? { Cookie: cookie } : {}) },
     ...options,
   });
   const body = await res.json().catch(() => ({}));
@@ -48,7 +52,7 @@ async function login() {
   }
   const res = await fetch(API + '/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: baseHeaders,
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
