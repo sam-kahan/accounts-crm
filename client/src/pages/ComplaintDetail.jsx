@@ -18,11 +18,37 @@ export default function ComplaintDetail() {
   const [c, setC] = useState(null);
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [emailCfg, setEmailCfg] = useState({ enabled: false, mailbox: null });
+  const [syncing, setSyncing] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
   const [ev, setEv] = useState({ event_date: today, type: 'chased', note: '' });
 
   const load = () => api.complaints.get(id).then(setC).catch((e) => setMsg(e.message));
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    load();
+    api.complaints.emailConfig().then(setEmailCfg).catch(() => {});
+  }, [id]);
+
+  async function syncEmails() {
+    setSyncing(true);
+    setMsg(null);
+    try {
+      const r = await api.complaints.fetchEmails();
+      await load();
+      setMsg(
+        `Inbox synced — ${r.inserted} new email(s), ${r.matched} matched to a complaint` +
+          (r.configured ? '.' : ' (using the dev inbox — Microsoft Graph not configured).'),
+      );
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function copyRef() {
+    if (c?.ref_code) navigator.clipboard?.writeText(c.ref_code).catch(() => {});
+  }
 
   async function addEvent(e) {
     e.preventDefault();
@@ -62,6 +88,35 @@ export default function ComplaintDetail() {
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+
+      {/* CC-to-log banner */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div
+          className="card-body flex-between"
+          style={{ gap: 12, alignItems: 'center' }}
+        >
+          <div>
+            <div style={{ fontWeight: 600 }}>📧 Log emails to this complaint</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+              CC or BCC{' '}
+              <strong>{emailCfg.mailbox || 'your complaints mailbox'}</strong> and
+              keep the reference in the subject line.
+            </div>
+          </div>
+          <div className="btn-row" style={{ alignItems: 'center' }}>
+            <span
+              className="badge navy"
+              style={{ fontSize: 14, padding: '6px 12px', fontVariantNumeric: 'tabular-nums' }}
+            >
+              {c.ref_code}
+            </span>
+            <button className="btn btn-sm" onClick={copyRef}>Copy ref</button>
+            <button className="btn-navy btn-sm" onClick={syncEmails} disabled={syncing}>
+              {syncing ? 'Syncing…' : 'Sync inbox'}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Header + status */}
       <div className="card" style={{ marginBottom: 20 }}>
@@ -143,6 +198,52 @@ export default function ComplaintDetail() {
           </div>
         </div>
       )}
+
+      {/* Emails */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head">
+          <h2>
+            Emails{' '}
+            {c.emails?.length > 0 && <span className="badge navy">{c.emails.length}</span>}
+          </h2>
+          <button className="btn btn-sm" onClick={syncEmails} disabled={syncing}>
+            {syncing ? 'Syncing…' : 'Sync inbox'}
+          </button>
+        </div>
+        {c.emails?.length ? (
+          <table>
+            <tbody>
+              {c.emails.map((em) => (
+                <tr key={em.id}>
+                  <td className="due" style={{ width: 120 }}>
+                    {formatDate((em.received_at || '').slice(0, 10))}
+                  </td>
+                  <td>
+                    <strong>{em.subject || '(no subject)'}</strong>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {em.sender_name || em.sender_email}
+                    </div>
+                    {em.body_preview && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                        {em.body_preview}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span className="badge grey">{em.match_method}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">
+            No emails logged yet. CC{' '}
+            {emailCfg.mailbox || 'your complaints mailbox'} with{' '}
+            <strong>{c.ref_code}</strong> in the subject.
+          </div>
+        )}
+      </div>
 
       {/* Timeline */}
       <div className="card">

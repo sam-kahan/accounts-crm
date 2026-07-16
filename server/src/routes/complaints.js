@@ -2,14 +2,38 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { config } from '../config.js';
+import { requireAuth } from '../middleware/auth.js';
 import {
   effectiveRule,
   computeResponseDue,
   computeOmbudsmanDeadline,
   deriveStatus,
 } from '../services/complaintRules.js';
+import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
+import {
+  ingestEmails,
+  listComplaintEmails,
+  listUnmatchedEmails,
+} from '../services/emailIngest.js';
 
 const router = Router();
+
+// Unambiguous characters only (no 0/O/1/I).
+function makeRefCode() {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 6; i += 1) s += A[Math.floor(Math.random() * A.length)];
+  return `GC-C-${s}`;
+}
+
+// Allow either a logged-in session or the cron key (for the email-fetch cron).
+function sessionOrCronKey(req, res, next) {
+  if (req.session?.userId) return next();
+  const key = req.query.key || req.body?.key;
+  if (config.reminderCronKey && key === config.reminderCronKey) return next();
+  return next(new HttpError(401, 'Not authenticated'));
+}
 
 const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'supplier', 'other'];
 
@@ -43,6 +67,37 @@ async function decorate(c) {
   const derived = deriveStatus(c, rule);
   return { ...c, ...derived, rule };
 }
+
+// --- Email fetch (cron-accessible: session OR cron key) --------------------
+// Defined before the requireAuth guard below so the cron can call it with a key.
+router.post(
+  '/email/fetch',
+  sessionOrCronKey,
+  asyncHandler(async (_req, res) => {
+    const emails = await fetchMailboxMessages();
+    const r = await ingestEmails(emails);
+    res.json({ ...r, configured: emailConfigured() });
+  }),
+);
+
+// Everything below this line requires a logged-in session.
+router.use(requireAuth);
+
+// Is the mailbox integration configured? (for the UI)
+router.get(
+  '/email/config',
+  asyncHandler(async (_req, res) => {
+    res.json({ enabled: emailConfigured(), mailbox: config.ms.mailbox || null });
+  }),
+);
+
+// Emails that couldn't be matched to a complaint (for review).
+router.get(
+  '/email/unmatched',
+  asyncHandler(async (_req, res) => {
+    res.json(await listUnmatchedEmails());
+  }),
+);
 
 // --- Complaints dashboard (overdue / ignored + due soon + ombudsman windows) -
 router.get(
@@ -107,7 +162,8 @@ router.get(
         [req.params.id],
       )
     ).rows;
-    res.json({ ...decorated, events });
+    const emails = await listComplaintEmails(req.params.id);
+    res.json({ ...decorated, events, emails });
   }),
 );
 
@@ -132,14 +188,14 @@ router.post(
         `INSERT INTO complaints
           (organisation_id, org_name, org_type, reference, our_reference, property,
            subject, category, description, channel, raised_on, stage, state,
-           response_due, ombudsman_deadline)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'stage_1','open',$12,$13)
+           response_due, ombudsman_deadline, ref_code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'stage_1','open',$12,$13,$14)
          RETURNING *`,
         [
           d.organisation_id || null, d.org_name, d.org_type || 'council',
           d.reference || null, d.our_reference || null, d.property || null,
           d.subject, d.category || null, d.description || null, d.channel || 'email',
-          d.raised_on, responseDue, ombudsmanDeadline,
+          d.raised_on, responseDue, ombudsmanDeadline, makeRefCode(),
         ],
       );
       await client.query(

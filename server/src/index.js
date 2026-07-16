@@ -74,7 +74,7 @@ app.use('/api/companies', requireAuth, companies);
 app.use('/api/key-dates', requireAuth, keyDates);
 app.use('/api/tasks', requireAuth, tasks);
 app.use('/api/organisations', requireAuth, organisations);
-app.use('/api/complaints', requireAuth, complaints);
+app.use('/api/complaints', complaints); // email-fetch uses a cron key; rest requireAuth in-router
 app.use('/api/dashboard', dashboard); // send-reminders allows a cron key; see route
 
 // 404 for unmatched API routes

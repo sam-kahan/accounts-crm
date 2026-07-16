@@ -55,4 +55,16 @@ export const config = {
       return Boolean(this.apiKey);
     },
   },
+
+  // Microsoft Graph (app-only) — polls a dedicated shared mailbox that you
+  // CC/BCC on complaint emails, and logs each message against its complaint.
+  ms: {
+    tenantId: process.env.MS_TENANT_ID || '',
+    clientId: process.env.MS_CLIENT_ID || '',
+    clientSecret: process.env.MS_CLIENT_SECRET || '',
+    mailbox: process.env.MS_MAILBOX || '', // e.g. complaints@greenco.co.uk
+    get enabled() {
+      return Boolean(this.tenantId && this.clientId && this.clientSecret && this.mailbox);
+    },
+  },
 };
