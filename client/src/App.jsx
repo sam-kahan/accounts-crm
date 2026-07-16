@@ -33,6 +33,7 @@ export default function App() {
   const { pathname } = useLocation();
   const { user, logout } = useAuth();
   const [showChangePw, setShowChangePw] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const title =
     TITLES[pathname] ||
     (pathname.startsWith('/companies/') ? 'Company' :
@@ -40,7 +41,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
           <img src="/brand/wordmark-on-navy.svg" alt="Greenco" />
         </div>
@@ -52,6 +53,7 @@ export default function App() {
                 <NavLink
                   key={n.to}
                   to={n.to}
+                  onClick={() => setNavOpen(false)}
                   className={({ isActive }) => (isActive ? 'active' : '')}
                 >
                   <span aria-hidden>{n.icon}</span>
@@ -78,9 +80,19 @@ export default function App() {
           <div className="foot-app">Accounts CRM · accounts.greenco.co.uk</div>
         </div>
       </aside>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
       <div className="main">
         <header className="topbar">
-          <h1>{title}</h1>
+          <div className="topbar-left">
+            <button
+              className="hamburger"
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label="Menu"
+            >
+              ☰
+            </button>
+            <h1>{title}</h1>
+          </div>
         </header>
         <div className="content">
           <Outlet />
