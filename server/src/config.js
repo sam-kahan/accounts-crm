@@ -56,15 +56,31 @@ export const config = {
     },
   },
 
-  // Microsoft Graph (app-only) — polls a dedicated shared mailbox that you
-  // CC/BCC on complaint emails, and logs each message against its complaint.
+  // Microsoft Graph (app-only) — polls the catch-all log mailbox that receives
+  // every per-complaint address, and logs each message against its complaint.
   ms: {
     tenantId: process.env.MS_TENANT_ID || '',
     clientId: process.env.MS_CLIENT_ID || '',
     clientSecret: process.env.MS_CLIENT_SECRET || '',
-    mailbox: process.env.MS_MAILBOX || '', // e.g. complaints@greenco.co.uk
+    // The single mailbox the catch-all delivers to (NOT your real complaints@).
+    mailbox: process.env.MS_MAILBOX || '',
     get enabled() {
       return Boolean(this.tenantId && this.clientId && this.clientSecret && this.mailbox);
     },
   },
+
+  // Per-complaint catch-all address: <prefix><code>@<domain>, e.g.
+  // complaint-71923e@greenco.co.uk. A catch-all rule routes complaint-*@domain
+  // into ms.mailbox. Matching is by this exact recipient address (like refurb).
+  complaintEmail: {
+    prefix: process.env.COMPLAINT_EMAIL_PREFIX || 'complaint-',
+    domain: process.env.COMPLAINT_EMAIL_DOMAIN || 'greenco.co.uk',
+  },
 };
+
+// Build a complaint's unique CC address from its ref code.
+export function complaintEmailAddress(refCode) {
+  if (!refCode) return null;
+  const code = refCode.split('-').pop().toLowerCase(); // GC-C-71923E -> 71923e
+  return `${config.complaintEmail.prefix}${code}@${config.complaintEmail.domain}`;
+}

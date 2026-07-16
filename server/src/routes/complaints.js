@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
-import { config } from '../config.js';
+import { config, complaintEmailAddress } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
   effectiveRule,
@@ -65,7 +65,7 @@ async function getRuleForComplaint(c) {
 async function decorate(c) {
   const rule = await getRuleForComplaint(c);
   const derived = deriveStatus(c, rule);
-  return { ...c, ...derived, rule };
+  return { ...c, ...derived, rule, email_address: complaintEmailAddress(c.ref_code) };
 }
 
 // --- Email fetch (cron-accessible: session OR cron key) --------------------

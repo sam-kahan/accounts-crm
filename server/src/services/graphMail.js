@@ -71,12 +71,15 @@ export async function fetchMailboxMessages() {
 function devEmails() {
   return [
     {
-      graphId: `dev-cemail-1-${process.env.DEV_EMAIL_REFCODE || 'x'}`,
+      graphId: `dev-cemail-1-${process.env.DEV_EMAIL_ADDRESS || process.env.DEV_EMAIL_REFCODE || 'x'}`,
       messageId: '<dev-c1@local>',
       subject: `Re: Missed bin collection [${process.env.DEV_EMAIL_REFCODE || 'GC-C-DEMO01'}]`,
       senderName: 'Liverpool City Council',
       senderEmail: 'complaints@liverpool.gov.uk',
-      toAddresses: ['complaints@greenco.co.uk'],
+      toAddresses: [
+        process.env.DEV_EMAIL_ADDRESS || 'complaint-demo@greenco.co.uk',
+        'greenco-caseworker@greenco.co.uk',
+      ],
       bodyPreview: 'Thank you for your complaint, we are looking into this and will respond.',
       receivedAt: new Date(),
     },

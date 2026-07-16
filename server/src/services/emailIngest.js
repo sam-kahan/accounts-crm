@@ -1,10 +1,12 @@
 import { query, pool } from '../db/pool.js';
+import { complaintEmailAddress } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Email-to-complaint ingestion. matchEmailToComplaint is a pure function
-// (precedence: ref code → their/our reference → org email → property, else
-// unmatched). ingestEmails matches a batch and stores it, deduped by graph_id.
-// Mirrors the refurb-manager job-email ingestion.
+// (precedence: per-complaint catch-all address → ref code → their/our
+// reference → org email → property, else unmatched). ingestEmails matches a
+// batch and stores it, deduped by graph_id. Mirrors the refurb-manager
+// per-job catch-all address ingestion.
 // ---------------------------------------------------------------------------
 
 export function matchEmailToComplaint(email, index) {
@@ -13,13 +15,21 @@ export function matchEmailToComplaint(email, index) {
     .filter(Boolean)
     .map((a) => a.toLowerCase());
 
-  // 1. Complaint reference code (most reliable — the user puts it in the subject)
+  // 1. The complaint's own catch-all address in the recipients (most reliable —
+  //    you CC/BCC complaint-<code>@domain, which routes to the log mailbox).
+  for (const c of index) {
+    if (c.email_address && addrs.includes(c.email_address.toLowerCase())) {
+      return { complaintId: c.id, method: 'address' };
+    }
+  }
+  // 2. Complaint reference code in the subject/body (fallback if the address
+  //    wasn't used but the ref survived in the thread).
   for (const c of index) {
     if (c.ref_code && hay.includes(c.ref_code.toLowerCase())) {
       return { complaintId: c.id, method: 'ref_code' };
     }
   }
-  // 2. Their reference / our reference
+  // 3. Their reference / our reference
   for (const c of index) {
     for (const r of [c.reference, c.our_reference]) {
       if (r && r.trim().length >= 4 && hay.includes(r.trim().toLowerCase())) {
@@ -53,7 +63,7 @@ async function buildIndex() {
        FROM complaints c
        LEFT JOIN organisations o ON o.id = c.organisation_id`,
   );
-  return rows;
+  return rows.map((c) => ({ ...c, email_address: complaintEmailAddress(c.ref_code) }));
 }
 
 export async function ingestEmails(emails) {

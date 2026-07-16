@@ -49,6 +49,9 @@ export default function ComplaintDetail() {
   function copyRef() {
     if (c?.ref_code) navigator.clipboard?.writeText(c.ref_code).catch(() => {});
   }
+  function copyAddress() {
+    if (c?.email_address) navigator.clipboard?.writeText(c.email_address).catch(() => {});
+  }
 
   async function addEvent(e) {
     e.preventDefault();
@@ -89,30 +92,52 @@ export default function ComplaintDetail() {
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
 
-      {/* CC-to-log banner */}
+      {/* CC-to-log banner: this complaint's own unique address */}
       <div className="card" style={{ marginBottom: 20 }}>
-        <div
-          className="card-body flex-between"
-          style={{ gap: 12, alignItems: 'center' }}
-        >
-          <div>
-            <div style={{ fontWeight: 600 }}>📧 Log emails to this complaint</div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-              CC or BCC{' '}
-              <strong>{emailCfg.mailbox || 'your complaints mailbox'}</strong> and
-              keep the reference in the subject line.
+        <div className="card-body">
+          <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 600 }}>📧 Log emails to this complaint</div>
+              <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                CC or BCC this complaint's own address into any email and it gets
+                logged here automatically — no reference to type.
+              </div>
             </div>
-          </div>
-          <div className="btn-row" style={{ alignItems: 'center' }}>
-            <span
-              className="badge navy"
-              style={{ fontSize: 14, padding: '6px 12px', fontVariantNumeric: 'tabular-nums' }}
-            >
-              {c.ref_code}
-            </span>
-            <button className="btn btn-sm" onClick={copyRef}>Copy ref</button>
             <button className="btn-navy btn-sm" onClick={syncEmails} disabled={syncing}>
               {syncing ? 'Syncing…' : 'Sync inbox'}
+            </button>
+          </div>
+
+          <div
+            className="flex-between"
+            style={{
+              gap: 10, alignItems: 'center', flexWrap: 'wrap',
+              marginTop: 12, padding: '10px 12px',
+              background: 'var(--surface-2, #f4f6f2)', borderRadius: 8,
+            }}
+          >
+            <code
+              style={{
+                fontSize: 15, fontWeight: 600, wordBreak: 'break-all',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {c.email_address || '— (set COMPLAINT_EMAIL_DOMAIN)'}
+            </code>
+            {c.email_address && (
+              <button className="btn btn-sm" onClick={copyAddress}>Copy address</button>
+            )}
+          </div>
+
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Prefer a reference in the subject line instead? Use{' '}
+            <strong>{c.ref_code}</strong>.{' '}
+            <button
+              className="btn-ghost btn-sm"
+              style={{ padding: '0 4px' }}
+              onClick={copyRef}
+            >
+              Copy ref
             </button>
           </div>
         </div>
@@ -238,9 +263,9 @@ export default function ComplaintDetail() {
           </table>
         ) : (
           <div className="empty">
-            No emails logged yet. CC{' '}
-            {emailCfg.mailbox || 'your complaints mailbox'} with{' '}
-            <strong>{c.ref_code}</strong> in the subject.
+            No emails logged yet. CC or BCC{' '}
+            <strong>{c.email_address || 'this complaint’s address'}</strong> into
+            your emails and they’ll appear here after the next sync.
           </div>
         )}
       </div>
