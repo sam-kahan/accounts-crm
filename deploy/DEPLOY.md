@@ -136,25 +136,37 @@ resets that user's password.
 
 ## Phase 8 — Cron jobs (auto-deploy + reminders + email fetch)
 
-One idempotent installer sets up all of the CRM's cron jobs at once, reading
-`REMINDER_CRON_KEY` from `server/.env` and leaving other apps' crontab entries
-(e.g. greenco-site) untouched:
+One idempotent installer sets up all of the CRM's cron jobs into
+`/etc/cron.d/accounts-crm`, reading `REMINDER_CRON_KEY` from `server/.env` at run
+time (no secret stored in the file):
 
 ```
-bash /var/www/accounts-crm/deploy/install-crons.sh
+sudo bash /var/www/accounts-crm/deploy/install-crons.sh
 ```
 
 It installs:
-- **auto-deploy** — every 2 min: fast-forward + rebuild + restart on any push to
-  `main`. (`deploy.sh` also self-heals this line on every deploy, so it can't
-  silently go missing and freeze deploys again.)
+- **auto-deploy** — every 2 min: fast-forward + rebuild + migrate + restart on
+  any push to `main`.
 - **email fetch** — every 5 min: poll the catch-all and log complaint emails
   (see Phase 9b). Skipped-safe if Microsoft Graph isn't configured.
 - **reminder digest** — 08:00 Europe/London: the daily upcoming/overdue email
   (key dates, tasks **and** open-complaint response deadlines) via SMTP2GO.
 
-Re-run it any time (e.g. after setting `REMINDER_CRON_KEY`); it replaces our
-lines in place. Verify with `crontab -l`.
+**Why /etc/cron.d and not `sam`'s crontab:** several sites share `sam`'s user
+crontab, and some sites' deploy scripts "repair" it by deleting every line that
+matches `deploy/auto-pull.sh` — which silently removes *other* sites'
+auto-deploy jobs (every site's script has that name). A file in `/etc/cron.d` is
+read directly by cron and never touched by those user-crontab rebuilds, so it
+can't disappear. `deploy.sh` also bootstraps a user-crontab line if the
+`/etc/cron.d` file is somehow absent, but the installer is the durable fix.
+
+> Fleet note: the real root cause is greenco-site's `deploy/ensure-crons.sh`
+> stripping `deploy/auto-pull.sh` globally. Changing its filter to its own path
+> (`/var/www/greenco/deploy/auto-pull.sh`) stops it clobbering sibling sites —
+> or move each site's cron into its own `/etc/cron.d/<site>` file as done here.
+
+Re-run the installer any time (e.g. after setting `REMINDER_CRON_KEY`). Verify
+with `cat /etc/cron.d/accounts-crm`.
 
 ## Phase 9b — Complaint email logging (Microsoft Graph) — optional
 

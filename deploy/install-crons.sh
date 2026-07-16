@@ -1,49 +1,55 @@
 #!/usr/bin/env bash
-# Idempotently install the Accounts CRM cron jobs into the current user's
-# crontab, WITHOUT disturbing any other app's entries (e.g. greenco-site).
-# Safe to re-run; each entry is replaced in place.
+# Install the Accounts CRM cron jobs into /etc/cron.d/accounts-crm (NOT sam's
+# personal crontab). This matters because several sites on this box share sam's
+# user crontab, and some sites' deploy scripts "repair" that crontab by deleting
+# every line matching `deploy/auto-pull.sh` — which silently removes OTHER
+# sites' auto-deploy jobs. A file in /etc/cron.d is owned by root, read directly
+# by cron, and untouched by those user-crontab rebuilds, so it can't disappear.
 #
-#   bash /var/www/accounts-crm/deploy/install-crons.sh
+#   sudo bash /var/www/accounts-crm/deploy/install-crons.sh
 #
-# Installs:
-#   1. auto-deploy   — every 2 min, fast-forward + rebuild + restart on push
-#   2. email fetch   — every 5 min, poll the catch-all and log complaint emails
-#   3. reminder mail — 08:00 Europe/London daily digest (only if REMINDER_CRON_KEY set)
+# Idempotent: safe to re-run. Requires root (writes /etc/cron.d).
 set -euo pipefail
 
 APP_DIR="/var/www/accounts-crm"
 BASE_URL="${APP_BASE_URL:-https://accounts.greenco.co.uk}"
-ENV_FILE="${APP_DIR}/server/.env"
+CRON_FILE="/etc/cron.d/accounts-crm"
+RUN_USER="${CRON_USER:-sam}"
 
-# Pull the cron key from the server env (used to authenticate the HTTP crons).
-KEY=""
-if [ -f "${ENV_FILE}" ]; then
-  KEY="$(grep -E '^REMINDER_CRON_KEY=' "${ENV_FILE}" | head -1 | cut -d= -f2- || true)"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Please run with sudo: sudo bash $0" >&2
+  exit 1
 fi
 
-AUTO_PULL_LINE="*/2 * * * * ${APP_DIR}/deploy/auto-pull.sh >> ${APP_DIR}/logs/deploy.log 2>&1"
-FETCH_LINE="*/5 * * * * curl -fsS -X POST \"${BASE_URL}/api/complaints/email/fetch?key=${KEY}\" >/dev/null"
-REMIND_LINE="0 8 * * * curl -fsS -X POST \"${BASE_URL}/api/dashboard/send-reminders?key=${KEY}\" >/dev/null"
+# The HTTP crons read REMINDER_CRON_KEY from server/.env at run time, so no
+# secret is stored in this (root-owned) file.
+KEYCMD="\$(grep -m1 '^REMINDER_CRON_KEY=' ${APP_DIR}/server/.env | cut -d= -f2-)"
 
-# Start from the existing crontab minus any of OUR lines (match by unique path).
-current="$(crontab -l 2>/dev/null || true)"
-filtered="$(printf '%s\n' "${current}" \
-  | grep -v "${APP_DIR}/deploy/auto-pull.sh" \
+cat > "${CRON_FILE}" <<EOF
+# Accounts CRM scheduled jobs — managed by ${APP_DIR}/deploy/install-crons.sh
+# In /etc/cron.d (not a user crontab) so sibling sites' crontab rebuilds can't
+# delete these. Each field-6 value is the user to run as.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=Europe/London
+# Auto-deploy: fast-forward + rebuild + migrate + restart on any push to main.
+*/2 * * * * ${RUN_USER} ${APP_DIR}/deploy/auto-pull.sh >> ${APP_DIR}/logs/deploy.log 2>&1
+# Poll the shared catch-all mailbox and log complaint emails (every 5 min).
+*/5 * * * * ${RUN_USER} curl -fsS -X POST "${BASE_URL}/api/complaints/email/fetch?key=${KEYCMD}" >/dev/null
+# Daily reminder digest at 08:00 Europe/London (key dates, tasks, complaints).
+0 8 * * * ${RUN_USER} curl -fsS -X POST "${BASE_URL}/api/dashboard/send-reminders?key=${KEYCMD}" >/dev/null
+EOF
+chmod 644 "${CRON_FILE}"
+
+# Remove any accounts-crm lines from ${RUN_USER}'s PERSONAL crontab so the two
+# schedulers don't double up now that /etc/cron.d owns them.
+sudo -u "${RUN_USER}" bash -c "crontab -l 2>/dev/null \
+  | grep -v '${APP_DIR}/deploy/auto-pull.sh' \
   | grep -v '/api/complaints/email/fetch' \
   | grep -v '/api/dashboard/send-reminders' \
-  | grep -v '^CRON_TZ=Europe/London # accounts-crm' || true)"
+  | crontab -" || true
 
-{
-  printf '%s\n' "${filtered}" | sed '/^$/d'
-  echo "${AUTO_PULL_LINE}"
-  echo "${FETCH_LINE}"
-  if [ -n "${KEY}" ]; then
-    echo 'CRON_TZ=Europe/London # accounts-crm'
-    echo "${REMIND_LINE}"
-  fi
-} | crontab -
-
-echo "Installed accounts-crm cron jobs:"
-crontab -l | grep -E "${APP_DIR}/deploy/auto-pull.sh|/api/complaints/email/fetch|/api/dashboard/send-reminders" || true
-[ -z "${KEY}" ] && echo "NOTE: REMINDER_CRON_KEY is blank in ${ENV_FILE} — HTTP crons won't authenticate. Set it and re-run."
-exit 0
+echo "Installed ${CRON_FILE}:"
+cat "${CRON_FILE}"
+echo
+echo "Removed any duplicate accounts-crm lines from ${RUN_USER}'s personal crontab."

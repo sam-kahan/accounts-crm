@@ -27,11 +27,16 @@ npm run migrate
 echo "[$(ts)] accounts-crm: restart service"
 sudo systemctl restart accounts-crm
 
-# Self-heal: make sure our own auto-deploy cron still exists (it went missing
-# once, which silently froze deploys). Add it back if absent — never touches
-# other apps' crontab entries.
-if ! crontab -l 2>/dev/null | grep -q "${APP_DIR}/deploy/auto-pull.sh"; then
-  echo "[$(ts)] accounts-crm: auto-pull cron missing — reinstalling"
+# Self-heal the auto-deploy cron. Preferred home is /etc/cron.d/accounts-crm
+# (immune to sibling sites' user-crontab rebuilds); if that's present we do
+# nothing. Otherwise, as a bootstrap, ensure a line in the user crontab — though
+# a sibling deploy can still strip it, so run `sudo deploy/install-crons.sh`
+# once to move to /etc/cron.d permanently.
+if [ -f /etc/cron.d/accounts-crm ]; then
+  : # managed centrally in /etc/cron.d — nothing to do
+elif ! crontab -l 2>/dev/null | grep -q "${APP_DIR}/deploy/auto-pull.sh"; then
+  echo "[$(ts)] accounts-crm: auto-pull cron missing — bootstrapping user crontab"
+  echo "[$(ts)]   (run 'sudo ${APP_DIR}/deploy/install-crons.sh' to move it to /etc/cron.d)"
   ( crontab -l 2>/dev/null; \
     echo "*/2 * * * * ${APP_DIR}/deploy/auto-pull.sh >> ${APP_DIR}/logs/deploy.log 2>&1" ) | crontab -
 fi
