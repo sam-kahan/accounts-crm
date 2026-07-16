@@ -134,7 +134,6 @@ export const api = {
       request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
-    unmatchedEmails: () => request('/complaints/email/unmatched'),
   },
 };
 

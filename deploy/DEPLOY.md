@@ -152,32 +152,32 @@ with the `REMINDER_CRON_KEY` you set in `server/.env` (replace `THEKEY`):
 ## Phase 9b — Complaint email logging (Microsoft Graph) — optional
 
 Logs any email you CC/BCC onto a complaint. Each complaint has its own address,
-`complaint-<code>@greenco.co.uk` (shown on the complaint page). A catch-all
-routes `complaint-*@greenco.co.uk` into ONE mailbox the app polls; it files each
-message against its complaint by matching the exact address (ref code in the
-subject is a fallback). This is the same pattern refurb uses for `job-*`.
+`complaint-<code>@greenco.co.uk` (shown on the complaint page). That address
+isn't a real mailbox — it falls through to the domain's **single catch-all
+mailbox**, the same one refurb's `job-*` addresses already land in (there is
+only one catch-all per domain — you can't create a second). The app polls that
+catch-all and logs **only** the messages addressed to a complaint (matched by
+exact address, ref code as fallback); the rest of the mailbox (spam, other mail)
+is ignored and never stored.
 
-1. **Mailbox + routing** (Microsoft 365 admin). Two options:
-   - *Reuse refurb's setup (fastest):* point `MS_MAILBOX` at the SAME mailbox
-     refurb polls. The catch-all already delivers `*@greenco.co.uk` prefixes
-     there; the complaints app only files `complaint-*` and ignores the rest.
-   - *Separate mailbox (cleaner):* create a shared mailbox e.g.
-     `complaints-log@greenco.co.uk` (NOT the real `complaints@`), and have the
-     catch-all / mail-flow rule that already handles `job-*` also route
-     `complaint-*@greenco.co.uk` into it.
-2. **Azure app** — reuse refurb's app registration; it needs the **Mail.Read**
-   *application* permission (admin-consented). Note its tenant + client IDs and
-   a client secret.
+1. **Mailbox** — no new mailbox, no new mail rules. Point `MS_MAILBOX` at the
+   **existing refurb catch-all mailbox**. Both systems read it read-only and
+   each only files its own prefix (`complaint-` vs `job-`), so they don't
+   interfere. Keep the two prefixes distinct (they are).
+2. **Azure app** — reuse refurb's app registration; it already has the
+   **Mail.Read** *application* permission (admin-consented). Note its tenant +
+   client IDs and a client secret value.
 3. **Server env** (`server/.env`, then `sudo systemctl restart accounts-crm`):
    ```
    MS_TENANT_ID=...
    MS_CLIENT_ID=...
    MS_CLIENT_SECRET=...
-   MS_MAILBOX=complaints-log@greenco.co.uk   # or refurb's mailbox
+   MS_MAILBOX=refurb@greenco.co.uk          # the existing catch-all mailbox
    COMPLAINT_EMAIL_PREFIX=complaint-
    COMPLAINT_EMAIL_DOMAIN=greenco.co.uk
    ```
-4. **Fetch cron** — poll the mailbox every 5 min (uses `REMINDER_CRON_KEY`):
+4. **Fetch cron** — the catch-all is busy, so poll often (every 5 min) to pick
+   up complaint mail before it's buried (uses `REMINDER_CRON_KEY`):
    ```
    ( crontab -l 2>/dev/null; echo '*/5 * * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/complaints/email/fetch?key=THEKEY" >/dev/null' ) | crontab -
    ```

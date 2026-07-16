@@ -56,22 +56,23 @@ export const config = {
     },
   },
 
-  // Microsoft Graph (app-only) — polls the catch-all log mailbox that receives
-  // every per-complaint address, and logs each message against its complaint.
+  // Microsoft Graph (app-only) — polls the domain's shared catch-all mailbox
+  // (the same one refurb reads) and logs the messages addressed to a complaint.
   ms: {
     tenantId: process.env.MS_TENANT_ID || '',
     clientId: process.env.MS_CLIENT_ID || '',
     clientSecret: process.env.MS_CLIENT_SECRET || '',
-    // The single mailbox the catch-all delivers to (NOT your real complaints@).
+    // The domain-wide catch-all mailbox where complaint-*@domain lands. This is
+    // the existing refurb catch-all — there's only one catch-all per domain.
     mailbox: process.env.MS_MAILBOX || '',
     get enabled() {
       return Boolean(this.tenantId && this.clientId && this.clientSecret && this.mailbox);
     },
   },
 
-  // Per-complaint catch-all address: <prefix><code>@<domain>, e.g.
-  // complaint-71923e@greenco.co.uk. A catch-all rule routes complaint-*@domain
-  // into ms.mailbox. Matching is by this exact recipient address (like refurb).
+  // Per-complaint address: <prefix><code>@<domain>, e.g.
+  // complaint-71923e@greenco.co.uk. It isn't a real mailbox — it falls through
+  // to the domain catch-all (ms.mailbox), where we match it by exact recipient.
   complaintEmail: {
     prefix: process.env.COMPLAINT_EMAIL_PREFIX || 'complaint-',
     domain: process.env.COMPLAINT_EMAIL_DOMAIN || 'greenco.co.uk',

@@ -1,11 +1,14 @@
 import { config } from '../config.js';
 
 // ---------------------------------------------------------------------------
-// Microsoft Graph transport for reading a shared mailbox (app-only / client
-// credentials), mirroring the refurb-manager setup. When MS_* env is not set,
-// returns a couple of synthetic dev emails so the ingestion pipeline can be
-// exercised without live credentials. Production sets the env and reads real
-// mail. Requires the Azure app to have Mail.Read application permission.
+// Microsoft Graph transport for reading the shared domain catch-all mailbox
+// (app-only / client credentials), the same mailbox refurb polls. It's a busy
+// firehose (all unaddressed mail, spam included), so we pull a generous window
+// of the most-recent messages and let ingestEmails pick out only the ones
+// addressed to a complaint; the fetch cron should run frequently (~5 min) so
+// complaint emails are picked up before they're buried. When MS_* env is not
+// set, returns a couple of synthetic dev emails so the pipeline is exercisable
+// without live credentials. Requires the Azure app's Mail.Read (application).
 // ---------------------------------------------------------------------------
 
 export function emailConfigured() {
@@ -58,7 +61,7 @@ export async function fetchMailboxMessages() {
   const token = await getAppToken();
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages` +
-    '?$top=40&$orderby=receivedDateTime desc' +
+    '?$top=100&$orderby=receivedDateTime desc' +
     '&$select=id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime';
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Graph messages request failed: ${res.status}`);

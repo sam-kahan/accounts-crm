@@ -11,11 +11,7 @@ import {
   deriveStatus,
 } from '../services/complaintRules.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
-import {
-  ingestEmails,
-  listComplaintEmails,
-  listUnmatchedEmails,
-} from '../services/emailIngest.js';
+import { ingestEmails, listComplaintEmails } from '../services/emailIngest.js';
 
 const router = Router();
 
@@ -88,14 +84,6 @@ router.get(
   '/email/config',
   asyncHandler(async (_req, res) => {
     res.json({ enabled: emailConfigured(), mailbox: config.ms.mailbox || null });
-  }),
-);
-
-// Emails that couldn't be matched to a complaint (for review).
-router.get(
-  '/email/unmatched',
-  asyncHandler(async (_req, res) => {
-    res.json(await listUnmatchedEmails());
   }),
 );
 
