@@ -12,6 +12,7 @@ import {
 } from '../services/complaintRules.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import { ingestEmails, listComplaintEmails } from '../services/emailIngest.js';
+import { assistComplaint } from '../services/complaintAssistant.js';
 
 const router = Router();
 
@@ -84,6 +85,48 @@ router.get(
   '/email/config',
   asyncHandler(async (_req, res) => {
     res.json({ enabled: emailConfigured(), mailbox: config.ms.mailbox || null });
+  }),
+);
+
+// Is the AI assistant configured? (for the UI)
+router.get(
+  '/ai/config',
+  asyncHandler(async (_req, res) => {
+    res.json({ enabled: config.anthropic.enabled });
+  }),
+);
+
+// AI assistant: analyse the complaint + logged emails (+ pasted context) and
+// draft the next email + steps. Does not send anything.
+const assistInput = z.object({
+  instruction: z.string().max(4000).optional().nullable(),
+  context: z.string().max(20000).optional().nullable(),
+});
+
+router.post(
+  '/:id/assist',
+  asyncHandler(async (req, res) => {
+    const d = parse(assistInput, req.body);
+    const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
+    if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+    const complaint = await decorate(rows[0]);
+    const events = (
+      await query(
+        'SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date DESC, created_at DESC',
+        [req.params.id],
+      )
+    ).rows;
+    const emails = await listComplaintEmails(req.params.id);
+
+    const result = await assistComplaint({
+      complaint,
+      rule: complaint.rule,
+      events,
+      emails,
+      extraContext: d.context,
+      instruction: d.instruction,
+    });
+    res.json(result);
   }),
 );
 

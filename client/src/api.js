@@ -134,6 +134,9 @@ export const api = {
       request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
+    aiConfig: () => request('/complaints/ai/config'),
+    assist: (id, data) =>
+      request(`/complaints/${id}/assist`, { method: 'POST', body: JSON.stringify(data) }),
   },
 };
 

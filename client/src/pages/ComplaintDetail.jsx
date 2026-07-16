@@ -23,11 +23,45 @@ export default function ComplaintDetail() {
   const today = new Date().toISOString().slice(0, 10);
   const [ev, setEv] = useState({ event_date: today, type: 'chased', note: '' });
 
+  // AI assistant
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiContext, setAiContext] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [ai, setAi] = useState(null);
+
   const load = () => api.complaints.get(id).then(setC).catch((e) => setMsg(e.message));
   useEffect(() => {
     load();
     api.complaints.emailConfig().then(setEmailCfg).catch(() => {});
+    api.complaints.aiConfig().then((r) => setAiEnabled(r.enabled)).catch(() => {});
   }, [id]);
+
+  async function runAssistant() {
+    setAiBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.complaints.assist(id, { instruction: aiInstruction, context: aiContext });
+      setAi(r);
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+  function copyText(t) {
+    if (t) navigator.clipboard?.writeText(t).catch(() => {});
+  }
+  async function saveDraftToTimeline() {
+    if (!ai?.email) return;
+    await api.complaints.addEvent(id, {
+      event_date: today,
+      type: 'note',
+      note: `AI draft — ${ai.email.subject}\n\n${ai.email.body}`,
+    });
+    await load();
+    setMsg('Draft saved to the timeline.');
+  }
 
   async function syncEmails() {
     setSyncing(true);
@@ -223,6 +257,118 @@ export default function ComplaintDetail() {
           </div>
         </div>
       )}
+
+      {/* AI assistant */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head">
+          <h2>✨ AI assistant</h2>
+          {aiEnabled && (
+            <button className="btn-navy btn-sm" onClick={runAssistant} disabled={aiBusy}>
+              {aiBusy ? 'Working…' : ai ? 'Regenerate' : 'Analyse & draft next email'}
+            </button>
+          )}
+        </div>
+        <div className="card-body">
+          {!aiEnabled ? (
+            <div className="inline-note warn">
+              The AI assistant isn’t configured yet — set <code>ANTHROPIC_API_KEY</code> in the
+              server environment to enable it.
+            </div>
+          ) : (
+            <>
+              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+                It already sees this complaint’s stage, deadlines, timeline and logged emails. Add
+                anything else below (paste an email you received, or say what you want the draft to
+                do), then generate an analysis, next steps and a ready-to-send draft.
+              </p>
+              <div className="form-grid">
+                <label className="field full">
+                  <span className="lbl">What do you want to do? (optional)</span>
+                  <input
+                    value={aiInstruction}
+                    onChange={(e) => setAiInstruction(e.target.value)}
+                    placeholder="e.g. Escalate to Stage 2 citing their missed deadline"
+                  />
+                </label>
+                <label className="field full">
+                  <span className="lbl">Paste any extra info / emails (optional)</span>
+                  <textarea
+                    rows={4}
+                    value={aiContext}
+                    onChange={(e) => setAiContext(e.target.value)}
+                    placeholder="Paste the latest reply from them, notes, or reference details…"
+                  />
+                </label>
+              </div>
+
+              {ai && (
+                <div style={{ marginTop: 12 }}>
+                  <div className="inline-note" style={{ background: 'var(--surface-2,#f4f6f2)' }}>
+                    <strong>Analysis.</strong> {ai.summary}
+                  </div>
+                  {ai.recommended_action && (
+                    <div className="inline-note warn" style={{ marginTop: 8 }}>
+                      <strong>Recommended:</strong> {ai.recommended_action}
+                    </div>
+                  )}
+                  {ai.steps?.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="lbl">Next steps</div>
+                      <ol style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                        {ai.steps.map((s, i) => (
+                          <li key={i} style={{ marginBottom: 4 }}>{s}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+
+                  {ai.email && (
+                    <div className="card" style={{ marginTop: 14 }}>
+                      <div className="card-head">
+                        <h2 style={{ fontSize: 15 }}>Draft email</h2>
+                        <div className="btn-row">
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => copyText(`Subject: ${ai.email.subject}\n\n${ai.email.body}`)}
+                          >
+                            Copy
+                          </button>
+                          <button className="btn btn-sm" onClick={saveDraftToTimeline}>
+                            Save to timeline
+                          </button>
+                        </div>
+                      </div>
+                      <div className="card-body">
+                        <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>SUBJECT</div>
+                        <div style={{ marginBottom: 10, fontWeight: 600 }}>{ai.email.subject}</div>
+                        <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>BODY</div>
+                        <pre
+                          style={{
+                            whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14,
+                            margin: '4px 0 0', lineHeight: 1.5,
+                          }}
+                        >
+                          {ai.email.body}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {ai.caution && (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                      ⚠️ {ai.caution}
+                    </div>
+                  )}
+                  <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                    Tip: CC this complaint’s address (<strong>{c.email_address}</strong>) when you
+                    send, so the reply logs back here automatically.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Emails */}
       <div className="card" style={{ marginBottom: 20 }}>
