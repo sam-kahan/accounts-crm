@@ -134,20 +134,27 @@ Log in at https://accounts.greenco.co.uk with that email + password. Add
 colleagues later by re-running with their email; re-running an existing email
 resets that user's password.
 
-## Phase 8 — Auto-deploy cron
+## Phase 8 — Cron jobs (auto-deploy + reminders + email fetch)
+
+One idempotent installer sets up all of the CRM's cron jobs at once, reading
+`REMINDER_CRON_KEY` from `server/.env` and leaving other apps' crontab entries
+(e.g. greenco-site) untouched:
 
 ```
-( crontab -l 2>/dev/null | grep -v '/var/www/accounts-crm/deploy/auto-pull.sh'; echo '*/2 * * * * /var/www/accounts-crm/deploy/auto-pull.sh >> /var/www/accounts-crm/logs/deploy.log 2>&1' ) | crontab -
+bash /var/www/accounts-crm/deploy/install-crons.sh
 ```
-(Preserves your existing greenco auto-pull entry; adds this one.)
 
-## Phase 9 — Reminder digest cron (optional)
+It installs:
+- **auto-deploy** — every 2 min: fast-forward + rebuild + restart on any push to
+  `main`. (`deploy.sh` also self-heals this line on every deploy, so it can't
+  silently go missing and freeze deploys again.)
+- **email fetch** — every 5 min: poll the catch-all and log complaint emails
+  (see Phase 9b). Skipped-safe if Microsoft Graph isn't configured.
+- **reminder digest** — 08:00 Europe/London: the daily upcoming/overdue email
+  (key dates, tasks **and** open-complaint response deadlines) via SMTP2GO.
 
-Emails the upcoming/overdue digest each morning via SMTP2GO. It authenticates
-with the `REMINDER_CRON_KEY` you set in `server/.env` (replace `THEKEY`):
-```
-( crontab -l 2>/dev/null; echo 'CRON_TZ=Europe/London' ; echo '0 8 * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/dashboard/send-reminders?key=THEKEY" >/dev/null' ) | crontab -
-```
+Re-run it any time (e.g. after setting `REMINDER_CRON_KEY`); it replaces our
+lines in place. Verify with `crontab -l`.
 
 ## Phase 9b — Complaint email logging (Microsoft Graph) — optional
 
@@ -176,13 +183,24 @@ is ignored and never stored.
    COMPLAINT_EMAIL_PREFIX=complaint-
    COMPLAINT_EMAIL_DOMAIN=greenco.co.uk
    ```
-4. **Fetch cron** — the catch-all is busy, so poll often (every 5 min) to pick
-   up complaint mail before it's buried (uses `REMINDER_CRON_KEY`):
-   ```
-   ( crontab -l 2>/dev/null; echo '*/5 * * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/complaints/email/fetch?key=THEKEY" >/dev/null' ) | crontab -
-   ```
-   Until this is set, use the **Sync inbox** button on a complaint to poll on
+4. **Fetch cron** — installed by `deploy/install-crons.sh` (Phase 8), every
+   5 min. Until it runs, use the **Sync inbox** button on a complaint to poll on
    demand. With no `MS_*` set the app uses a synthetic dev inbox.
+
+## Phase 9c — AI complaint assistant (optional)
+
+Each complaint page has an **AI assistant** that reads the complaint's stage,
+deadlines, timeline and logged emails (plus anything you paste in) and drafts the
+next email + next steps. Set the key and restart:
+```
+# in server/.env
+ANTHROPIC_API_KEY=...        # from https://console.anthropic.com/
+```
+```
+sudo systemctl restart accounts-crm
+```
+Without a key the panel shows a "not configured" note; everything else still
+works. The same key powers the organisation complaints-procedure research.
 
 ## Phase 10 — Verify
 

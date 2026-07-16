@@ -8,6 +8,7 @@ import {
   buildDigest,
   mailerStatus,
 } from '../services/mailer.js';
+import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
 
 const router = Router();
 
@@ -68,6 +69,50 @@ async function collectDueItems(days = 30) {
   );
 }
 
+// Collect open complaints whose response is overdue or falls due within `days`,
+// as digest items. Uses the rules engine to derive live status so a missed
+// statutory deadline shows up as OVERDUE in the reminder.
+async function collectComplaintDueItems(days = 30) {
+  const { rows } = await query(
+    `SELECT c.*, o.type AS org_type_override,
+            o.stage1_response_days, o.stage2_response_days, o.ack_days,
+            o.ombudsman_name, o.ombudsman_url, o.ombudsman_referral_months, o.legal_basis
+       FROM complaints c
+       LEFT JOIN organisations o ON o.id = c.organisation_id
+      WHERE c.state = 'open' AND c.response_due IS NOT NULL
+        AND c.response_due <= CURRENT_DATE + ($1 || ' days')::interval`,
+    [days],
+  );
+
+  const items = [];
+  for (const c of rows) {
+    const org = c.organisation_id
+      ? {
+          type: c.org_type_override,
+          stage1_response_days: c.stage1_response_days,
+          stage2_response_days: c.stage2_response_days,
+          ack_days: c.ack_days,
+          ombudsman_name: c.ombudsman_name,
+          ombudsman_url: c.ombudsman_url,
+          ombudsman_referral_months: c.ombudsman_referral_months,
+          legal_basis: c.legal_basis,
+        }
+      : null;
+    const rule = effectiveRule(org, c.org_type);
+    const { status, overdue } = deriveStatus(c, rule);
+    if (status === 'responded' || status === 'resolved') continue; // already handled
+    items.push({
+      type: 'complaint',
+      id: c.id,
+      label: `Complaint ${overdue ? 'response OVERDUE' : 'response due'} — ${c.subject}`,
+      due_date: c.response_due,
+      company_name: c.org_name,
+      overdue,
+    });
+  }
+  return items;
+}
+
 router.get(
   '/',
   requireAuth,
@@ -108,7 +153,13 @@ router.post(
   sessionOrCronKey,
   asyncHandler(async (req, res) => {
     const days = Number(req.body?.days) || 14;
-    const items = await collectDueItems(days);
+    const [dueItems, complaintItems] = await Promise.all([
+      collectDueItems(days),
+      collectComplaintDueItems(days),
+    ]);
+    const items = [...dueItems, ...complaintItems].sort((a, b) =>
+      a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0,
+    );
     const digest = buildDigest(items);
     const result = await sendReminderEmail(digest);
     res.json({ items: items.length, ...result });

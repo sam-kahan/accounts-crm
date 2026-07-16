@@ -27,4 +27,13 @@ npm run migrate
 echo "[$(ts)] accounts-crm: restart service"
 sudo systemctl restart accounts-crm
 
+# Self-heal: make sure our own auto-deploy cron still exists (it went missing
+# once, which silently froze deploys). Add it back if absent — never touches
+# other apps' crontab entries.
+if ! crontab -l 2>/dev/null | grep -q "${APP_DIR}/deploy/auto-pull.sh"; then
+  echo "[$(ts)] accounts-crm: auto-pull cron missing — reinstalling"
+  ( crontab -l 2>/dev/null; \
+    echo "*/2 * * * * ${APP_DIR}/deploy/auto-pull.sh >> ${APP_DIR}/logs/deploy.log 2>&1" ) | crontab -
+fi
+
 echo "[$(ts)] accounts-crm: done"
