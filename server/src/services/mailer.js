@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { config } from '../config.js';
+import { HttpError } from '../lib/http.js';
 
 // ---------------------------------------------------------------------------
 // Email reminders via SMTP2GO (https://www.smtp2go.com/).
@@ -45,6 +46,30 @@ export async function sendReminderEmail({ subject, html, text, to }) {
     html,
   });
   return { sent: true, to: recipients };
+}
+
+// Send an arbitrary email (used to send complaint correspondence from the app).
+// Throws if SMTP2GO isn't configured so the caller can surface it.
+export async function sendMail({ to, cc, subject, text, html, replyTo }) {
+  const transport = getTransport();
+  if (!transport) {
+    throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
+  }
+  const info = await transport.sendMail({
+    from: config.smtp.from,
+    to: Array.isArray(to) ? to.join(', ') : to,
+    cc: cc && cc.length ? (Array.isArray(cc) ? cc.join(', ') : cc) : undefined,
+    replyTo,
+    subject,
+    text,
+    html,
+  });
+  return { sent: true, messageId: info.messageId };
+}
+
+// The address complaint mail is sent from (so we can log it as the sender).
+export function fromAddress() {
+  return config.smtp.from;
 }
 
 // Send a password-reset link. Returns { sent } — never throws to the caller so

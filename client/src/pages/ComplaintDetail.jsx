@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
+import Modal from '../components/Modal.jsx';
 
 const STAGE_LABEL = {
   stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'Ombudsman',
@@ -29,6 +30,14 @@ export default function ComplaintDetail() {
   const [aiContext, setAiContext] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [ai, setAi] = useState(null);
+  // Send email, status check, referral pack, attachments
+  const [send, setSend] = useState(null); // {to, cc, subject, body} when composing
+  const [sending, setSending] = useState(false);
+  const [statusResult, setStatusResult] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [referral, setReferral] = useState(null);
+  const [referralBusy, setReferralBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const load = () => api.complaints.get(id).then(setC).catch((e) => setMsg(e.message));
   useEffect(() => {
@@ -61,6 +70,86 @@ export default function ComplaintDetail() {
     });
     await load();
     setMsg('Draft saved to the timeline.');
+  }
+
+  // Open the compose modal, optionally pre-filled from an AI draft.
+  function openSend(draft) {
+    setSend({
+      to: c.org_email || '',
+      cc: '',
+      subject: draft?.subject || `Re: ${c.subject} [${c.ref_code}]`,
+      body: draft?.body || '',
+    });
+  }
+  async function doSend() {
+    setSending(true);
+    setMsg(null);
+    try {
+      const r = await api.complaints.sendEmail(id, send);
+      setSend(null);
+      if (r.complaint) setC((prev) => ({ ...prev, ...r.complaint }));
+      await load();
+      setMsg('Email sent and logged to this complaint.');
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function checkStatus() {
+    setChecking(true);
+    setMsg(null);
+    try {
+      const r = await api.complaints.checkStatus(id);
+      setStatusResult(r);
+      if (r.ombudsman_ready) await load();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function buildReferral() {
+    setReferralBusy(true);
+    setMsg(null);
+    try {
+      setReferral(await api.complaints.referralPack(id));
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setReferralBusy(false);
+    }
+  }
+  function downloadReferral() {
+    if (!referral) return;
+    const blob = new Blob([referral.text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `referral-${c.ref_code}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function uploadFiles(fileList) {
+    if (!fileList?.length) return;
+    setUploading(true);
+    setMsg(null);
+    try {
+      await api.complaints.attachments(id, Array.from(fileList));
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+  async function removeAttachment(attId) {
+    if (!confirm('Remove this attachment?')) return;
+    await api.complaints.removeAttachment(attId);
+    await load();
   }
 
   async function syncEmails() {
@@ -336,6 +425,9 @@ export default function ComplaintDetail() {
                           <button className="btn btn-sm" onClick={saveDraftToTimeline}>
                             Save to timeline
                           </button>
+                          <button className="btn-primary btn-sm" onClick={() => openSend(ai.email)}>
+                            Send now
+                          </button>
                         </div>
                       </div>
                       <div className="card-body">
@@ -370,6 +462,103 @@ export default function ComplaintDetail() {
         </div>
       </div>
 
+      {/* Escalation: deadlock detection + ombudsman referral pack */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head">
+          <h2>⚖️ Escalation</h2>
+          {aiEnabled && (
+            <div className="btn-row">
+              <button className="btn btn-sm" onClick={checkStatus} disabled={checking}>
+                {checking ? 'Checking…' : 'Check if ready for ombudsman'}
+              </button>
+              <button className="btn-navy btn-sm" onClick={buildReferral} disabled={referralBusy}>
+                {referralBusy ? 'Building…' : 'Build referral pack'}
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="card-body">
+          {!aiEnabled && (
+            <div className="muted" style={{ fontSize: 13 }}>
+              Set <code>ANTHROPIC_API_KEY</code> to enable deadlock detection and referral packs.
+            </div>
+          )}
+          {c.ombudsman_ready && (
+            <div className="inline-note warn" style={{ marginBottom: 8 }}>
+              <strong>Flagged ready for the {c.rule?.ombudsman}.</strong> Their process looks
+              exhausted or they’ve missed the deadline — you can refer now (by{' '}
+              {formatDate(c.ombudsman_deadline)}).
+            </div>
+          )}
+          {statusResult && (
+            <div className="inline-note" style={{ background: 'var(--surface-2,#f4f6f2)' }}>
+              <div>
+                {statusResult.ombudsman_ready ? '✅ Ready to escalate. ' : '⏳ Not yet ombudsman-ready. '}
+                {statusResult.reason}
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                Final response: {statusResult.final_response ? 'yes' : 'no'} · Deadlock:{' '}
+                {statusResult.deadlock ? 'yes' : 'no'} · Suggested next: {statusResult.suggested_next_stage}
+              </div>
+            </div>
+          )}
+          {aiEnabled && !statusResult && !c.ombudsman_ready && (
+            <div className="muted" style={{ fontSize: 13 }}>
+              Run a check to have the AI read the logged emails and tell you whether a final response
+              or deadlock has landed and you can go to the ombudsman.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Evidence attachments */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head">
+          <h2>
+            Evidence{' '}
+            {c.attachments?.length > 0 && <span className="badge navy">{c.attachments.length}</span>}
+          </h2>
+          <label className="btn btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+            {uploading ? 'Uploading…' : '+ Upload files'}
+            <input
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              disabled={uploading}
+              onChange={(e) => uploadFiles(e.target.files)}
+            />
+          </label>
+        </div>
+        {c.attachments?.length ? (
+          <table>
+            <tbody>
+              {c.attachments.map((a) => (
+                <tr key={a.id}>
+                  <td>
+                    <a href={api.complaints.attachmentUrl(a.id)} target="_blank" rel="noreferrer">
+                      {a.filename}
+                    </a>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {(a.size_bytes / 1024).toFixed(0)} KB
+                      {a.has_text ? ' · text read for AI' : ''}
+                    </div>
+                  </td>
+                  <td className="due" style={{ width: 120 }}>{formatDate((a.uploaded_at || '').slice(0, 10))}</td>
+                  <td style={{ textAlign: 'right', width: 40 }}>
+                    <button className="btn-ghost btn-sm" onClick={() => removeAttachment(a.id)}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">
+            No evidence yet. Upload letters, PDFs, photos or portal screenshots — text files are read
+            into the AI assistant automatically.
+          </div>
+        )}
+      </div>
+
       {/* Emails */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-head">
@@ -377,9 +566,12 @@ export default function ComplaintDetail() {
             Emails{' '}
             {c.emails?.length > 0 && <span className="badge navy">{c.emails.length}</span>}
           </h2>
-          <button className="btn btn-sm" onClick={syncEmails} disabled={syncing}>
-            {syncing ? 'Syncing…' : 'Sync inbox'}
-          </button>
+          <div className="btn-row">
+            <button className="btn-primary btn-sm" onClick={() => openSend(null)}>Compose</button>
+            <button className="btn btn-sm" onClick={syncEmails} disabled={syncing}>
+              {syncing ? 'Syncing…' : 'Sync inbox'}
+            </button>
+          </div>
         </div>
         {c.emails?.length ? (
           <table>
@@ -401,7 +593,9 @@ export default function ComplaintDetail() {
                     )}
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    <span className="badge grey">{em.match_method}</span>
+                    <span className={`badge ${em.direction === 'outbound' ? 'navy' : 'grey'}`}>
+                      {em.direction === 'outbound' ? 'sent' : em.match_method}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -457,6 +651,67 @@ export default function ComplaintDetail() {
           )}
         </div>
       </div>
+
+      {/* Compose / send modal */}
+      {send && (
+        <Modal
+          title="Send email"
+          onClose={() => setSend(null)}
+          footer={
+            <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => setSend(null)}>Cancel</button>
+              <button
+                className="btn-primary"
+                onClick={doSend}
+                disabled={sending || !send.to || !send.subject || !send.body}
+              >
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          }
+        >
+          <label className="field">
+            <span className="lbl">To *</span>
+            <input value={send.to} onChange={(e) => setSend({ ...send, to: e.target.value })}
+              placeholder="complaints@council.gov.uk" />
+          </label>
+          <label className="field">
+            <span className="lbl">CC</span>
+            <input value={send.cc} onChange={(e) => setSend({ ...send, cc: e.target.value })}
+              placeholder="optional, comma-separated" />
+          </label>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+            This complaint’s address ({c.email_address}) is CC’d automatically so the thread logs here.
+          </div>
+          <label className="field">
+            <span className="lbl">Subject *</span>
+            <input value={send.subject} onChange={(e) => setSend({ ...send, subject: e.target.value })} />
+          </label>
+          <label className="field">
+            <span className="lbl">Message *</span>
+            <textarea rows={12} value={send.body}
+              onChange={(e) => setSend({ ...send, body: e.target.value })} />
+          </label>
+        </Modal>
+      )}
+
+      {/* Referral pack modal */}
+      {referral && (
+        <Modal
+          title={`Referral pack — ${referral.ombudsman || 'ombudsman'}`}
+          onClose={() => setReferral(null)}
+          footer={
+            <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => copyText(referral.text)}>Copy</button>
+              <button className="btn-primary" onClick={downloadReferral}>Download .txt</button>
+            </div>
+          }
+        >
+          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, lineHeight: 1.5, margin: 0 }}>
+            {referral.text}
+          </pre>
+        </Modal>
+      )}
     </>
   );
 }

@@ -2,8 +2,10 @@
 const BASE = '/api';
 
 async function request(path, options = {}) {
+  const isForm = options.body instanceof FormData;
   const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
+    // Let the browser set the multipart boundary for FormData uploads.
+    headers: isForm ? undefined : { 'Content-Type': 'application/json' },
     credentials: 'include',
     ...options,
   });
@@ -137,6 +139,21 @@ export const api = {
     aiConfig: () => request('/complaints/ai/config'),
     assist: (id, data) =>
       request(`/complaints/${id}/assist`, { method: 'POST', body: JSON.stringify(data) }),
+    sendEmail: (id, data) =>
+      request(`/complaints/${id}/send-email`, { method: 'POST', body: JSON.stringify(data) }),
+    checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
+    referralPack: (id) => request(`/complaints/${id}/referral-pack`),
+    parseImport: (text, hint) =>
+      request('/complaints/import/parse', { method: 'POST', body: JSON.stringify({ text, hint }) }),
+    overdueDrafts: () => request('/complaints/chase/overdue', { method: 'POST' }),
+    attachments: (id, files) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      return request(`/complaints/${id}/attachments`, { method: 'POST', body: fd });
+    },
+    attachmentUrl: (attId) => `/api/complaints/attachments/${attId}/download`,
+    removeAttachment: (attId) =>
+      request(`/complaints/attachments/${attId}`, { method: 'DELETE' }),
   },
 };
 

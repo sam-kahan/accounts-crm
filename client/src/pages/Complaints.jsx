@@ -19,7 +19,9 @@ function StatusBadge({ c }) {
   return <span className="badge amber">{c.label}</span>;
 }
 
-function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCreated }) {
+function NewComplaintModal({
+  orgs: initialOrgs, researchEnabled, onClose, onCreated, initial, importMode, importNotes,
+}) {
   const today = new Date().toISOString().slice(0, 10);
   const [orgs, setOrgs] = useState(initialOrgs);
   const [form, setForm] = useState({
@@ -32,8 +34,13 @@ function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCrea
     category: '',
     channel: 'email',
     reference: '',
+    our_reference: '',
     raised_on: today,
     description: '',
+    stage: 'stage_1',
+    acknowledged_on: '',
+    responded_on: '',
+    ...(initial || {}),
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -84,6 +91,9 @@ function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCrea
       const created = await api.complaints.create({
         ...form,
         organisation_id: form.organisation_id || null,
+        acknowledged_on: form.acknowledged_on || null,
+        responded_on: form.responded_on || null,
+        imported: Boolean(importMode),
       });
       onCreated(created);
     } catch (err) {
@@ -93,7 +103,14 @@ function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCrea
   }
 
   return (
-    <Modal title="Log a complaint" onClose={onClose}>
+    <Modal title={importMode ? 'Review imported complaint' : 'Log a complaint'} onClose={onClose}>
+      {importMode && (
+        <div className="inline-note" style={{ marginBottom: 14 }}>
+          The AI worked these out from what you pasted — <strong>check the date raised, stage and
+          any response dates</strong> before saving. Deadlines are recalculated from them.
+          {importNotes && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{importNotes}</div>}
+        </div>
+      )}
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <label className="field">
@@ -204,6 +221,28 @@ function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCrea
               onChange={(e) => setForm({ ...form, reference: e.target.value })}
             />
           </label>
+          {importMode && (
+            <>
+              <label className="field">
+                <span className="lbl">Current stage</span>
+                <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })}>
+                  <option value="stage_1">Stage 1</option>
+                  <option value="stage_2">Stage 2</option>
+                  <option value="ombudsman">Ombudsman</option>
+                </select>
+              </label>
+              <label className="field">
+                <span className="lbl">Acknowledged on</span>
+                <input type="date" value={form.acknowledged_on || ''}
+                  onChange={(e) => setForm({ ...form, acknowledged_on: e.target.value })} />
+              </label>
+              <label className="field">
+                <span className="lbl">They responded on</span>
+                <input type="date" value={form.responded_on || ''}
+                  onChange={(e) => setForm({ ...form, responded_on: e.target.value })} />
+              </label>
+            </>
+          )}
           <label className="field full">
             <span className="lbl">Details</span>
             <textarea
@@ -223,12 +262,122 @@ function NewComplaintModal({ orgs: initialOrgs, researchEnabled, onClose, onCrea
   );
 }
 
+// Paste an existing complaint (email thread / notes); the AI extracts the
+// fields and hands them to the review form.
+function ImportModal({ onClose, onParsed }) {
+  const [text, setText] = useState('');
+  const [hint, setHint] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function analyse() {
+    setBusy(true);
+    setError(null);
+    try {
+      const parsed = await api.complaints.parseImport(text, hint);
+      onParsed(parsed);
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="Import an existing complaint"
+      onClose={onClose}
+      footer={
+        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={analyse} disabled={busy || text.trim().length < 20}>
+            {busy ? 'Analysing…' : 'Analyse & pre-fill'}
+          </button>
+        </div>
+      }
+    >
+      {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        Paste the email thread, letters or notes for a complaint you started before using this
+        system. The AI will work out the organisation, when it was raised, any references, and what
+        stage you’re at — then show it for you to check before saving.
+      </p>
+      <label className="field">
+        <span className="lbl">Anything to note? (optional)</span>
+        <input value={hint} onChange={(e) => setHint(e.target.value)}
+          placeholder="e.g. This is Salford Council, about a missed repair" />
+      </label>
+      <label className="field">
+        <span className="lbl">Paste the complaint material *</span>
+        <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)}
+          placeholder="Paste emails / letters / notes here…" />
+      </label>
+    </Modal>
+  );
+}
+
+function OverdueDraftsModal({ onClose }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    api.complaints.overdueDrafts().then(setData).catch((e) => setError(e.message));
+  }, []);
+
+  return (
+    <Modal title="Chasers for overdue complaints" onClose={onClose}>
+      {error && <div className="login-error">{error}</div>}
+      {!data && !error && <div className="spinner">Drafting chasers…</div>}
+      {data && data.count === 0 && <div className="empty">No overdue complaints — nothing to chase. 🎉</div>}
+      {data?.drafts?.map((d) => (
+        <div className="card" key={d.id} style={{ marginBottom: 12 }}>
+          <div className="card-head">
+            <div>
+              <strong>{d.subject}</strong>
+              <div className="muted" style={{ fontSize: 12 }}>{d.org_name} · {d.ref_code}</div>
+            </div>
+            <button className="btn btn-sm" onClick={() => navigate(`/complaints/${d.id}`)}>Open</button>
+          </div>
+          <div className="card-body">
+            {d.error ? (
+              <div className="inline-note warn">Couldn’t draft: {d.error}</div>
+            ) : (
+              <>
+                <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{d.draft.email?.subject}</div>
+                <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, margin: '6px 0 0' }}>
+                  {d.draft.email?.body}
+                </pre>
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() =>
+                      navigator.clipboard?.writeText(
+                        `Subject: ${d.draft.email?.subject}\n\n${d.draft.email?.body}`,
+                      )
+                    }
+                  >
+                    Copy
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
 export default function Complaints() {
   const [items, setItems] = useState(null);
   const [orgs, setOrgs] = useState([]);
   const [researchEnabled, setResearchEnabled] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
   const [showNew, setShowNew] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importInitial, setImportInitial] = useState(null);
+  const [showOverdue, setShowOverdue] = useState(false);
   const navigate = useNavigate();
 
   const load = () => api.complaints.list().then(setItems);
@@ -236,7 +385,29 @@ export default function Complaints() {
     load();
     api.organisations.list().then(setOrgs);
     api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled));
+    api.complaints.aiConfig().then((c) => setAiEnabled(c.enabled)).catch(() => {});
   }, []);
+
+  // Map the AI's parsed import into the review form's initial values.
+  function toInitial(p) {
+    const clean = (v) => v || '';
+    return {
+      org_name: clean(p.org_name),
+      org_type: p.org_type || 'council',
+      subject: clean(p.subject),
+      category: clean(p.category),
+      property: clean(p.property),
+      reference: clean(p.reference),
+      our_reference: clean(p.our_reference),
+      channel: p.channel || 'email',
+      raised_on: p.raised_on || new Date().toISOString().slice(0, 10),
+      acknowledged_on: clean(p.acknowledged_on),
+      responded_on: clean(p.responded_on),
+      stage: p.stage || 'stage_1',
+      description: clean(p.description),
+      _notes: [p.confidence ? `Confidence: ${p.confidence}.` : '', p.notes || ''].filter(Boolean).join(' '),
+    };
+  }
 
   if (!items) return <div className="spinner">Loading complaints…</div>;
 
@@ -277,7 +448,17 @@ export default function Complaints() {
             </button>
           ))}
         </div>
-        <button className="btn-primary" onClick={() => setShowNew(true)}>+ Log complaint</button>
+        <div className="btn-row">
+          {aiEnabled && overdue.length > 0 && (
+            <button className="btn-navy btn-sm" onClick={() => setShowOverdue(true)}>
+              ✨ Draft overdue chasers
+            </button>
+          )}
+          {aiEnabled && (
+            <button className="btn btn-sm" onClick={() => setShowImport(true)}>Import existing</button>
+          )}
+          <button className="btn-primary" onClick={() => setShowNew(true)}>+ Log complaint</button>
+        </div>
       </div>
 
       <div className="card">
@@ -323,6 +504,33 @@ export default function Complaints() {
           }}
         />
       )}
+
+      {showImport && (
+        <ImportModal
+          onClose={() => setShowImport(false)}
+          onParsed={(p) => {
+            setShowImport(false);
+            setImportInitial(toInitial(p));
+          }}
+        />
+      )}
+
+      {importInitial && (
+        <NewComplaintModal
+          orgs={orgs}
+          researchEnabled={researchEnabled}
+          importMode
+          importNotes={importInitial._notes}
+          initial={importInitial}
+          onClose={() => setImportInitial(null)}
+          onCreated={(c) => {
+            setImportInitial(null);
+            navigate(`/complaints/${c.id}`);
+          }}
+        />
+      )}
+
+      {showOverdue && <OverdueDraftsModal onClose={() => setShowOverdue(false)} />}
     </>
   );
 }

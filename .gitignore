@@ -22,6 +22,10 @@ npm-debug.log*
 # Local Postgres data (dev)
 pgdata/
 
+# Uploaded complaint evidence
+server/uploads/
+uploads/
+
 # Editor / OS
 .DS_Store
 .idea/

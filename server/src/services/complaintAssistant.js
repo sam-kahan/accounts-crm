@@ -129,31 +129,117 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   return lines.join('\n');
 }
 
-export async function assistComplaint(input) {
+// Shared Claude call returning the concatenated text output.
+async function callClaude({ system, user, maxTokens = 4000 }) {
   const anthropic = getClient();
-  const prompt = contextBlock(input);
-
   const res = await anthropic.messages.create({
     model: config.anthropic.model,
-    max_tokens: 4000,
+    max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium' },
-    system: SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
+    system,
+    messages: [{ role: 'user', content: user }],
   });
-
   if (res.stop_reason === 'refusal') {
     throw new HttpError(502, 'The assistant declined this request.');
   }
-
-  const text = res.content
+  return res.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('\n');
+}
 
+export async function assistComplaint(input) {
+  const text = await callClaude({ system: SYSTEM, user: contextBlock(input) });
   const result = extractJson(text);
   if (!result || !result.email) {
     throw new HttpError(502, 'The assistant returned no usable draft. Try again or add more detail.');
+  }
+  return result;
+}
+
+// --- Deadlock / final-response detection -----------------------------------
+const CLASSIFY_SYSTEM = `You assess a UK complaint's escalation status from its timeline and emails.
+Decide whether the organisation has issued a FINAL response (often called a "final response",
+"Stage 2 response", "our final decision", or a "deadlock letter"), and whether an 8-week deadlock
+applies (energy/water especially). Then decide whether the complaint is now READY to escalate to the
+relevant ombudsman/ADR scheme — either because their internal process is exhausted, or because they
+have failed to respond within their statutory timescale (a handling failure that itself justifies
+referral). Base this ONLY on the evidence given; do not assume.
+
+Return ONLY a single JSON object with exactly these keys:
+{
+  "final_response": boolean,
+  "deadlock": boolean,
+  "ombudsman_ready": boolean,
+  "reason": string,                 // one sentence, cite the evidence
+  "suggested_next_stage": "stage_2"|"ombudsman"|"none"
+}`;
+
+export async function classifyComplaintStatus(input) {
+  const text = await callClaude({
+    system: CLASSIFY_SYSTEM,
+    user: contextBlock({ ...input, instruction: 'Assess escalation status only.' }),
+    maxTokens: 1500,
+  });
+  const result = extractJson(text);
+  if (!result) throw new HttpError(502, 'Status check returned nothing usable.');
+  return result;
+}
+
+// --- Ombudsman referral grounds --------------------------------------------
+const GROUNDS_SYSTEM = `You draft the "grounds for referral" section of a UK ombudsman/ADR complaint
+referral. Given the complaint history, write 2-4 tight paragraphs a caseworker can paste into the
+ombudsman's form: what the complaint was, how the organisation handled it (with dates), where they
+failed (missed deadlines are a handling failure), and what outcome is sought. UK business English,
+factual, grounded in the evidence. Return PLAIN TEXT only (no JSON, no markdown headings).`;
+
+export async function draftReferralGrounds(input) {
+  return (await callClaude({
+    system: GROUNDS_SYSTEM,
+    user: contextBlock({ ...input, instruction: 'Write the grounds for referral.' }),
+    maxTokens: 2000,
+  })).trim();
+}
+
+// --- Import an existing complaint from a pasted thread ----------------------
+const IMPORT_SYSTEM = `You extract a structured complaint record from pasted material (an email thread,
+notes, or letters) about a complaint the user raised BEFORE using this system. Work out, from the
+evidence: which organisation it's against and its type, what it's about, when it was first raised,
+any reference numbers, whether it's been acknowledged and/or responded to, and therefore which stage
+it's at now. Dates must be ISO YYYY-MM-DD; if a date is clearly implied but not exact, give your best
+estimate and note it. If something isn't determinable, use null. Do NOT invent facts.
+
+org_type must be one of: council, housing_association, water, energy, supplier, other.
+stage must be one of: stage_1, stage_2, ombudsman.
+
+Return ONLY a single JSON object with exactly these keys:
+{
+  "org_name": string|null,
+  "org_type": "council"|"housing_association"|"water"|"energy"|"supplier"|"other",
+  "subject": string,
+  "category": string|null,
+  "property": string|null,
+  "reference": string|null,
+  "our_reference": string|null,
+  "channel": "email"|"phone"|"portal"|"letter"|"other",
+  "raised_on": string|null,
+  "acknowledged_on": string|null,
+  "responded_on": string|null,
+  "stage": "stage_1"|"stage_2"|"ombudsman",
+  "description": string,
+  "confidence": "high"|"medium"|"low",
+  "notes": string
+}`;
+
+export async function parseImportedComplaint({ text, hint }) {
+  const user =
+    (hint ? `Hint from the user: ${hint}\n\n` : '') +
+    `Pasted material about the existing complaint:\n\n${text}`;
+  const out = await callClaude({ system: IMPORT_SYSTEM, user, maxTokens: 2000 });
+  const result = extractJson(out);
+  if (!result || !result.subject) {
+    throw new HttpError(502, 'Could not extract a complaint from that. Add more detail and retry.');
   }
   return result;
 }

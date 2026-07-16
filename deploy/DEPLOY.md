@@ -222,3 +222,6 @@ works. The same key powers the organisation complaints-procedure research.
   `sudo systemctl restart accounts-crm` (no commit, no code change).
 - **DB backup:** `pg_dump -U accounts accounts_crm > backup.sql` (add to your
   existing backup routine).
+- **Evidence uploads:** stored under `server/uploads/` (gitignored, survives
+  deploys). Override the location with `UPLOAD_DIR` in `server/.env`. Include
+  this dir in your file backups alongside the DB.

@@ -70,6 +70,10 @@ export const config = {
     },
   },
 
+  // Where uploaded complaint evidence is stored on disk. Defaults to an
+  // `uploads/` dir next to the server (gitignored); override with UPLOAD_DIR.
+  uploadDir: process.env.UPLOAD_DIR || 'uploads',
+
   // Per-complaint address: <prefix><code>@<domain>, e.g.
   // complaint-71923e@greenco.co.uk. It isn't a real mailbox — it falls through
   // to the domain catch-all (ms.mailbox), where we match it by exact recipient.

@@ -11,8 +11,26 @@ import {
   deriveStatus,
 } from '../services/complaintRules.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
-import { ingestEmails, listComplaintEmails } from '../services/emailIngest.js';
-import { assistComplaint } from '../services/complaintAssistant.js';
+import {
+  ingestEmails,
+  listComplaintEmails,
+  recordOutboundEmail,
+} from '../services/emailIngest.js';
+import {
+  assistComplaint,
+  classifyComplaintStatus,
+  draftReferralGrounds,
+  parseImportedComplaint,
+} from '../services/complaintAssistant.js';
+import { sendMail, fromAddress } from '../services/mailer.js';
+import {
+  listAttachments,
+  attachmentTexts,
+  saveAttachment,
+  getAttachment,
+  deleteAttachment,
+  attachmentUpload,
+} from '../services/attachments.js';
 
 const router = Router();
 
@@ -47,6 +65,11 @@ const input = z.object({
   channel: z.enum(['email', 'phone', 'portal', 'letter', 'other']).optional(),
   raised_on: z.string().min(1),
   response_due: z.string().optional().nullable(), // override
+  // Set when importing an existing complaint at a known stage.
+  stage: z.enum(['stage_1', 'stage_2', 'ombudsman']).optional(),
+  acknowledged_on: z.string().optional().nullable(),
+  responded_on: z.string().optional().nullable(),
+  imported: z.boolean().optional(),
 });
 
 async function getRuleForComplaint(c) {
@@ -58,11 +81,23 @@ async function getRuleForComplaint(c) {
   return effectiveRule(org, c.org_type);
 }
 
-// Attach derived status + rule context to a complaint row.
+// Attach derived status + rule + org contact context to a complaint row.
 async function decorate(c) {
-  const rule = await getRuleForComplaint(c);
+  let org = null;
+  if (c.organisation_id) {
+    const r = await query('SELECT * FROM organisations WHERE id = $1', [c.organisation_id]);
+    org = r.rows[0] || null;
+  }
+  const rule = effectiveRule(org, c.org_type);
   const derived = deriveStatus(c, rule);
-  return { ...c, ...derived, rule, email_address: complaintEmailAddress(c.ref_code) };
+  return {
+    ...c,
+    ...derived,
+    rule,
+    email_address: complaintEmailAddress(c.ref_code),
+    org_email: org?.complaints_email || null,
+    org_complaints_url: org?.complaints_url || null,
+  };
 }
 
 // --- Email fetch (cron-accessible: session OR cron key) --------------------
@@ -96,6 +131,27 @@ router.get(
   }),
 );
 
+// Gather a complaint's full context (row + rule + timeline + emails + attachment
+// text) for the AI endpoints. Throws 404 if the complaint doesn't exist.
+async function gatherContext(id, extraContext) {
+  const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [id]);
+  if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+  const complaint = await decorate(rows[0]);
+  const events = (
+    await query(
+      'SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date DESC, created_at DESC',
+      [id],
+    )
+  ).rows;
+  const emails = await listComplaintEmails(id);
+  const docs = await attachmentTexts(id);
+  const docText = docs.length
+    ? docs.map((a) => `--- Attached document: ${a.filename} ---\n${a.extracted_text}`).join('\n\n')
+    : '';
+  const merged = [extraContext, docText].filter(Boolean).join('\n\n');
+  return { complaint, rule: complaint.rule, events, emails, extraContext: merged };
+}
+
 // AI assistant: analyse the complaint + logged emails (+ pasted context) and
 // draft the next email + steps. Does not send anything.
 const assistInput = z.object({
@@ -107,26 +163,189 @@ router.post(
   '/:id/assist',
   asyncHandler(async (req, res) => {
     const d = parse(assistInput, req.body);
+    const ctx = await gatherContext(req.params.id, d.context);
+    const result = await assistComplaint({ ...ctx, instruction: d.instruction });
+    res.json(result);
+  }),
+);
+
+// Send a complaint email from the app (SMTP2GO). Auto-CCs the complaint's own
+// address so the reply logs back, and records the sent email on the timeline.
+const sendInput = z.object({
+  to: z.string().min(3),
+  cc: z.string().optional().nullable(),
+  subject: z.string().min(1),
+  body: z.string().min(1),
+});
+
+router.post(
+  '/:id/send-email',
+  asyncHandler(async (req, res) => {
+    const d = parse(sendInput, req.body);
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const complaint = await decorate(rows[0]);
-    const events = (
-      await query(
-        'SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date DESC, created_at DESC',
-        [req.params.id],
-      )
-    ).rows;
-    const emails = await listComplaintEmails(req.params.id);
 
-    const result = await assistComplaint({
-      complaint,
-      rule: complaint.rule,
-      events,
-      emails,
-      extraContext: d.context,
-      instruction: d.instruction,
+    const to = d.to.split(',').map((s) => s.trim()).filter(Boolean);
+    const cc = (d.cc || '').split(',').map((s) => s.trim()).filter(Boolean);
+    // Always CC the complaint's own address so the thread self-logs.
+    if (complaint.email_address && !cc.includes(complaint.email_address)) {
+      cc.push(complaint.email_address);
+    }
+
+    await sendMail({ to, cc, subject: d.subject, text: d.body });
+    await recordOutboundEmail({
+      complaintId: complaint.id,
+      fromEmail: fromAddress(),
+      to,
+      cc,
+      subject: d.subject,
+      body: d.body,
     });
+    const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    res.json({ sent: true, complaint: await decorate(updated) });
+  }),
+);
+
+// Detect whether a final response / deadlock has landed and the complaint is
+// ready for the ombudsman. Persists the ombudsman_ready flag.
+router.post(
+  '/:id/check-status',
+  asyncHandler(async (req, res) => {
+    const ctx = await gatherContext(req.params.id);
+    const result = await classifyComplaintStatus(ctx);
+    if (result.ombudsman_ready) {
+      await query('UPDATE complaints SET ombudsman_ready = true WHERE id = $1', [req.params.id]);
+    }
     res.json(result);
+  }),
+);
+
+// Build an ombudsman/ADR referral pack (facts + timeline + AI-drafted grounds).
+router.get(
+  '/:id/referral-pack',
+  asyncHandler(async (req, res) => {
+    const ctx = await gatherContext(req.params.id);
+    const c = ctx.complaint;
+    const grounds = await draftReferralGrounds(ctx);
+    const lines = [];
+    lines.push(`OMBUDSMAN / ADR REFERRAL — ${c.ref_code}`);
+    lines.push('='.repeat(48));
+    lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
+    lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` — ${c.rule.ombudsmanUrl}` : ''}`);
+    if (c.property) lines.push(`Property / account: ${c.property}`);
+    if (c.reference) lines.push(`Their reference: ${c.reference}`);
+    lines.push(`Subject: ${c.subject}`);
+    lines.push(`Raised: ${c.raised_on}   Stage: ${c.stage}   Status: ${c.label}`);
+    if (c.acknowledged_on) lines.push(`Acknowledged: ${c.acknowledged_on}`);
+    if (c.responded_on) lines.push(`Their response: ${c.responded_on}`);
+    lines.push(`Refer by: ${c.ombudsman_deadline || 'n/a'}`);
+    lines.push('');
+    lines.push('GROUNDS FOR REFERRAL');
+    lines.push('-'.repeat(48));
+    lines.push(grounds);
+    lines.push('');
+    lines.push('CASE TIMELINE');
+    lines.push('-'.repeat(48));
+    for (const e of [...ctx.events].reverse()) {
+      lines.push(`${e.event_date}  [${e.type}]  ${e.note || ''}`.trim());
+    }
+    lines.push('');
+    lines.push('CORRESPONDENCE LOG');
+    lines.push('-'.repeat(48));
+    if (ctx.emails.length) {
+      for (const em of [...ctx.emails].reverse()) {
+        lines.push(
+          `${(em.received_at || '').slice(0, 10)}  ${em.direction === 'outbound' ? 'SENT' : 'RECEIVED'}  ` +
+            `${em.subject || '(no subject)'} — ${em.sender_name || em.sender_email || ''}`,
+        );
+      }
+    } else {
+      lines.push('(no emails logged)');
+    }
+    res.json({ ref_code: c.ref_code, ombudsman: c.rule.ombudsman, grounds, text: lines.join('\n') });
+  }),
+);
+
+// AI import: extract a structured complaint from pasted material so an existing
+// complaint can be brought in and continued. Returns fields for review; the user
+// confirms and POSTs to `/` to create it.
+const importInput = z.object({
+  text: z.string().min(20),
+  hint: z.string().max(500).optional().nullable(),
+});
+
+router.post(
+  '/import/parse',
+  asyncHandler(async (req, res) => {
+    const d = parse(importInput, req.body);
+    const parsed = await parseImportedComplaint({ text: d.text, hint: d.hint });
+    res.json(parsed);
+  }),
+);
+
+// Batch: draft a chaser for every overdue open complaint (review before sending).
+router.post(
+  '/chase/overdue',
+  asyncHandler(async (_req, res) => {
+    const open = (
+      await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY response_due ASC NULLS LAST`)
+    ).rows;
+    const decorated = await Promise.all(open.map(decorate));
+    const overdue = decorated.filter((c) => c.status === 'response_overdue').slice(0, 12);
+
+    const drafts = [];
+    for (const c of overdue) {
+      try {
+        const ctx = await gatherContext(c.id);
+        const r = await assistComplaint({
+          ...ctx,
+          instruction:
+            'Draft a firm chaser email pressing for the overdue response and noting that the ' +
+            'missed statutory deadline is itself a complaint-handling failure.',
+        });
+        drafts.push({
+          id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject,
+          org_email: c.org_email, email_address: c.email_address, draft: r,
+        });
+      } catch (err) {
+        drafts.push({ id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject, error: err.message });
+      }
+    }
+    res.json({ count: drafts.length, drafts });
+  }),
+);
+
+// --- Attachments -----------------------------------------------------------
+router.post(
+  '/:id/attachments',
+  attachmentUpload.array('files', 10),
+  asyncHandler(async (req, res) => {
+    const { rows } = await query('SELECT id FROM complaints WHERE id = $1', [req.params.id]);
+    if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+    const saved = [];
+    for (const f of req.files || []) saved.push(await saveAttachment(req.params.id, f));
+    res.status(201).json(saved);
+  }),
+);
+
+router.get(
+  '/attachments/:attId/download',
+  asyncHandler(async (req, res) => {
+    const a = await getAttachment(req.params.attId);
+    if (!a) throw new HttpError(404, 'Attachment not found');
+    res.setHeader('Content-Type', a.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${a.filename.replace(/"/g, '')}"`);
+    a.stream().pipe(res);
+  }),
+);
+
+router.delete(
+  '/attachments/:attId',
+  asyncHandler(async (req, res) => {
+    const ok = await deleteAttachment(req.params.attId);
+    if (!ok) throw new HttpError(404, 'Attachment not found');
+    res.status(204).end();
   }),
 );
 
@@ -194,7 +413,8 @@ router.get(
       )
     ).rows;
     const emails = await listComplaintEmails(req.params.id);
-    res.json({ ...decorated, events, emails });
+    const attachments = await listAttachments(req.params.id);
+    res.json({ ...decorated, events, emails, attachments });
   }),
 );
 
@@ -208,7 +428,9 @@ router.post(
         : null,
       d.org_type,
     );
-    const base = { ...d, stage: 'stage_1' };
+    const stage = d.stage || 'stage_1';
+    const base = { ...d, stage };
+    // For a Stage 2 import, the response clock runs from acknowledgement/raise.
     const responseDue = d.response_due || computeResponseDue(base, rule);
     const ombudsmanDeadline = computeOmbudsmanDeadline(base, rule);
 
@@ -219,20 +441,26 @@ router.post(
         `INSERT INTO complaints
           (organisation_id, org_name, org_type, reference, our_reference, property,
            subject, category, description, channel, raised_on, stage, state,
-           response_due, ombudsman_deadline, ref_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'stage_1','open',$12,$13,$14)
+           response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
          RETURNING *`,
         [
           d.organisation_id || null, d.org_name, d.org_type || 'council',
           d.reference || null, d.our_reference || null, d.property || null,
           d.subject, d.category || null, d.description || null, d.channel || 'email',
-          d.raised_on, responseDue, ombudsmanDeadline, makeRefCode(),
+          d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
+          d.acknowledged_on || null, d.responded_on || null, d.imported || false,
         ],
       );
       await client.query(
         `INSERT INTO complaint_events (complaint_id, event_date, type, note)
          VALUES ($1, $2, 'raised', $3)`,
-        [rows[0].id, d.raised_on, `Complaint raised via ${d.channel || 'email'}`],
+        [
+          rows[0].id, d.raised_on,
+          d.imported
+            ? `Existing complaint imported (raised via ${d.channel || 'email'})`
+            : `Complaint raised via ${d.channel || 'email'}`,
+        ],
       );
       await client.query('COMMIT');
       res.status(201).json(await decorate(rows[0]));

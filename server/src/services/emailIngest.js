@@ -99,3 +99,35 @@ export function listComplaintEmails(complaintId) {
     [complaintId],
   ).then((r) => r.rows);
 }
+
+// Record an email the user sent from the app against a complaint, and add a
+// timeline entry. Stored as direction 'outbound' / match_method 'sent'.
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body }) {
+  const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
+  const graphId = `out-${globalThis.crypto.randomUUID()}`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO complaint_emails
+         (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
+          to_addresses, body_preview, received_at, direction, match_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent')`,
+      [
+        complaintId, graphId, graphId, subject, 'You (sent from CRM)', fromEmail,
+        recipients, (body || '').slice(0, 2000),
+      ],
+    );
+    await client.query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note)
+       VALUES ($1, CURRENT_DATE, 'chased', $2)`,
+      [complaintId, `Email sent: ${subject || '(no subject)'} — to ${recipients.join(', ')}`],
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
