@@ -149,6 +149,41 @@ with the `REMINDER_CRON_KEY` you set in `server/.env` (replace `THEKEY`):
 ( crontab -l 2>/dev/null; echo 'CRON_TZ=Europe/London' ; echo '0 8 * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/dashboard/send-reminders?key=THEKEY" >/dev/null' ) | crontab -
 ```
 
+## Phase 9b — Complaint email logging (Microsoft Graph) — optional
+
+Logs any email you CC/BCC onto a complaint. Each complaint has its own address,
+`complaint-<code>@greenco.co.uk` (shown on the complaint page). A catch-all
+routes `complaint-*@greenco.co.uk` into ONE mailbox the app polls; it files each
+message against its complaint by matching the exact address (ref code in the
+subject is a fallback). This is the same pattern refurb uses for `job-*`.
+
+1. **Mailbox + routing** (Microsoft 365 admin). Two options:
+   - *Reuse refurb's setup (fastest):* point `MS_MAILBOX` at the SAME mailbox
+     refurb polls. The catch-all already delivers `*@greenco.co.uk` prefixes
+     there; the complaints app only files `complaint-*` and ignores the rest.
+   - *Separate mailbox (cleaner):* create a shared mailbox e.g.
+     `complaints-log@greenco.co.uk` (NOT the real `complaints@`), and have the
+     catch-all / mail-flow rule that already handles `job-*` also route
+     `complaint-*@greenco.co.uk` into it.
+2. **Azure app** — reuse refurb's app registration; it needs the **Mail.Read**
+   *application* permission (admin-consented). Note its tenant + client IDs and
+   a client secret.
+3. **Server env** (`server/.env`, then `sudo systemctl restart accounts-crm`):
+   ```
+   MS_TENANT_ID=...
+   MS_CLIENT_ID=...
+   MS_CLIENT_SECRET=...
+   MS_MAILBOX=complaints-log@greenco.co.uk   # or refurb's mailbox
+   COMPLAINT_EMAIL_PREFIX=complaint-
+   COMPLAINT_EMAIL_DOMAIN=greenco.co.uk
+   ```
+4. **Fetch cron** — poll the mailbox every 5 min (uses `REMINDER_CRON_KEY`):
+   ```
+   ( crontab -l 2>/dev/null; echo '*/5 * * * * curl -fsS -X POST "https://accounts.greenco.co.uk/api/complaints/email/fetch?key=THEKEY" >/dev/null' ) | crontab -
+   ```
+   Until this is set, use the **Sync inbox** button on a complaint to poll on
+   demand. With no `MS_*` set the app uses a synthetic dev inbox.
+
 ## Phase 10 — Verify
 
 - `https://accounts.greenco.co.uk` loads the dashboard over HTTPS.
