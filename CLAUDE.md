@@ -2,8 +2,9 @@
 
 ## Git workflow (IMPORTANT)
 
-- **Work directly on `main`. Do not create feature branches.** Commit changes to
-  `main` and push to `origin main`.
+- **Always work directly on `main`.** Commit changes straight to `main` and push
+  to `origin main`. Do **not** create feature branches and do **not** open pull
+  requests — no branches, no PRs, ever. Just commit to `main` and push.
 - Keep commits small and descriptive.
 
 ## What this is
