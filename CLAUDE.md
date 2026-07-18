@@ -85,5 +85,7 @@ From the Greenco logo — use these, don't invent colours:
 
 ## Verify before committing
 
+- `npm test` (unit tests for the pure logic — deadline engine, email matching,
+  AI-output sanitisation, dates; no DB needed).
 - `npm run build -w client` (client compiles)
 - `npm run migrate` then exercise the API / UI against a local Postgres.

@@ -78,7 +78,7 @@ function clampInt(v, min, max) {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
 }
-function normaliseProfile(p) {
+export function normaliseProfile(p) {
   const email = cleanStr(p.complaints_email, 320);
   return {
     complaints_email: email && EMAIL_RE.test(email) ? email : null,

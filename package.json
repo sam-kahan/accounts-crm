@@ -13,7 +13,8 @@
     "dev:client": "npm run dev -w client",
     "migrate": "npm run migrate -w server",
     "build": "npm run build -w client",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "test": "npm test -w server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
