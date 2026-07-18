@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import { existsSync } from 'node:fs';
@@ -25,14 +27,53 @@ const app = express();
 // req.ip work correctly.
 app.set('trust proxy', 1);
 
+// Security headers. The SPA loads only same-origin, hashed JS/CSS (no inline
+// scripts), so a strict script-src is safe; inline styles come from React
+// `style={}` props, hence 'unsafe-inline' for styles only.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'self'"],
+        baseUri: ["'self'"],
+      },
+    },
+    // TLS terminates at nginx; the browser still gets the app over HTTPS.
+    crossOriginEmbedderPolicy: false,
+  }),
+);
+
 app.use(morgan('dev'));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// A generous global rate limit as a blunt abuse backstop (per IP). Real login
+// throttling is finer-grained in routes/auth.js. Health check is exempt.
+app.use(
+  '/api',
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path === '/health',
+  }),
+);
 app.use(
   cors({
     origin(origin, cb) {
-      // Allow same-origin / tools with no Origin, and any configured origin.
-      if (!origin || config.corsOrigins.length === 0) return cb(null, true);
-      return cb(null, config.corsOrigins.includes(origin));
+      // No Origin header = same-origin request or a non-browser tool; allow.
+      if (!origin) return cb(null, true);
+      // Otherwise only allow explicitly configured origins. Never reflect an
+      // arbitrary origin back while credentials are enabled — an empty
+      // allowlist means "same-origin only", not "allow everyone".
+      if (config.corsOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
     },
     credentials: true,
   }),

@@ -75,7 +75,14 @@ export default function Dashboard() {
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState(null);
 
-  const load = () => api.dashboard(90).then(setData).catch((e) => setMsg(e.message));
+  const [loadError, setLoadError] = useState(null);
+  const load = () => {
+    setLoadError(null);
+    return api
+      .dashboard(90)
+      .then(setData)
+      .catch((e) => setLoadError(e.message));
+  };
   useEffect(() => {
     load();
   }, []);
@@ -95,7 +102,8 @@ export default function Dashboard() {
     setSending(true);
     setMsg(null);
     try {
-      const res = await api.sendReminders(14);
+      // Email the same window that's shown on screen (next 90 days).
+      const res = await api.sendReminders(90);
       setMsg(
         res.sent
           ? `Reminder email sent to ${res.to.join(', ')} (${res.items} item(s)).`
@@ -108,7 +116,19 @@ export default function Dashboard() {
     }
   }
 
-  if (!data) return <div className="spinner">Loading dashboard…</div>;
+  if (!data) {
+    if (loadError) {
+      return (
+        <div className="card">
+          <div className="inline-note warn" style={{ marginBottom: 12 }}>
+            Couldn’t load the dashboard: {loadError}
+          </div>
+          <button className="btn-primary btn-sm" onClick={load}>Retry</button>
+        </div>
+      );
+    }
+    return <div className="spinner">Loading dashboard…</div>;
+  }
 
   const { counts, overdue, upcoming, mailer } = data;
 

@@ -167,6 +167,15 @@ export const ORG_TYPE_LABEL = {
 };
 
 // --- shared date helpers ---------------------------------------------------
+// Today's date as YYYY-MM-DD in UK local time. `toISOString().slice(0,10)` is
+// the UTC date, which is a day ahead 00:00–01:00 during British Summer Time —
+// wrong for date-only form defaults.
+export function todayISO() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(
+    new Date(),
+  );
+}
+
 export function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));

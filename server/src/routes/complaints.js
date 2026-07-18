@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
-import { requireAuth } from '../middleware/auth.js';
+import { todayISO } from '../lib/dates.js';
+import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import {
   effectiveRule,
   computeResponseDue,
@@ -40,14 +41,6 @@ function makeRefCode() {
   let s = '';
   for (let i = 0; i < 6; i += 1) s += A[Math.floor(Math.random() * A.length)];
   return `GC-C-${s}`;
-}
-
-// Allow either a logged-in session or the cron key (for the email-fetch cron).
-function sessionOrCronKey(req, res, next) {
-  if (req.session?.userId) return next();
-  const key = req.query.key || req.body?.key;
-  if (config.reminderCronKey && key === config.reminderCronKey) return next();
-  return next(new HttpError(401, 'Not authenticated'));
 }
 
 const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'supplier', 'other'];
@@ -178,6 +171,18 @@ const sendInput = z.object({
   body: z.string().min(1),
 });
 
+// A permissive-but-real email check. Rejects addresses with CR/LF (header
+// injection) and obviously malformed values before they reach the mail
+// transport.
+const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+function parseRecipients(raw) {
+  const list = (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
+  for (const addr of list) {
+    if (!EMAIL_RE.test(addr)) throw new HttpError(400, `Invalid email address: ${addr}`);
+  }
+  return list;
+}
+
 router.post(
   '/:id/send-email',
   asyncHandler(async (req, res) => {
@@ -186,8 +191,9 @@ router.post(
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const complaint = await decorate(rows[0]);
 
-    const to = d.to.split(',').map((s) => s.trim()).filter(Boolean);
-    const cc = (d.cc || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const to = parseRecipients(d.to);
+    const cc = parseRecipients(d.cc);
+    if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
     // Always CC the complaint's own address so the thread self-logs.
     if (complaint.email_address && !cc.includes(complaint.email_address)) {
       cc.push(complaint.email_address);
@@ -317,12 +323,25 @@ router.post(
 );
 
 // --- Attachments -----------------------------------------------------------
+// Validate the complaint id (as a UUID) AND its existence *before* multer runs,
+// so upload files are never streamed to disk for a bad/nonexistent id. This also
+// closes a path-traversal hole: multer builds the on-disk directory from
+// req.params.id, so an un-validated id like "..%2f.." could escape the upload
+// root.
+const requireComplaintId = asyncHandler(async (req, _res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) {
+    throw new HttpError(400, 'Invalid complaint id');
+  }
+  const { rows } = await query('SELECT id FROM complaints WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+  next();
+});
+
 router.post(
   '/:id/attachments',
+  requireComplaintId,
   attachmentUpload.array('files', 10),
   asyncHandler(async (req, res) => {
-    const { rows } = await query('SELECT id FROM complaints WHERE id = $1', [req.params.id]);
-    if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const saved = [];
     for (const f of req.files || []) saved.push(await saveAttachment(req.params.id, f));
     res.status(201).json(saved);
@@ -334,8 +353,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const a = await getAttachment(req.params.attId);
     if (!a) throw new HttpError(404, 'Attachment not found');
+    // Force a download (never render inline): a user could upload an HTML/SVG
+    // file whose stored mimetype would otherwise execute as script on our own
+    // origin. `nosniff` stops the browser second-guessing the content type.
     res.setHeader('Content-Type', a.mimetype || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${a.filename.replace(/"/g, '')}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${a.filename.replace(/"/g, '')}"`);
     a.stream().pipe(res);
   }),
 );
@@ -430,46 +453,64 @@ router.post(
     );
     const stage = d.stage || 'stage_1';
     const base = { ...d, stage };
-    // For a Stage 2 import, the response clock runs from acknowledgement/raise.
-    const responseDue = d.response_due || computeResponseDue(base, rule);
+    // Response-due date. Computing it from raised_on only makes sense for a
+    // Stage 1 clock; for an imported complaint already at Stage 2/ombudsman the
+    // original stage clock can't be reconstructed from raised_on, so leave it
+    // null (unless the user supplied an override) rather than showing it as
+    // spuriously overdue the moment it's imported.
+    let responseDue = d.response_due || null;
+    if (!responseDue && !(d.imported && stage !== 'stage_1')) {
+      responseDue = computeResponseDue(base, rule);
+    }
     const ombudsmanDeadline = computeOmbudsmanDeadline(base, rule);
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const { rows } = await client.query(
-        `INSERT INTO complaints
-          (organisation_id, org_name, org_type, reference, our_reference, property,
-           subject, category, description, channel, raised_on, stage, state,
-           response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
-         RETURNING *`,
-        [
-          d.organisation_id || null, d.org_name, d.org_type || 'council',
-          d.reference || null, d.our_reference || null, d.property || null,
-          d.subject, d.category || null, d.description || null, d.channel || 'email',
-          d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
-          d.acknowledged_on || null, d.responded_on || null, d.imported || false,
-        ],
-      );
-      await client.query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-         VALUES ($1, $2, 'raised', $3)`,
-        [
-          rows[0].id, d.raised_on,
-          d.imported
-            ? `Existing complaint imported (raised via ${d.channel || 'email'})`
-            : `Complaint raised via ${d.channel || 'email'}`,
-        ],
-      );
-      await client.query('COMMIT');
-      res.status(201).json(await decorate(rows[0]));
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    // Retry on the (astronomically unlikely) ref_code collision rather than
+    // surfacing a 500 from the unique index.
+    let created = null;
+    for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `INSERT INTO complaints
+            (organisation_id, org_name, org_type, reference, our_reference, property,
+             subject, category, description, channel, raised_on, stage, state,
+             response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
+           RETURNING *`,
+          [
+            d.organisation_id || null, d.org_name, d.org_type || 'council',
+            d.reference || null, d.our_reference || null, d.property || null,
+            d.subject, d.category || null, d.description || null, d.channel || 'email',
+            d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
+            d.acknowledged_on || null, d.responded_on || null, d.imported || false,
+          ],
+        );
+        await client.query(
+          `INSERT INTO complaint_events (complaint_id, event_date, type, note)
+           VALUES ($1, $2, 'raised', $3)`,
+          [
+            rows[0].id, d.raised_on,
+            d.imported
+              ? `Existing complaint imported (raised via ${d.channel || 'email'})`
+              : `Complaint raised via ${d.channel || 'email'}`,
+          ],
+        );
+        await client.query('COMMIT');
+        created = rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        // Unique violation on the ref_code index — try a fresh code.
+        if (err.code === '23505' && /ref_code/.test(`${err.constraint || ''}${err.detail || ''}`)) {
+          continue;
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
     }
+    if (!created) throw new HttpError(500, 'Could not allocate a complaint reference; please retry.');
+    res.status(201).json(await decorate(created));
   }),
 );
 
@@ -531,7 +572,7 @@ router.post(
       complaint.stage === 'stage_2' ? 'ombudsman' : null;
     if (!next) throw new HttpError(400, 'Complaint cannot be escalated further');
 
-    const escalatedOn = req.body?.date || new Date().toISOString().slice(0, 10);
+    const escalatedOn = req.body?.date || todayISO();
     const rule = await getRuleForComplaint(complaint);
 
     let responseDue = complaint.response_due;

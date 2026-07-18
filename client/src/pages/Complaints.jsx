@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, formatDate, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, todayISO, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const STAGE_LABEL = {
@@ -22,7 +22,7 @@ function StatusBadge({ c }) {
 function NewComplaintModal({
   orgs: initialOrgs, researchEnabled, onClose, onCreated, initial, importMode, importNotes,
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const [orgs, setOrgs] = useState(initialOrgs);
   const [form, setForm] = useState({
     organisation_id: '',
@@ -310,6 +310,11 @@ function ImportModal({ onClose, onParsed }) {
         <span className="lbl">Paste the complaint material *</span>
         <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)}
           placeholder="Paste emails / letters / notes here…" />
+        {text.trim().length < 20 && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            Paste at least 20 characters to analyse.
+          </span>
+        )}
       </label>
     </Modal>
   );
@@ -318,6 +323,7 @@ function ImportModal({ onClose, onParsed }) {
 function OverdueDraftsModal({ onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -350,13 +356,19 @@ function OverdueDraftsModal({ onClose }) {
                 <div style={{ marginTop: 8 }}>
                   <button
                     className="btn btn-sm"
-                    onClick={() =>
-                      navigator.clipboard?.writeText(
-                        `Subject: ${d.draft.email?.subject}\n\n${d.draft.email?.body}`,
-                      )
-                    }
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard?.writeText(
+                          `Subject: ${d.draft.email?.subject}\n\n${d.draft.email?.body}`,
+                        );
+                        setCopiedId(d.id);
+                        setTimeout(() => setCopiedId((c) => (c === d.id ? null : c)), 1500);
+                      } catch {
+                        /* clipboard unavailable */
+                      }
+                    }}
                   >
-                    Copy
+                    {copiedId === d.id ? 'Copied ✓' : 'Copy'}
                   </button>
                 </div>
               </>
@@ -378,13 +390,20 @@ export default function Complaints() {
   const [showImport, setShowImport] = useState(false);
   const [importInitial, setImportInitial] = useState(null);
   const [showOverdue, setShowOverdue] = useState(false);
+  const [err, setErr] = useState(null);
   const navigate = useNavigate();
 
-  const load = () => api.complaints.list().then(setItems);
+  const load = () => {
+    setErr(null);
+    return api.complaints
+      .list()
+      .then(setItems)
+      .catch((e) => setErr(e.message));
+  };
   useEffect(() => {
     load();
-    api.organisations.list().then(setOrgs);
-    api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled));
+    api.organisations.list().then(setOrgs).catch(() => setOrgs([]));
+    api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled)).catch(() => {});
     api.complaints.aiConfig().then((c) => setAiEnabled(c.enabled)).catch(() => {});
   }, []);
 
@@ -400,7 +419,7 @@ export default function Complaints() {
       reference: clean(p.reference),
       our_reference: clean(p.our_reference),
       channel: p.channel || 'email',
-      raised_on: p.raised_on || new Date().toISOString().slice(0, 10),
+      raised_on: p.raised_on || todayISO(),
       acknowledged_on: clean(p.acknowledged_on),
       responded_on: clean(p.responded_on),
       stage: p.stage || 'stage_1',
@@ -409,7 +428,19 @@ export default function Complaints() {
     };
   }
 
-  if (!items) return <div className="spinner">Loading complaints…</div>;
+  if (!items) {
+    if (err) {
+      return (
+        <div className="card">
+          <div className="inline-note warn" style={{ marginBottom: 12 }}>
+            Couldn’t load complaints: {err}
+          </div>
+          <button className="btn-primary btn-sm" onClick={load}>Retry</button>
+        </div>
+      );
+    }
+    return <div className="spinner">Loading complaints…</div>;
+  }
 
   const overdue = items.filter((c) => c.status === 'response_overdue');
   const open = items.filter((c) => c.state === 'open');
@@ -442,6 +473,7 @@ export default function Complaints() {
             <button
               key={f}
               className={filter === f ? 'btn-primary btn-sm' : 'btn-sm'}
+              aria-pressed={filter === f}
               onClick={() => setFilter(f)}
             >
               {f[0].toUpperCase() + f.slice(1)}
@@ -477,7 +509,20 @@ export default function Complaints() {
             </thead>
             <tbody>
               {shown.map((c) => (
-                <tr key={c.id} className="clickable" onClick={() => navigate(`/complaints/${c.id}`)}>
+                <tr
+                  key={c.id}
+                  className="clickable"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open complaint: ${c.subject}`}
+                  onClick={() => navigate(`/complaints/${c.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/complaints/${c.id}`);
+                    }
+                  }}
+                >
                   <td>
                     <strong>{c.subject}</strong>
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}

@@ -104,8 +104,15 @@ export default function CompanyDetail() {
   const [showAddDate, setShowAddDate] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [loadError, setLoadError] = useState(null);
 
-  const load = () => api.companies.get(id).then(setCompany).catch((e) => setMsg(e.message));
+  const load = () => {
+    setLoadError(null);
+    return api.companies
+      .get(id)
+      .then(setCompany)
+      .catch((e) => setLoadError(e.message));
+  };
   useEffect(() => {
     load();
   }, [id]);
@@ -125,23 +132,50 @@ export default function CompanyDetail() {
   }
 
   async function completeDate(kdId) {
-    await api.keyDates.complete(kdId);
-    load();
+    setMsg(null);
+    try {
+      await api.keyDates.complete(kdId);
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    }
   }
   async function removeDate(kdId) {
-    if (confirm('Delete this key date?')) {
+    if (!confirm('Delete this key date?')) return;
+    setMsg(null);
+    try {
       await api.keyDates.remove(kdId);
-      load();
+      await load();
+    } catch (e) {
+      setMsg(e.message);
     }
   }
   async function removeCompany() {
-    if (confirm(`Delete ${company.name}? This removes its key dates and unlinks tasks.`)) {
+    if (!confirm(`Delete ${company.name}? This removes its key dates and unlinks tasks.`)) return;
+    try {
       await api.companies.remove(id);
       navigate('/companies');
+    } catch (e) {
+      setMsg(e.message);
     }
   }
 
-  if (!company) return <div className="spinner">Loading…</div>;
+  if (!company) {
+    if (loadError) {
+      return (
+        <div className="card">
+          <div className="inline-note warn" style={{ marginBottom: 12 }}>
+            Couldn’t load this company: {loadError}
+          </div>
+          <div className="btn-row">
+            <button className="btn-primary btn-sm" onClick={load}>Retry</button>
+            <Link to="/companies" className="btn btn-sm">← Companies</Link>
+          </div>
+        </div>
+      );
+    }
+    return <div className="spinner">Loading…</div>;
+  }
 
   const pendingDates = company.key_dates.filter((k) => k.status === 'pending');
   const openTasks = company.tasks.filter((t) => t.status !== 'done');

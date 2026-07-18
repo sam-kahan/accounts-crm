@@ -88,6 +88,7 @@ export default function App() {
               className="hamburger"
               onClick={() => setNavOpen((o) => !o)}
               aria-label="Menu"
+              aria-expanded={navOpen}
             >
               ☰
             </button>

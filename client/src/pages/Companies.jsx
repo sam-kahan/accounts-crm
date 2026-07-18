@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, formatDate, dueClass } from '../api';
 import Modal from '../components/Modal.jsx';
@@ -123,7 +123,16 @@ function AddCompanyModal({ onClose, onAdded }) {
                 <div
                   key={r.company_number}
                   className="row"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Import ${r.name}`}
                   onClick={() => !busy && importCompany(r.company_number)}
+                  onKeyDown={(e) => {
+                    if ((e.key === 'Enter' || e.key === ' ') && !busy) {
+                      e.preventDefault();
+                      importCompany(r.company_number);
+                    }
+                  }}
                 >
                   <div>
                     <strong>{r.name}</strong>
@@ -191,13 +200,25 @@ export default function Companies() {
   const [companies, setCompanies] = useState(null);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [err, setErr] = useState(null);
   const navigate = useNavigate();
+  const reqSeq = useRef(0);
 
-  const load = (s = '') => api.companies.list(s).then(setCompanies);
-  useEffect(() => {
-    load();
-  }, []);
-
+  // Single debounced loader (also fires on mount with search=''). A sequence
+  // guard drops out-of-order responses so a slow earlier query can't overwrite
+  // a newer one.
+  const load = (s = '') => {
+    const seq = (reqSeq.current += 1);
+    setErr(null);
+    return api.companies
+      .list(s)
+      .then((rows) => {
+        if (seq === reqSeq.current) setCompanies(rows);
+      })
+      .catch((e) => {
+        if (seq === reqSeq.current) setErr(e.message);
+      });
+  };
   useEffect(() => {
     const t = setTimeout(() => load(search), 250);
     return () => clearTimeout(t);
@@ -217,9 +238,19 @@ export default function Companies() {
         </button>
       </div>
 
+      {err && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }}>
+          {err} <button className="linkish" onClick={() => load(search)}>Retry</button>
+        </div>
+      )}
+
       <div className="card">
         {!companies ? (
-          <div className="spinner">Loading…</div>
+          err ? (
+            <div className="empty">Couldn’t load companies.</div>
+          ) : (
+            <div className="spinner">Loading…</div>
+          )
         ) : companies.length === 0 ? (
           <div className="empty">
             No companies yet. Click <strong>Add company</strong> to import one from
@@ -241,7 +272,16 @@ export default function Companies() {
                 <tr
                   key={c.id}
                   className="clickable"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${c.name}`}
                   onClick={() => navigate(`/companies/${c.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/companies/${c.id}`);
+                    }
+                  }}
                 >
                   <td><strong>{c.name}</strong></td>
                   <td className="muted">{c.company_number || '—'}</td>

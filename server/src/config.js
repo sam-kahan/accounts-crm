@@ -65,6 +65,9 @@ export const config = {
     // The domain-wide catch-all mailbox where complaint-*@domain lands. This is
     // the existing refurb catch-all — there's only one catch-all per domain.
     mailbox: process.env.MS_MAILBOX || '',
+    // How far back to scan the catch-all each poll (days). A window comfortably
+    // wider than the gap between cron runs so nothing is missed.
+    lookbackDays: Number(process.env.MS_LOOKBACK_DAYS) || 14,
     get enabled() {
       return Boolean(this.tenantId && this.clientId && this.clientSecret && this.mailbox);
     },
@@ -82,6 +85,19 @@ export const config = {
     domain: process.env.COMPLAINT_EMAIL_DOMAIN || 'greenco.co.uk',
   },
 };
+
+// Fail fast in production on missing security-critical secrets rather than
+// silently falling back to insecure defaults (a forgeable session secret would
+// let anyone mint a valid login cookie).
+if (process.env.NODE_ENV === 'production') {
+  const missing = [];
+  if (!process.env.SESSION_SECRET) missing.push('SESSION_SECRET');
+  if (missing.length) {
+    throw new Error(
+      `Refusing to start: ${missing.join(', ')} must be set in production.`,
+    );
+  }
+}
 
 // Build a complaint's unique CC address from its ref code.
 export function complaintEmailAddress(refCode) {

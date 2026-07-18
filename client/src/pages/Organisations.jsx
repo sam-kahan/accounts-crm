@@ -160,17 +160,30 @@ export default function Organisations() {
   const [orgs, setOrgs] = useState(null);
   const [editing, setEditing] = useState(null); // org object or 'new'
   const [researchEnabled, setResearchEnabled] = useState(false);
+  const [err, setErr] = useState(null);
 
-  const load = () => api.organisations.list().then(setOrgs);
+  const load = () => {
+    setErr(null);
+    return api.organisations
+      .list()
+      .then(setOrgs)
+      .catch((e) => setErr(e.message));
+  };
   useEffect(() => {
     load();
-    api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled));
+    api.organisations
+      .researchConfig()
+      .then((c) => setResearchEnabled(c.enabled))
+      .catch(() => setResearchEnabled(false));
   }, []);
 
   async function remove(o) {
-    if (confirm(`Delete ${o.name}?`)) {
+    if (!confirm(`Delete ${o.name}?`)) return;
+    try {
       await api.organisations.remove(o.id);
-      load();
+      await load();
+    } catch (e) {
+      setErr(e.message);
     }
   }
 
@@ -181,9 +194,19 @@ export default function Organisations() {
         <button className="btn-primary" onClick={() => setEditing('new')}>+ Add organisation</button>
       </div>
 
+      {err && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }}>
+          {err} <button className="linkish" onClick={load}>Retry</button>
+        </div>
+      )}
+
       <div className="card">
         {!orgs ? (
-          <div className="spinner">Loading…</div>
+          err ? (
+            <div className="empty">Couldn’t load organisations.</div>
+          ) : (
+            <div className="spinner">Loading…</div>
+          )
         ) : orgs.length === 0 ? (
           <div className="empty">No organisations yet.</div>
         ) : (
@@ -194,7 +217,20 @@ export default function Organisations() {
             <tbody>
               {orgs.map((o) => (
                 <tr key={o.id}>
-                  <td className="clickable" onClick={() => setEditing(o)}><strong>{o.name}</strong>
+                  <td
+                    className="clickable"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Edit ${o.name}`}
+                    onClick={() => setEditing(o)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setEditing(o);
+                      }
+                    }}
+                  >
+                    <strong>{o.name}</strong>
                     {o.location && <div className="muted" style={{ fontSize: 12 }}>{o.location}</div>}</td>
                   <td><span className="badge navy">{ORG_TYPE_LABEL[o.type] || o.type}</span></td>
                   <td className="muted">{o.ombudsman_name || '—'}</td>

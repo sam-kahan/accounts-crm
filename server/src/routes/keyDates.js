@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { todayISO } from '../lib/dates.js';
 
 const router = Router();
 
@@ -24,13 +25,22 @@ const input = z.object({
   notes: z.string().optional().nullable(),
 });
 
-// Advance a date by the recurrence interval (used when marking a date done).
+// Advance a recurring date to its next occurrence AFTER today (used when
+// marking a date done). Rolls forward as many whole periods as needed so a
+// date that's several periods overdue doesn't just land on another past date
+// and immediately reappear as overdue.
 function nextOccurrence(dateStr, recurrence) {
+  const advance = {
+    annual: (d) => d.setUTCFullYear(d.getUTCFullYear() + 1),
+    quarterly: (d) => d.setUTCMonth(d.getUTCMonth() + 3),
+    monthly: (d) => d.setUTCMonth(d.getUTCMonth() + 1),
+  }[recurrence];
+  if (!advance) return null;
+  const today = new Date(todayISO() + 'T00:00:00Z');
   const d = new Date(dateStr + 'T00:00:00Z');
-  if (recurrence === 'annual') d.setUTCFullYear(d.getUTCFullYear() + 1);
-  else if (recurrence === 'quarterly') d.setUTCMonth(d.getUTCMonth() + 3);
-  else if (recurrence === 'monthly') d.setUTCMonth(d.getUTCMonth() + 1);
-  else return null;
+  do {
+    advance(d);
+  } while (d <= today);
   return d.toISOString().slice(0, 10);
 }
 

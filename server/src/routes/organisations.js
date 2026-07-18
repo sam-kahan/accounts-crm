@@ -171,7 +171,11 @@ router.put(
         stage1_response_days=$11, stage2_response_days=$12, ack_days=$13,
         procedure_summary=$14, legal_basis=$15, sources=$16,
         research_status=COALESCE($17, research_status),
-        researched_at=CASE WHEN $17='researched' THEN now() ELSE researched_at END,
+        -- Only stamp researched_at the first time an org becomes 'researched';
+        -- an ordinary edit re-sends research_status='researched' and must not
+        -- reset the "researched N days ago" timestamp.
+        researched_at=CASE WHEN $17='researched' AND researched_at IS NULL THEN now()
+                           ELSE researched_at END,
         notes=$18
        WHERE id=$1 RETURNING ${COLS}`,
       [
