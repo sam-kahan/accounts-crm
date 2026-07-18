@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { api, formatDate, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, todayISO, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const STAGE_LABEL = {
@@ -18,10 +18,11 @@ export default function ComplaintDetail() {
   const navigate = useNavigate();
   const [c, setC] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [emailCfg, setEmailCfg] = useState({ enabled: false, mailbox: null });
   const [syncing, setSyncing] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const [ev, setEv] = useState({ event_date: today, type: 'chased', note: '' });
 
   // AI assistant
@@ -39,7 +40,13 @@ export default function ComplaintDetail() {
   const [referralBusy, setReferralBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const load = () => api.complaints.get(id).then(setC).catch((e) => setMsg(e.message));
+  const load = () => {
+    setLoadError(null);
+    return api.complaints
+      .get(id)
+      .then(setC)
+      .catch((e) => setLoadError(e.message));
+  };
   useEffect(() => {
     load();
     api.complaints.emailConfig().then(setEmailCfg).catch(() => {});
@@ -148,8 +155,13 @@ export default function ComplaintDetail() {
   }
   async function removeAttachment(attId) {
     if (!confirm('Remove this attachment?')) return;
-    await api.complaints.removeAttachment(attId);
-    await load();
+    setMsg(null);
+    try {
+      await api.complaints.removeAttachment(attId);
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    }
   }
 
   async function syncEmails() {
@@ -179,10 +191,13 @@ export default function ComplaintDetail() {
   async function addEvent(e) {
     e.preventDefault();
     setBusy(true);
+    setMsg(null);
     try {
       await api.complaints.addEvent(id, ev);
       setEv({ event_date: today, type: 'chased', note: '' });
       await load();
+    } catch (err) {
+      setMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -190,21 +205,49 @@ export default function ComplaintDetail() {
   async function escalate() {
     const label = c.stage === 'stage_1' ? 'Stage 2' : `the ${c.rule.ombudsman}`;
     if (!confirm(`Escalate this complaint to ${label}?`)) return;
-    await api.complaints.escalate(id, today);
-    load();
+    setMsg(null);
+    try {
+      await api.complaints.escalate(id, today);
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    }
   }
   async function quick(type, note) {
-    await api.complaints.addEvent(id, { event_date: today, type, note });
-    load();
+    setMsg(null);
+    try {
+      await api.complaints.addEvent(id, { event_date: today, type, note });
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    }
   }
   async function remove() {
-    if (confirm('Delete this complaint and its timeline?')) {
+    if (!confirm('Delete this complaint and its timeline?')) return;
+    try {
       await api.complaints.remove(id);
       navigate('/complaints');
+    } catch (e) {
+      setMsg(e.message);
     }
   }
 
-  if (!c) return <div className="spinner">Loading…</div>;
+  if (!c) {
+    if (loadError) {
+      return (
+        <div className="card">
+          <div className="inline-note warn" style={{ marginBottom: 12 }}>
+            Couldn’t load this complaint: {loadError}
+          </div>
+          <div className="btn-row">
+            <button className="btn-primary btn-sm" onClick={load}>Retry</button>
+            <Link to="/complaints" className="btn btn-sm">← Complaints</Link>
+          </div>
+        </div>
+      );
+    }
+    return <div className="spinner">Loading…</div>;
+  }
 
   const canEscalate = c.stage === 'stage_1' || c.stage === 'stage_2';
 
@@ -545,7 +588,13 @@ export default function ComplaintDetail() {
                   </td>
                   <td className="due" style={{ width: 120 }}>{formatDate((a.uploaded_at || '').slice(0, 10))}</td>
                   <td style={{ textAlign: 'right', width: 40 }}>
-                    <button className="btn-ghost btn-sm" onClick={() => removeAttachment(a.id)}>✕</button>
+                    <button
+                      className="btn-ghost btn-sm"
+                      aria-label={`Remove attachment ${a.filename}`}
+                      onClick={() => removeAttachment(a.id)}
+                    >
+                      ✕
+                    </button>
                   </td>
                 </tr>
               ))}
