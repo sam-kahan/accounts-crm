@@ -55,8 +55,48 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 // Register the PWA service worker (installable app + offline shell).
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      /* SW registration is best-effort */
-    });
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        // When a new build's SW installs while a page is already controlled,
+        // offer a manual reload rather than yanking the app out from under the
+        // user mid-task.
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateToast();
+            }
+          });
+        });
+      })
+      .catch(() => {
+        /* SW registration is best-effort */
+      });
   });
+}
+
+// Small brand-styled "new version" toast with a Reload button. Vanilla DOM so
+// it works regardless of React's render state; shown at most once.
+function showUpdateToast() {
+  if (document.getElementById('sw-update-toast')) return;
+  const bar = document.createElement('div');
+  bar.id = 'sw-update-toast';
+  bar.setAttribute('role', 'status');
+  bar.style.cssText =
+    'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:9999;' +
+    'display:flex;gap:12px;align-items:center;background:#1e2235;color:#fff;' +
+    'padding:10px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);' +
+    "font:14px/1.3 'Inter',system-ui,sans-serif;max-width:calc(100vw - 32px);";
+  const msg = document.createElement('span');
+  msg.textContent = 'A new version is available.';
+  const btn = document.createElement('button');
+  btn.textContent = 'Reload';
+  btn.style.cssText =
+    'background:#a2c533;color:#1e2235;border:0;border-radius:8px;padding:6px 12px;' +
+    'font-weight:600;cursor:pointer;';
+  btn.addEventListener('click', () => window.location.reload());
+  bar.append(msg, btn);
+  document.body.appendChild(bar);
 }
