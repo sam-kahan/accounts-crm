@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { buildUpdateSet } from '../lib/sql.js';
 
 const router = Router();
 
@@ -65,29 +66,27 @@ router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const data = parse(input.partial(), req.body);
-    const completed = data.status === 'done';
+    // Only update the fields the caller actually sent; an explicit null clears
+    // a nullable column (company_id, description, due_date) rather than being
+    // ignored, while omitted fields are left untouched.
+    const { clause, values } = buildUpdateSet({
+      company_id: data.company_id,
+      title: data.title,
+      description: data.description,
+      due_date: data.due_date,
+      priority: data.priority,
+      status: data.status,
+    });
+    const sets = clause ? [clause] : [];
+    // completed_at follows a status change: set when moving to done, cleared
+    // when moving to any other status.
+    if (data.status !== undefined) {
+      sets.push(data.status === 'done' ? 'completed_at = now()' : 'completed_at = NULL');
+    }
+    if (!sets.length) throw new HttpError(400, 'No fields to update');
     const { rows } = await query(
-      `UPDATE tasks SET
-         company_id = COALESCE($2, company_id),
-         title = COALESCE($3, title),
-         description = COALESCE($4, description),
-         due_date = COALESCE($5, due_date),
-         priority = COALESCE($6, priority),
-         status = COALESCE($7, status),
-         completed_at = CASE
-           WHEN $7 = 'done' THEN now()
-           WHEN $7 IS NOT NULL THEN NULL
-           ELSE completed_at END
-       WHERE id = $1 RETURNING *`,
-      [
-        req.params.id,
-        data.company_id ?? null,
-        data.title ?? null,
-        data.description ?? null,
-        data.due_date ?? null,
-        data.priority ?? null,
-        data.status ?? null,
-      ],
+      `UPDATE tasks SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+      [req.params.id, ...values],
     );
     if (!rows[0]) throw new HttpError(404, 'Task not found');
     res.json(rows[0]);

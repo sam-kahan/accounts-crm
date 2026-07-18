@@ -4,6 +4,7 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
 import { todayISO } from '../lib/dates.js';
+import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import {
   effectiveRule,
@@ -607,22 +608,23 @@ router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const d = parse(input.partial(), req.body);
+    // Update only the sent fields; an explicit null clears a nullable column
+    // (reference, our_reference, property, category, description, response_due)
+    // instead of being ignored. org_name/subject are NOT NULL in the schema.
+    const { clause, values } = buildUpdateSet({
+      org_name: d.org_name,
+      reference: d.reference,
+      our_reference: d.our_reference,
+      property: d.property,
+      subject: d.subject,
+      category: d.category,
+      description: d.description,
+      response_due: d.response_due,
+    });
+    if (!clause) throw new HttpError(400, 'No fields to update');
     const { rows } = await query(
-      `UPDATE complaints SET
-        org_name = COALESCE($2, org_name),
-        reference = COALESCE($3, reference),
-        our_reference = COALESCE($4, our_reference),
-        property = COALESCE($5, property),
-        subject = COALESCE($6, subject),
-        category = COALESCE($7, category),
-        description = COALESCE($8, description),
-        response_due = COALESCE($9, response_due)
-       WHERE id = $1 RETURNING *`,
-      [
-        req.params.id, d.org_name ?? null, d.reference ?? null, d.our_reference ?? null,
-        d.property ?? null, d.subject ?? null, d.category ?? null, d.description ?? null,
-        d.response_due ?? null,
-      ],
+      `UPDATE complaints SET ${clause} WHERE id = $1 RETURNING *`,
+      [req.params.id, ...values],
     );
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     res.json(await decorate(rows[0]));

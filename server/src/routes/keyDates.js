@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
+import { buildUpdateSet } from '../lib/sql.js';
 
 const router = Router();
 
@@ -117,22 +118,20 @@ router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const data = parse(input.partial(), req.body);
+    // Update only the sent fields; an explicit null clears `notes` (the only
+    // nullable column here — title/due_date are NOT NULL and the schema keeps
+    // them non-null, so they can't be wiped).
+    const { clause, values } = buildUpdateSet({
+      category: data.category,
+      title: data.title,
+      due_date: data.due_date,
+      recurrence: data.recurrence,
+      notes: data.notes,
+    });
+    if (!clause) throw new HttpError(400, 'No fields to update');
     const { rows } = await query(
-      `UPDATE key_dates SET
-         category = COALESCE($2, category),
-         title = COALESCE($3, title),
-         due_date = COALESCE($4, due_date),
-         recurrence = COALESCE($5, recurrence),
-         notes = COALESCE($6, notes)
-       WHERE id = $1 RETURNING *`,
-      [
-        req.params.id,
-        data.category ?? null,
-        data.title ?? null,
-        data.due_date ?? null,
-        data.recurrence ?? null,
-        data.notes ?? null,
-      ],
+      `UPDATE key_dates SET ${clause} WHERE id = $1 RETURNING *`,
+      [req.params.id, ...values],
     );
     if (!rows[0]) throw new HttpError(404, 'Key date not found');
     res.json(rows[0]);
