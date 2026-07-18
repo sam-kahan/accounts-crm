@@ -38,7 +38,7 @@ function clearAttempts(ip) {
 
 router.post(
   '/login',
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req, res, next) => {
     const ip = req.ip;
     if (throttle(ip)) {
       throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
@@ -53,11 +53,17 @@ router.post(
     if (!ok) throw new HttpError(401, 'Invalid email or password');
 
     clearAttempts(ip);
-    // Guard against session fixation: issue a fresh session on login.
+    // Guard against session fixation: issue a fresh session on login. Errors
+    // here run in a callback after the async handler has already resolved, so
+    // forward them to `next` — throwing would become an uncaught exception and
+    // crash the process instead of returning a clean 500.
     req.session.regenerate((err) => {
-      if (err) throw err;
+      if (err) return next(err);
       req.session.userId = user.id;
-      res.json({ id: user.id, email: user.email, name: user.name });
+      req.session.save((saveErr) => {
+        if (saveErr) return next(saveErr);
+        res.json({ id: user.id, email: user.email, name: user.name });
+      });
     });
   }),
 );

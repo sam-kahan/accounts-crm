@@ -178,6 +178,18 @@ const sendInput = z.object({
   body: z.string().min(1),
 });
 
+// A permissive-but-real email check. Rejects addresses with CR/LF (header
+// injection) and obviously malformed values before they reach the mail
+// transport.
+const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+function parseRecipients(raw) {
+  const list = (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
+  for (const addr of list) {
+    if (!EMAIL_RE.test(addr)) throw new HttpError(400, `Invalid email address: ${addr}`);
+  }
+  return list;
+}
+
 router.post(
   '/:id/send-email',
   asyncHandler(async (req, res) => {
@@ -186,8 +198,9 @@ router.post(
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const complaint = await decorate(rows[0]);
 
-    const to = d.to.split(',').map((s) => s.trim()).filter(Boolean);
-    const cc = (d.cc || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const to = parseRecipients(d.to);
+    const cc = parseRecipients(d.cc);
+    if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
     // Always CC the complaint's own address so the thread self-logs.
     if (complaint.email_address && !cc.includes(complaint.email_address)) {
       cc.push(complaint.email_address);
@@ -317,12 +330,25 @@ router.post(
 );
 
 // --- Attachments -----------------------------------------------------------
+// Validate the complaint id (as a UUID) AND its existence *before* multer runs,
+// so upload files are never streamed to disk for a bad/nonexistent id. This also
+// closes a path-traversal hole: multer builds the on-disk directory from
+// req.params.id, so an un-validated id like "..%2f.." could escape the upload
+// root.
+const requireComplaintId = asyncHandler(async (req, _res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) {
+    throw new HttpError(400, 'Invalid complaint id');
+  }
+  const { rows } = await query('SELECT id FROM complaints WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+  next();
+});
+
 router.post(
   '/:id/attachments',
+  requireComplaintId,
   attachmentUpload.array('files', 10),
   asyncHandler(async (req, res) => {
-    const { rows } = await query('SELECT id FROM complaints WHERE id = $1', [req.params.id]);
-    if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const saved = [];
     for (const f of req.files || []) saved.push(await saveAttachment(req.params.id, f));
     res.status(201).json(saved);
@@ -334,8 +360,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const a = await getAttachment(req.params.attId);
     if (!a) throw new HttpError(404, 'Attachment not found');
+    // Force a download (never render inline): a user could upload an HTML/SVG
+    // file whose stored mimetype would otherwise execute as script on our own
+    // origin. `nosniff` stops the browser second-guessing the content type.
     res.setHeader('Content-Type', a.mimetype || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${a.filename.replace(/"/g, '')}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${a.filename.replace(/"/g, '')}"`);
     a.stream().pipe(res);
   }),
 );

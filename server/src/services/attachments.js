@@ -19,6 +19,12 @@ await fs.mkdir(UPLOAD_ROOT, { recursive: true }).catch(() => {});
 const storage = multer.diskStorage({
   destination: async (req, _file, cb) => {
     const dir = path.join(UPLOAD_ROOT, req.params.id);
+    // Belt-and-braces against path traversal: never write outside the upload
+    // root even if an un-validated id slips through (the route guards this too).
+    const rel = path.relative(UPLOAD_ROOT, dir);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      return cb(new Error('Invalid upload path'));
+    }
     try {
       await fs.mkdir(dir, { recursive: true });
       cb(null, dir);

@@ -83,6 +83,19 @@ export const config = {
   },
 };
 
+// Fail fast in production on missing security-critical secrets rather than
+// silently falling back to insecure defaults (a forgeable session secret would
+// let anyone mint a valid login cookie).
+if (process.env.NODE_ENV === 'production') {
+  const missing = [];
+  if (!process.env.SESSION_SECRET) missing.push('SESSION_SECRET');
+  if (missing.length) {
+    throw new Error(
+      `Refusing to start: ${missing.join(', ')} must be set in production.`,
+    );
+  }
+}
+
 // Build a complaint's unique CC address from its ref code.
 export function complaintEmailAddress(refCode) {
   if (!refCode) return null;

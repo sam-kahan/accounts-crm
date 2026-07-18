@@ -30,9 +30,13 @@ app.use(express.json());
 app.use(
   cors({
     origin(origin, cb) {
-      // Allow same-origin / tools with no Origin, and any configured origin.
-      if (!origin || config.corsOrigins.length === 0) return cb(null, true);
-      return cb(null, config.corsOrigins.includes(origin));
+      // No Origin header = same-origin request or a non-browser tool; allow.
+      if (!origin) return cb(null, true);
+      // Otherwise only allow explicitly configured origins. Never reflect an
+      // arbitrary origin back while credentials are enabled — an empty
+      // allowlist means "same-origin only", not "allow everyone".
+      if (config.corsOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
     },
     credentials: true,
   }),
