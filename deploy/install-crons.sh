@@ -35,9 +35,10 @@ CRON_TZ=Europe/London
 # Auto-deploy: fast-forward + rebuild + migrate + restart on any push to main.
 */2 * * * * ${RUN_USER} ${APP_DIR}/deploy/auto-pull.sh >> ${APP_DIR}/logs/deploy.log 2>&1
 # Poll the shared catch-all mailbox and log complaint emails (every 5 min).
-*/5 * * * * ${RUN_USER} curl -fsS -X POST "${BASE_URL}/api/complaints/email/fetch?key=${KEYCMD}" >/dev/null
+# The key goes in a header (not the URL) so it doesn't land in access logs.
+*/5 * * * * ${RUN_USER} curl -fsS -X POST -H "X-Cron-Key: ${KEYCMD}" "${BASE_URL}/api/complaints/email/fetch" >/dev/null
 # Daily reminder digest at 08:00 Europe/London (key dates, tasks, complaints).
-0 8 * * * ${RUN_USER} curl -fsS -X POST "${BASE_URL}/api/dashboard/send-reminders?key=${KEYCMD}" >/dev/null
+0 8 * * * ${RUN_USER} curl -fsS -X POST -H "X-Cron-Key: ${KEYCMD}" "${BASE_URL}/api/dashboard/send-reminders" >/dev/null
 EOF
 chmod 644 "${CRON_FILE}"
 

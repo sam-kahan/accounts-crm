@@ -54,8 +54,15 @@ From the Greenco logo — use these, don't invent colours:
   express-session + connect-pg-simple (`session` table). `SESSION_SECRET` required
   in prod; `app.set('trust proxy', 1)` + secure cookies behind nginx TLS.
 - All `/api/*` data routes are behind `requireAuth`. Public: `/api/health`,
-  `/api/auth/*`. The reminder cron endpoint accepts a session OR
-  `?key=REMINDER_CRON_KEY`.
+  `/api/auth/*`. The unattended jobs (reminder digest, mailbox fetch) accept a
+  session OR the cron key — sent as the `X-Cron-Key` header (preferred) or
+  `?key=REMINDER_CRON_KEY` (legacy). Compared in constant time; see
+  `middleware/auth.js` (`sessionOrCronKey`).
+- **Trust model: single-tenant.** Every logged-in user is a Greenco accounts-team
+  member and may see/edit every record; there is deliberately no per-user row
+  scoping. `requireAuth` is the only authorization boundary. If external or
+  role-limited users are ever added, per-record ownership checks must be added to
+  every data route.
 - Manage users: `node server/src/scripts/create-user.mjs <email> [name]`
   (re-run to reset a password). Scripts that hit the API (bulk-import) log in
   with `CRM_EMAIL` / `CRM_PASSWORD`.

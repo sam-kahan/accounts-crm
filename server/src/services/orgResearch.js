@@ -57,6 +57,50 @@ function extractJson(text) {
   }
 }
 
+// The profile is model output derived from arbitrary web pages, and it is
+// auto-persisted (research-and-create) — so coerce/clamp every field to a known
+// shape and drop anything malformed rather than trusting it verbatim.
+const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+function cleanStr(v, max) {
+  return typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
+}
+function cleanUrl(v) {
+  const s = cleanStr(v, 2000);
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    return /^https?:$/.test(u.protocol) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+function clampInt(v, min, max) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
+}
+function normaliseProfile(p) {
+  const email = cleanStr(p.complaints_email, 320);
+  return {
+    complaints_email: email && EMAIL_RE.test(email) ? email : null,
+    complaints_url: cleanUrl(p.complaints_url),
+    phone: cleanStr(p.phone, 64),
+    ombudsman_name: cleanStr(p.ombudsman_name, 200),
+    ombudsman_url: cleanUrl(p.ombudsman_url),
+    ombudsman_referral_months: clampInt(p.ombudsman_referral_months, 0, 120),
+    stage1_response_days: clampInt(p.stage1_response_days, 0, 400),
+    stage2_response_days: clampInt(p.stage2_response_days, 0, 400),
+    ack_days: clampInt(p.ack_days, 0, 400),
+    procedure_summary: cleanStr(p.procedure_summary, 8000) || '',
+    legal_basis: cleanStr(p.legal_basis, 8000) || '',
+    sources: Array.isArray(p.sources)
+      ? p.sources
+          .map((s) => ({ title: cleanStr(s?.title, 300) || '', url: cleanUrl(s?.url) }))
+          .filter((s) => s.url)
+          .slice(0, 20)
+      : [],
+  };
+}
+
 export async function researchOrganisation({ name, type, location }) {
   const anthropic = getClient();
   const fallback = ruleFor(type);
@@ -102,5 +146,5 @@ ${fallback.referralMonths} months. Confirm or correct these for THIS organisatio
   if (!profile) {
     throw new HttpError(502, 'Research completed but returned no usable profile.');
   }
-  return profile;
+  return normaliseProfile(profile);
 }

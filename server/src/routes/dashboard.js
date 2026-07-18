@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError } from '../lib/http.js';
-import { config } from '../config.js';
-import { requireAuth } from '../middleware/auth.js';
+import { asyncHandler } from '../lib/http.js';
+import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import {
   sendReminderEmail,
   buildDigest,
@@ -11,15 +10,6 @@ import {
 import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
 
 const router = Router();
-
-// Allow either a logged-in session or a matching cron key (for the nightly
-// reminder job, which runs without a browser session).
-function sessionOrCronKey(req, res, next) {
-  if (req.session?.userId) return next();
-  const key = req.query.key || req.body?.key;
-  if (config.reminderCronKey && key === config.reminderCronKey) return next();
-  return next(new HttpError(401, 'Not authenticated'));
-}
 
 // Collect pending key dates + open tasks that have a due date, flagged overdue,
 // within `days` ahead (plus everything already overdue).

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import {
   effectiveRule,
   computeResponseDue,
@@ -40,14 +40,6 @@ function makeRefCode() {
   let s = '';
   for (let i = 0; i < 6; i += 1) s += A[Math.floor(Math.random() * A.length)];
   return `GC-C-${s}`;
-}
-
-// Allow either a logged-in session or the cron key (for the email-fetch cron).
-function sessionOrCronKey(req, res, next) {
-  if (req.session?.userId) return next();
-  const key = req.query.key || req.body?.key;
-  if (config.reminderCronKey && key === config.reminderCronKey) return next();
-  return next(new HttpError(401, 'Not authenticated'));
 }
 
 const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'supplier', 'other'];
