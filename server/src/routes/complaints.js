@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
+import { todayISO } from '../lib/dates.js';
 import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import {
   effectiveRule,
@@ -452,46 +453,64 @@ router.post(
     );
     const stage = d.stage || 'stage_1';
     const base = { ...d, stage };
-    // For a Stage 2 import, the response clock runs from acknowledgement/raise.
-    const responseDue = d.response_due || computeResponseDue(base, rule);
+    // Response-due date. Computing it from raised_on only makes sense for a
+    // Stage 1 clock; for an imported complaint already at Stage 2/ombudsman the
+    // original stage clock can't be reconstructed from raised_on, so leave it
+    // null (unless the user supplied an override) rather than showing it as
+    // spuriously overdue the moment it's imported.
+    let responseDue = d.response_due || null;
+    if (!responseDue && !(d.imported && stage !== 'stage_1')) {
+      responseDue = computeResponseDue(base, rule);
+    }
     const ombudsmanDeadline = computeOmbudsmanDeadline(base, rule);
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const { rows } = await client.query(
-        `INSERT INTO complaints
-          (organisation_id, org_name, org_type, reference, our_reference, property,
-           subject, category, description, channel, raised_on, stage, state,
-           response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
-         RETURNING *`,
-        [
-          d.organisation_id || null, d.org_name, d.org_type || 'council',
-          d.reference || null, d.our_reference || null, d.property || null,
-          d.subject, d.category || null, d.description || null, d.channel || 'email',
-          d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
-          d.acknowledged_on || null, d.responded_on || null, d.imported || false,
-        ],
-      );
-      await client.query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-         VALUES ($1, $2, 'raised', $3)`,
-        [
-          rows[0].id, d.raised_on,
-          d.imported
-            ? `Existing complaint imported (raised via ${d.channel || 'email'})`
-            : `Complaint raised via ${d.channel || 'email'}`,
-        ],
-      );
-      await client.query('COMMIT');
-      res.status(201).json(await decorate(rows[0]));
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    // Retry on the (astronomically unlikely) ref_code collision rather than
+    // surfacing a 500 from the unique index.
+    let created = null;
+    for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `INSERT INTO complaints
+            (organisation_id, org_name, org_type, reference, our_reference, property,
+             subject, category, description, channel, raised_on, stage, state,
+             response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
+           RETURNING *`,
+          [
+            d.organisation_id || null, d.org_name, d.org_type || 'council',
+            d.reference || null, d.our_reference || null, d.property || null,
+            d.subject, d.category || null, d.description || null, d.channel || 'email',
+            d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
+            d.acknowledged_on || null, d.responded_on || null, d.imported || false,
+          ],
+        );
+        await client.query(
+          `INSERT INTO complaint_events (complaint_id, event_date, type, note)
+           VALUES ($1, $2, 'raised', $3)`,
+          [
+            rows[0].id, d.raised_on,
+            d.imported
+              ? `Existing complaint imported (raised via ${d.channel || 'email'})`
+              : `Complaint raised via ${d.channel || 'email'}`,
+          ],
+        );
+        await client.query('COMMIT');
+        created = rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        // Unique violation on the ref_code index — try a fresh code.
+        if (err.code === '23505' && /ref_code/.test(`${err.constraint || ''}${err.detail || ''}`)) {
+          continue;
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
     }
+    if (!created) throw new HttpError(500, 'Could not allocate a complaint reference; please retry.');
+    res.status(201).json(await decorate(created));
   }),
 );
 
@@ -553,7 +572,7 @@ router.post(
       complaint.stage === 'stage_2' ? 'ombudsman' : null;
     if (!next) throw new HttpError(400, 'Complaint cannot be escalated further');
 
-    const escalatedOn = req.body?.date || new Date().toISOString().slice(0, 10);
+    const escalatedOn = req.body?.date || todayISO();
     const rule = await getRuleForComplaint(complaint);
 
     let responseDue = complaint.response_due;

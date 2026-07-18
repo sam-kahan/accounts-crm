@@ -65,6 +65,9 @@ export const config = {
     // The domain-wide catch-all mailbox where complaint-*@domain lands. This is
     // the existing refurb catch-all — there's only one catch-all per domain.
     mailbox: process.env.MS_MAILBOX || '',
+    // How far back to scan the catch-all each poll (days). A window comfortably
+    // wider than the gap between cron runs so nothing is missed.
+    lookbackDays: Number(process.env.MS_LOOKBACK_DAYS) || 14,
     get enabled() {
       return Boolean(this.tenantId && this.clientId && this.clientSecret && this.mailbox);
     },

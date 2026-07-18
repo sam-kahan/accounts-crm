@@ -59,14 +59,30 @@ export async function fetchMailboxMessages() {
   if (!config.ms.enabled) return devEmails();
 
   const token = await getAppToken();
-  const url =
+  // The catch-all is a firehose, so a single $top=100 page can miss a complaint
+  // email that's already been buried between cron runs. Instead pull everything
+  // within a lookback window and follow @odata.nextLink across pages (capped),
+  // so nothing in the window is dropped even on a busy mailbox.
+  const since = new Date(
+    Date.now() - (config.ms.lookbackDays || 14) * 86400000,
+  ).toISOString();
+  const select =
+    'id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime';
+  let url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages` +
-    '?$top=100&$orderby=receivedDateTime desc' +
-    '&$select=id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime';
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`Graph messages request failed: ${res.status}`);
-  const json = await res.json();
-  return (json.value ?? []).map(normalise);
+    `?$top=50&$orderby=receivedDateTime desc` +
+    `&$filter=receivedDateTime ge ${since}` +
+    `&$select=${select}`;
+
+  const out = [];
+  for (let page = 0; page < 40 && url; page += 1) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Graph messages request failed: ${res.status}`);
+    const json = await res.json();
+    for (const m of json.value ?? []) out.push(normalise(m));
+    url = json['@odata.nextLink'] || null;
+  }
+  return out;
 }
 
 // Synthetic dev inbox (no MS credentials). One references a complaint ref code

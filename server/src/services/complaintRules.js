@@ -26,6 +26,8 @@ const BANK_HOLIDAYS = new Set([
   '2028-08-28', '2028-12-25', '2028-12-26',
 ]);
 
+import { todayISO } from '../lib/dates.js';
+
 const iso = (d) => d.toISOString().slice(0, 10);
 
 function isWorkingDay(d) {
@@ -49,7 +51,7 @@ export function addWorkingDays(dateStr, n) {
 // Working days between today and a due date (negative = overdue).
 export function workingDaysUntil(dateStr) {
   if (!dateStr) return null;
-  const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+  const today = new Date(todayISO() + 'T00:00:00Z');
   const target = new Date(dateStr + 'T00:00:00Z');
   if (iso(target) === iso(today)) return 0;
   const forward = target > today;
