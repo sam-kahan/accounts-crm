@@ -102,29 +102,41 @@ export default function Tasks() {
   const [companies, setCompanies] = useState([]);
   const [filter, setFilter] = useState('open'); // open | all | done
   const [showAdd, setShowAdd] = useState(false);
+  const [err, setErr] = useState(null);
 
   const load = () => {
     const params = filter === 'all' ? {} : filter === 'done' ? { status: 'done' } : {};
-    return api.tasks.list(params).then((rows) => {
-      setTasks(filter === 'open' ? rows.filter((t) => t.status !== 'done') : rows);
-    });
+    setErr(null);
+    return api.tasks
+      .list(params)
+      .then((rows) => {
+        setTasks(filter === 'open' ? rows.filter((t) => t.status !== 'done') : rows);
+      })
+      .catch((e) => setErr(e.message));
   };
   useEffect(() => {
     load();
   }, [filter]);
   useEffect(() => {
-    api.companies.list().then(setCompanies);
+    api.companies.list().then(setCompanies).catch(() => setCompanies([]));
   }, []);
 
   async function toggle(t) {
     const next = t.status === 'done' ? 'todo' : 'done';
-    await api.tasks.update(t.id, { status: next });
-    load();
+    try {
+      await api.tasks.update(t.id, { status: next });
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    }
   }
   async function remove(t) {
-    if (confirm('Delete this task?')) {
+    if (!confirm('Delete this task?')) return;
+    try {
       await api.tasks.remove(t.id);
-      load();
+      await load();
+    } catch (e) {
+      setErr(e.message);
     }
   }
 
@@ -136,6 +148,7 @@ export default function Tasks() {
             <button
               key={f}
               className={filter === f ? 'btn-primary btn-sm' : 'btn-sm'}
+              aria-pressed={filter === f}
               onClick={() => setFilter(f)}
             >
               {f[0].toUpperCase() + f.slice(1)}
@@ -145,9 +158,19 @@ export default function Tasks() {
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ New task</button>
       </div>
 
+      {err && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }}>
+          {err} <button className="linkish" onClick={load}>Retry</button>
+        </div>
+      )}
+
       <div className="card">
         {!tasks ? (
-          <div className="spinner">Loading…</div>
+          err ? (
+            <div className="empty">Couldn’t load tasks.</div>
+          ) : (
+            <div className="spinner">Loading…</div>
+          )
         ) : tasks.length === 0 ? (
           <div className="empty">No tasks here.</div>
         ) : (
@@ -169,6 +192,7 @@ export default function Tasks() {
                     <input
                       type="checkbox"
                       style={{ width: 18, height: 18 }}
+                      aria-label={`Mark "${t.title}" ${t.status === 'done' ? 'not done' : 'done'}`}
                       checked={t.status === 'done'}
                       onChange={() => toggle(t)}
                     />
