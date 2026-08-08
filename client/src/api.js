@@ -74,6 +74,7 @@ export const api = {
         body: JSON.stringify({ company_number: companyNumber }),
       }),
     sync: (id) => request(`/companies/${id}/sync`, { method: 'POST' }),
+    syncAll: () => request('/companies/sync-all', { method: 'POST' }),
     // Companies House lookups
     chConfig: () => request('/companies/ch/config'),
     chSearch: (q) => request(`/companies/ch/search?q=${encodeURIComponent(q)}`),

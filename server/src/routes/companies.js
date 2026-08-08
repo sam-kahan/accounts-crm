@@ -7,7 +7,11 @@ import {
   searchCompanies,
   normaliseCompanyNumber,
 } from '../services/companiesHouse.js';
-import { upsertKeyDates, syncCompany } from '../services/companySync.js';
+import {
+  upsertKeyDates,
+  syncCompany,
+  syncAllCompanies,
+} from '../services/companySync.js';
 import { config } from '../config.js';
 
 const router = Router();
@@ -149,6 +153,18 @@ router.post(
     } finally {
       client.release();
     }
+  }),
+);
+
+// Re-sync every company from Companies House on demand (dashboard button).
+// No emails — just refreshes statutory dates so an item already filed at CH
+// rolls forward and drops off the overdue list without waiting for the nightly
+// reminder cron. Best-effort per company; returns a summary.
+router.post(
+  '/sync-all',
+  asyncHandler(async (_req, res) => {
+    const summary = await syncAllCompanies();
+    res.json(summary);
   }),
 );
 

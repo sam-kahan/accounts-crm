@@ -73,6 +73,7 @@ function ItemRow({ item, onDismiss }) {
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [sending, setSending] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState(null);
 
   const [loadError, setLoadError] = useState(null);
@@ -96,6 +97,30 @@ export default function Dashboard() {
       await api.tasks.update(item.id, { status: 'done' });
     }
     await load();
+  }
+
+  // Re-sync every company from Companies House now, then refresh the board.
+  // Items filed at CH roll forward and drop off without waiting for the nightly
+  // reminder run.
+  async function syncFromCH() {
+    setSyncing(true);
+    setMsg(null);
+    try {
+      const res = await api.companies.syncAll();
+      if (res.enabled === false) {
+        setMsg('Companies House isn’t configured on the server, so nothing was synced.');
+      } else {
+        const failed = res.failed
+          ? ` (${res.failed} couldn’t be synced — check those company numbers)`
+          : '';
+        setMsg(`Synced ${res.synced} of ${res.total} companies from Companies House${failed}.`);
+      }
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function sendReminders() {
@@ -157,6 +182,14 @@ export default function Dashboard() {
           <span className={`badge ${mailer.enabled ? 'ok' : 'grey'}`}>
             SMTP2GO {mailer.enabled ? 'ready' : 'not configured'}
           </span>
+          <button
+            className="btn btn-sm"
+            onClick={syncFromCH}
+            disabled={syncing}
+            title="Refresh statutory dates from Companies House now — filed items drop off"
+          >
+            {syncing ? 'Syncing…' : 'Sync all now'}
+          </button>
           <button className="btn-navy btn-sm" onClick={sendReminders} disabled={sending}>
             {sending ? 'Sending…' : 'Email me reminders'}
           </button>
