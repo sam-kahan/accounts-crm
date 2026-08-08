@@ -7,6 +7,7 @@ import {
   searchCompanies,
   normaliseCompanyNumber,
 } from '../services/companiesHouse.js';
+import { upsertKeyDates, syncCompany } from '../services/companySync.js';
 import { config } from '../config.js';
 
 const router = Router();
@@ -19,6 +20,7 @@ const companyInput = z.object({
   accounts_next_due: z.string().optional().nullable(),
   accounts_next_made_up_to: z.string().optional().nullable(),
   confirmation_statement_next_due: z.string().optional().nullable(),
+  confirmation_statement_next_made_up_to: z.string().optional().nullable(),
   registered_office: z.string().optional().nullable(),
   sic_codes: z.array(z.string()).optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -26,6 +28,7 @@ const companyInput = z.object({
 
 const COLS = `id, name, company_number, status, incorporation_date,
   accounts_next_due, accounts_next_made_up_to, confirmation_statement_next_due,
+  confirmation_statement_next_made_up_to,
   registered_office, sic_codes, notes, ch_last_synced_at, created_at, updated_at`;
 
 // --- Companies House lookup (search + profile preview) ---------------------
@@ -161,40 +164,7 @@ router.post(
     if (!existing.rows[0].company_number)
       throw new HttpError(400, 'Company has no company number to sync');
 
-    const { company, keyDates } = await getCompanyProfile(
-      existing.rows[0].company_number,
-    );
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `UPDATE companies SET
-           name = $2, status = $3, incorporation_date = $4,
-           accounts_next_due = $5, confirmation_statement_next_due = $6,
-           registered_office = $7, sic_codes = $8, accounts_next_made_up_to = $9,
-           ch_last_synced_at = now()
-         WHERE id = $1`,
-        [
-          req.params.id,
-          company.name,
-          company.status,
-          company.incorporation_date,
-          company.accounts_next_due,
-          company.confirmation_statement_next_due,
-          company.registered_office,
-          company.sic_codes,
-          company.accounts_next_made_up_to,
-        ],
-      );
-      await upsertKeyDates(req.params.id, keyDates, client);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    await syncCompany(req.params.id, existing.rows[0].company_number);
 
     const { rows } = await query(
       `SELECT ${COLS} FROM companies WHERE id = $1`,
@@ -213,7 +183,8 @@ router.put(
          name = $2, company_number = $3, status = $4, incorporation_date = $5,
          accounts_next_due = $6, confirmation_statement_next_due = $7,
          registered_office = $8, sic_codes = $9, notes = $10,
-         accounts_next_made_up_to = $11
+         accounts_next_made_up_to = $11,
+         confirmation_statement_next_made_up_to = $12
        WHERE id = $1 RETURNING ${COLS}`,
       [
         req.params.id,
@@ -227,6 +198,7 @@ router.put(
         data.sic_codes || null,
         data.notes || null,
         data.accounts_next_made_up_to || null,
+        data.confirmation_statement_next_made_up_to || null,
       ],
     );
     if (!rows[0]) throw new HttpError(404, 'Company not found');
@@ -252,8 +224,9 @@ async function insertCompany(data, client = { query }) {
     `INSERT INTO companies
        (name, company_number, status, incorporation_date, accounts_next_due,
         confirmation_statement_next_due, registered_office, sic_codes, notes,
-        accounts_next_made_up_to, ch_last_synced_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, ${
+        accounts_next_made_up_to, confirmation_statement_next_made_up_to,
+        ch_last_synced_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, ${
        data.ch_last_synced_at ? 'now()' : 'NULL'
      })
      RETURNING ${COLS}`,
@@ -268,24 +241,10 @@ async function insertCompany(data, client = { query }) {
       data.sic_codes || null,
       data.notes || null,
       data.accounts_next_made_up_to || null,
+      data.confirmation_statement_next_made_up_to || null,
     ],
   );
   return rows[0];
-}
-
-// Insert/update Companies-House-owned key dates in place (unique per category).
-async function upsertKeyDates(companyId, keyDates, client) {
-  for (const kd of keyDates) {
-    await client.query(
-      `INSERT INTO key_dates
-         (company_id, category, title, due_date, recurrence, source)
-       VALUES ($1,$2,$3,$4,$5,'companies_house')
-       ON CONFLICT (company_id, category) WHERE (source = 'companies_house')
-       DO UPDATE SET title = EXCLUDED.title, due_date = EXCLUDED.due_date,
-                     recurrence = EXCLUDED.recurrence, status = 'pending'`,
-      [companyId, kd.category, kd.title, kd.due_date, kd.recurrence],
-    );
-  }
 }
 
 export default router;

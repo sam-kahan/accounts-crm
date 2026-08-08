@@ -120,6 +120,27 @@ From the Greenco logo — use these, don't invent colours:
 
 ## Recent changes
 
+### 2026-08-08 — reminder timing & auto-drop-off of filed items
+- **Filed items now drop off automatically.** The daily reminder cron
+  (`/api/dashboard/send-reminders`) re-syncs every company from Companies House
+  first (`services/companySync.js` → `syncAllCompanies()`, best-effort so a CH
+  outage can't stop the digest). Once accounts / a confirmation statement are
+  filed at CH, CH advances that item's next-due date, the synced key date rolls
+  ~a year forward and stops being overdue — no manual tick needed.
+- **`upsertKeyDates` preserves manual completion.** It now only resets a synced
+  key date to `pending` (and clears `completed_at`) when the due date actually
+  moved. So a hand-completed **financial year end** stays done while its date is
+  unchanged (that one is still marked off manually — it's the prompt to do the
+  work), but a genuinely new period still surfaces as a fresh reminder when CH
+  advances the date. The old code reset every synced row to `pending` on each
+  sync, which would have resurrected a completed year end.
+- **Confirmation statement reminds on the statement date, not the deadline.**
+  The `confirmation_statement` key date now uses
+  `confirmation_statement.next_made_up_to` (the date you can file from) instead
+  of `next_due` (~14 days later). Added
+  `companies.confirmation_statement_next_made_up_to` (migration `007`), carried
+  through the company routes, and shown on the company detail page.
+
 ### 2026-07-18 — security, correctness & robustness pass
 - **Security**: fixed CORS credential reflection on an empty allowlist; added the
   `SESSION_SECRET` prod fail-fast; fixed a login-path process crash (error thrown

@@ -221,7 +221,12 @@ export default function CompanyDetail() {
                 {formatDate(company.accounts_next_due)}
               </span>
             } />
-            <Info label="Confirmation statement due" value={
+            <Info label="Confirmation statement date" value={
+              <span className={`due ${dueClass(company.confirmation_statement_next_made_up_to)}`}>
+                {formatDate(company.confirmation_statement_next_made_up_to)}
+              </span>
+            } />
+            <Info label="Confirmation statement deadline" value={
               <span className={`due ${dueClass(company.confirmation_statement_next_due)}`}>
                 {formatDate(company.confirmation_statement_next_due)}
               </span>

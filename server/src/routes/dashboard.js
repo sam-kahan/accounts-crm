@@ -8,6 +8,7 @@ import {
   mailerStatus,
 } from '../services/mailer.js';
 import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
+import { syncAllCompanies } from '../services/companySync.js';
 
 const router = Router();
 
@@ -143,6 +144,23 @@ router.post(
   sessionOrCronKey,
   asyncHandler(async (req, res) => {
     const days = Number(req.body?.days) || 14;
+
+    // Refresh statutory dates from Companies House first, so an item filed at
+    // CH (accounts, confirmation statement) has already rolled forward and
+    // won't be emailed as overdue. Best-effort: a CH hiccup must not stop the
+    // digest going out, so failures are swallowed after being logged.
+    let sync = null;
+    try {
+      sync = await syncAllCompanies();
+      if (sync.failed) {
+        console.warn(
+          `[reminders] Companies House sync: ${sync.synced}/${sync.total} ok, ${sync.failed} failed`,
+        );
+      }
+    } catch (err) {
+      console.error('[reminders] Companies House sync failed:', err.message);
+    }
+
     const [dueItems, complaintItems] = await Promise.all([
       collectDueItems(days),
       collectComplaintDueItems(days),
@@ -152,7 +170,7 @@ router.post(
     );
     const digest = buildDigest(items);
     const result = await sendReminderEmail(digest);
-    res.json({ items: items.length, ...result });
+    res.json({ items: items.length, sync, ...result });
   }),
 );
 

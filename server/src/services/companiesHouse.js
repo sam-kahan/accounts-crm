@@ -57,6 +57,10 @@ export function mapProfile(profile) {
     accounts_next_made_up_to: profile.accounts?.next_made_up_to || null,
     confirmation_statement_next_due:
       profile.confirmation_statement?.next_due || null,
+    // Confirmation statement date — the date it's made up to, which is also the
+    // date you can file from (the deadline is ~14 days later).
+    confirmation_statement_next_made_up_to:
+      profile.confirmation_statement?.next_made_up_to || null,
     registered_office: formatAddress(profile.registered_office_address),
     sic_codes: profile.sic_codes || [],
   };
@@ -82,11 +86,17 @@ export function mapProfile(profile) {
       source: 'companies_house',
     });
   }
-  if (profile.confirmation_statement?.next_due) {
+  // Remind on the confirmation statement DATE (made-up-to), not the filing
+  // deadline: you can file from that date, so there's no reason to wait. Fall
+  // back to the deadline only if Companies House didn't return a made-up-to.
+  const csDate =
+    profile.confirmation_statement?.next_made_up_to ||
+    profile.confirmation_statement?.next_due;
+  if (csDate) {
     keyDates.push({
       category: 'confirmation_statement',
-      title: 'Confirmation statement due at Companies House',
-      due_date: profile.confirmation_statement.next_due,
+      title: 'Confirmation statement — due to file at Companies House',
+      due_date: csDate,
       recurrence: 'annual',
       source: 'companies_house',
     });
