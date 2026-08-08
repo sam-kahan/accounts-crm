@@ -17,7 +17,8 @@ const router = Router();
 async function collectDueItems(days = 30) {
   const keyDates = (
     await query(
-      `SELECT k.id, k.title, k.due_date, k.category, c.name AS company_name,
+      `SELECT k.id, k.title, k.due_date, k.category, k.source, k.recurrence,
+              c.name AS company_name,
               (k.due_date < CURRENT_DATE) AS overdue
          FROM key_dates k JOIN companies c ON c.id = k.company_id
         WHERE k.status = 'pending'
@@ -31,6 +32,8 @@ async function collectDueItems(days = 30) {
     label: r.title,
     due_date: r.due_date,
     category: r.category,
+    source: r.source,
+    recurrence: r.recurrence,
     company_name: r.company_name,
     overdue: r.overdue,
   }));

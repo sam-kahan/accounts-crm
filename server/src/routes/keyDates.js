@@ -85,8 +85,18 @@ router.post(
   }),
 );
 
-// Mark done. Recurring dates roll forward to the next occurrence instead of
-// closing, so a company's annual accounts date is never "lost".
+// Mark done.
+//
+// Manual recurring dates (e.g. a self-tracked VAT quarter) roll forward to the
+// next occurrence instead of closing, so the series is never "lost".
+//
+// Companies-House-sourced dates do NOT roll forward here: Companies House is
+// the source of truth for when the next period begins, and it only advances
+// once the filing is actually made. So we just mark them done — the next
+// re-sync rolls the date forward when CH genuinely moves it (a hand-completed
+// financial year end therefore stays done until the accounts are filed, rather
+// than being guessed a year ahead and then dragged back to overdue on the next
+// sync).
 router.post(
   '/:id/complete',
   asyncHandler(async (req, res) => {
@@ -96,7 +106,10 @@ router.post(
     const kd = rows[0];
     if (!kd) throw new HttpError(404, 'Key date not found');
 
-    const next = nextOccurrence(kd.due_date, kd.recurrence);
+    const next =
+      kd.source === 'companies_house'
+        ? null
+        : nextOccurrence(kd.due_date, kd.recurrence);
     if (next) {
       const updated = await query(
         `UPDATE key_dates SET due_date = $2, status = 'pending', completed_at = NULL

@@ -137,6 +137,20 @@ From the Greenco logo — use these, don't invent colours:
   work), but a genuinely new period still surfaces as a fresh reminder when CH
   advances the date. The old code reset every synced row to `pending` on each
   sync, which would have resurrected a completed year end.
+- **Completing a CH-sourced key date marks it `done`, never rolls it forward.**
+  `POST /key-dates/:id/complete` only advances `manual` recurring dates via
+  `nextOccurrence` (e.g. a self-tracked VAT quarter). For
+  `source = 'companies_house'` dates, Companies House is the source of truth for
+  the next period, so completion just marks them done and the next re-sync rolls
+  the date forward when CH actually moves it. (Previously a year end — CH-sourced
+  **and** `recurrence = 'annual'` — was guessed a year ahead on completion, then
+  dragged back to overdue by the next sync, because CH still returned the current
+  unfiled `next_made_up_to`.)
+- **On-demand sync.** `POST /api/companies/sync-all` (auth'd, no email) re-syncs
+  every company via `syncAllCompanies()`; the dashboard's "Sync all now" button
+  calls it so filed items drop off without waiting for the nightly cron. Digest
+  key-date items now also carry `source`/`recurrence` so the dashboard's Dismiss
+  tooltip can describe what completing actually does.
 - **Confirmation statement reminds on the statement date, not the deadline.**
   The `confirmation_statement` key date now uses
   `confirmation_statement.next_made_up_to` (the date you can file from) instead

@@ -23,7 +23,17 @@ function DueBadge({ date }) {
 
 function ItemRow({ item, onDismiss }) {
   const [busy, setBusy] = useState(false);
-  const recurring = item.type === 'key_date' && item.category === 'year_end';
+  const chManaged = item.type === 'key_date' && item.source === 'companies_house';
+  const willRoll =
+    item.type === 'key_date' &&
+    !chManaged &&
+    item.recurrence &&
+    item.recurrence !== 'none';
+  const dismissTitle = willRoll
+    ? 'Dismiss — rolls forward to the next occurrence'
+    : chManaged
+      ? 'Mark done — reappears only when Companies House moves to the next period'
+      : 'Dismiss this reminder';
   return (
     <tr>
       <td className={`due ${item.overdue ? 'overdue' : 'soon'}`}>
@@ -49,11 +59,7 @@ function ItemRow({ item, onDismiss }) {
           className="btn-ghost btn-sm"
           style={{ marginLeft: 8 }}
           disabled={busy}
-          title={
-            recurring
-              ? 'Dismiss — rolls forward to next year'
-              : 'Dismiss this reminder'
-          }
+          title={dismissTitle}
           onClick={async () => {
             setBusy(true);
             try {
