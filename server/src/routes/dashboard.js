@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/pool.js';
 import { asyncHandler } from '../lib/http.js';
 import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
+import { can } from '../services/permissions.js';
 import {
   sendReminderEmail,
   buildDigest,
@@ -113,7 +114,15 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const days = Number(req.query.days) || 30;
-    const items = await collectDueItems(days);
+    // The dashboard summarises other sections, so it shows only the ones this
+    // user may see — otherwise it would leak the very figures their access was
+    // meant to withhold.
+    const seeCompanies = can(req.user, 'companies');
+    const seeTasks = can(req.user, 'tasks');
+    const seeCommission = can(req.user, 'commission');
+    const items = (await collectDueItems(days)).filter((i) =>
+      i.type === 'task' ? seeTasks : seeCompanies,
+    );
 
     const counts = (
       await query(`
@@ -129,7 +138,7 @@ router.get(
 
     // Contractor commission at a glance: what is waiting to be invoiced, and
     // what has been invoiced but not yet paid back to us.
-    const commission = (
+    const commission = !seeCommission ? null : (
       await query(`
         SELECT
           (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
@@ -154,11 +163,17 @@ router.get(
       },
       overdue: items.filter((i) => i.overdue),
       upcoming: items.filter((i) => !i.overdue),
-      commission: {
-        ...withNumbers(commission, ['pending_commission', 'month_commission', 'awaiting_payment']),
-        pending_count: Number(commission.pending_count),
-        awaiting_count: Number(commission.awaiting_count),
-      },
+      commission: commission
+        ? {
+            ...withNumbers(commission, [
+              'pending_commission',
+              'month_commission',
+              'awaiting_payment',
+            ]),
+            pending_count: Number(commission.pending_count),
+            awaiting_count: Number(commission.awaiting_count),
+          }
+        : null,
       mailer: mailerStatus(),
     });
   }),

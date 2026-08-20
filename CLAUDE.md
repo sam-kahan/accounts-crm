@@ -85,13 +85,32 @@ From the Greenco logo — use these, don't invent colours:
   session OR the cron key — sent as the `X-Cron-Key` header (preferred) or
   `?key=REMINDER_CRON_KEY` (legacy). Compared in constant time; see
   `middleware/auth.js` (`sessionOrCronKey`).
-- **Trust model: single-tenant.** Every logged-in user is a Greenco accounts-team
-  member and may see/edit every record; there is deliberately no per-user row
-  scoping. `requireAuth` is the only authorization boundary. If external or
-  role-limited users are ever added, per-record ownership checks must be added to
-  every data route.
-- Manage users: `node server/src/scripts/create-user.mjs <email> [name]`
-  (re-run to reset a password). Scripts that hit the API (bulk-import) log in
+- **Trust model: one department, sections not records.** Everyone with a login
+  is a member of the Greenco accounts department, so records are not owned by
+  individuals — there is no per-row scoping, and anyone who can reach a section
+  sees all of it. What varies is WHICH SECTIONS they can reach and whether they
+  may change anything there.
+  - `services/permissions.js` is the whole model: `role` (admin | staff |
+    readonly) plus a `{section: none|view|edit}` map. **`admin` is absolute** —
+    always full access whatever is stored — so the person who can fix a mistake
+    can never be locked out by one, and a deactivated account can do nothing.
+  - Enforcement is `requirePermission(section)` applied **once per router in
+    `index.js`**, deriving what's needed from the HTTP method (GET = view,
+    anything else = edit). A route added later is covered without anyone
+    remembering to. The UI hides what it must, but **the UI is not the
+    boundary**.
+  - `requireAuth` now loads the user on every request (one PK lookup, not
+    cached) so revoking access takes effect immediately rather than when the
+    session expires.
+  - The dashboard summarises other sections, so it filters itself to what the
+    viewer may see — otherwise it would leak the figures their access withheld.
+  - Staff are invited by email (`routes/users.js` → `sendInviteEmail`): a
+    password is never set by an administrator, only by the person themselves.
+    Leavers are **deactivated, not deleted**, so their work stays attributable;
+    delete is only allowed for someone who never signed in.
+- Manage users in the app: **Admin → Staff & access**. The script
+  `node server/src/scripts/create-user.mjs <email> [name]` still exists for
+  bootstrapping the first administrator (re-run to reset a password). Scripts that hit the API (bulk-import) log in
   with `CRM_EMAIL` / `CRM_PASSWORD`.
 
 ## Integrations

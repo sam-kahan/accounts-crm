@@ -99,6 +99,46 @@ export async function sendPasswordResetEmail({ to, link }) {
   return { sent: true };
 }
 
+// Invite a new member of the team: they follow the link and set their own
+// password, so one is never typed into the admin screen or passed along.
+// Returns { sent } rather than throwing — losing the account over a mail hiccup
+// would be worse than telling the administrator to send it again.
+export async function sendInviteEmail({ to, name, link, invitedBy }) {
+  const transport = getTransport();
+  if (!transport) return { sent: false, reason: 'SMTP2GO not configured' };
+  const who = invitedBy ? ` by ${invitedBy}` : '';
+  await transport.sendMail({
+    from: config.smtp.from,
+    to,
+    subject: 'Your Greenco Accounts CRM account',
+    text:
+      `Hello${name ? ` ${name}` : ''},\n\n` +
+      `You have been added${who} to the Greenco Accounts CRM.\n\n` +
+      `Set your password here (the link is valid for 7 days):\n${link}\n\n` +
+      `Once you have, sign in at ${config.appUrl}.`,
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;">
+        <h2 style="color:#1e2235;">You've been added to the Accounts CRM</h2>
+        <p>Hello${name ? ` ${escapeText(name)}` : ''}, you have been added${escapeText(who)}
+           to the Greenco Accounts CRM.</p>
+        <p><a href="${link}" style="display:inline-block;background:#a2c533;color:#1e2235;
+          font-weight:600;padding:11px 20px;border-radius:8px;text-decoration:none;">
+          Set your password</a></p>
+        <p style="color:#6b7280;font-size:13px;">This link is valid for 7 days. Afterwards you can
+          sign in at <a href="${config.appUrl}">${config.appUrl}</a>.</p>
+      </div>`,
+  });
+  return { sent: true };
+}
+
+// Names come from a form, and this is HTML.
+function escapeText(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // Build a simple digest email body from a list of due/overdue items.
 export function buildDigest(items) {
   if (items.length === 0) {

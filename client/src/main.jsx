@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import './index.css';
 import { AuthProvider, useAuth } from './auth.jsx';
 import App from './App.jsx';
@@ -17,6 +17,26 @@ import Contractors from './pages/Contractors.jsx';
 import ContractorInvoices from './pages/ContractorInvoices.jsx';
 import CommissionInvoices from './pages/CommissionInvoices.jsx';
 import CommissionInvoiceDetail from './pages/CommissionInvoiceDetail.jsx';
+import Users from './pages/Users.jsx';
+
+// A page nobody should reach by typing its address. The API refuses it anyway;
+// this just says so plainly instead of showing a broken screen.
+function Restricted({ section, children }) {
+  const { canView } = useAuth();
+  if (!canView(section)) {
+    return (
+      <div className="card">
+        <div className="empty">
+          You don’t have access to this part of the system.
+          <div style={{ marginTop: 8 }}>
+            <Link className="linkish" to="/dashboard">Back to the dashboard</Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return children;
+}
 
 function Gate() {
   const { user, loading } = useAuth();
@@ -34,16 +54,20 @@ function Gate() {
       <Route element={<App />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="companies" element={<Companies />} />
-        <Route path="companies/:id" element={<CompanyDetail />} />
-        <Route path="tasks" element={<Tasks />} />
-        <Route path="complaints" element={<Complaints />} />
-        <Route path="complaints/:id" element={<ComplaintDetail />} />
-        <Route path="organisations" element={<Organisations />} />
-        <Route path="commission/contractors" element={<Contractors />} />
-        <Route path="commission/invoices" element={<ContractorInvoices />} />
-        <Route path="commission/raised" element={<CommissionInvoices />} />
-        <Route path="commission/raised/:id" element={<CommissionInvoiceDetail />} />
+        <Route path="companies" element={<Restricted section="companies"><Companies /></Restricted>} />
+        <Route path="companies/:id" element={<Restricted section="companies"><CompanyDetail /></Restricted>} />
+        <Route path="tasks" element={<Restricted section="tasks"><Tasks /></Restricted>} />
+        <Route path="complaints" element={<Restricted section="complaints"><Complaints /></Restricted>} />
+        <Route path="complaints/:id" element={<Restricted section="complaints"><ComplaintDetail /></Restricted>} />
+        <Route path="organisations" element={<Restricted section="complaints"><Organisations /></Restricted>} />
+        <Route path="commission/contractors" element={<Restricted section="commission"><Contractors /></Restricted>} />
+        <Route path="commission/invoices" element={<Restricted section="commission"><ContractorInvoices /></Restricted>} />
+        <Route path="commission/raised" element={<Restricted section="commission"><CommissionInvoices /></Restricted>} />
+        <Route path="commission/raised/:id" element={<Restricted section="commission"><CommissionInvoiceDetail /></Restricted>} />
+        <Route
+          path="staff"
+          element={<Restricted section="admin"><Users /></Restricted>}
+        />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

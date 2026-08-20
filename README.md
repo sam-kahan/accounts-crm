@@ -24,6 +24,7 @@ dates pulled automatically from **Companies House**.
 | **Complaints** | Track complaints against councils/suppliers. Auto-computes statutory response deadlines (working days + UK bank holidays), flags ignored/overdue complaints, tells you the next legal step, tracks the ombudsman referral window, and keeps a timeline/evidence trail. Escalation Stage 1 → Stage 2 → Ombudsman. |
 | **Organisations** | The bodies you complain to, each with a complaints-procedure profile (ombudsman, timescales, legal basis). Can be **AI-researched** per organisation (Claude + web search) and edited. |
 | **Commission** | Contractors who include a commission for Greenco in their invoices. Upload the invoice, the details are read off it (Claude) and the commission is costed from that contractor's agreed rate; at month end raise one invoice per contractor for everything they collected, print or email it, and push it to Greenco Invoicing to be chased. |
+| **Staff & access** | Add the rest of the department, each with a role (Administrator / Staff / Read only) and per-section access — Companies, Tasks, Complaints, Commission, Admin — set to no access, view only, or view & edit. New people are emailed a link to set their own password. Enforced on the server, not just hidden in the menu. |
 | **PWA** | Installable on phone/desktop (standalone window, Greenco icon, offline app shell). |
 
 ## Integrations

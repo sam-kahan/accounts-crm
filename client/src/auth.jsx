@@ -33,8 +33,15 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // What this user may do, straight from the server — the same answer the API
+  // will give when the request actually arrives, so the menu and the buttons
+  // can never offer something that would be refused.
+  const level = (section) => user?.permissions?.[section] || 'none';
+  const canView = (section) => level(section) !== 'none';
+  const canEdit = (section) => level(section) === 'edit';
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, level, canView, canEdit }}>
       {children}
     </AuthContext.Provider>
   );

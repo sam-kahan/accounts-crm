@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { HttpError } from './lib/http.js';
 import { pool } from './db/pool.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requirePermission } from './middleware/auth.js';
 import auth from './routes/auth.js';
 import companies from './routes/companies.js';
 import keyDates from './routes/keyDates.js';
@@ -23,6 +23,7 @@ import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
 import commissionInvoices from './routes/commissionInvoices.js';
 import invoicingWebhook from './routes/invoicingWebhook.js';
+import users from './routes/users.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -115,19 +116,20 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', auth);
 
 // Everything else requires a login session.
-app.use('/api/companies', requireAuth, companies);
-app.use('/api/key-dates', requireAuth, keyDates);
-app.use('/api/tasks', requireAuth, tasks);
-app.use('/api/organisations', requireAuth, organisations);
+app.use('/api/companies', requireAuth, requirePermission('companies'), companies);
+app.use('/api/key-dates', requireAuth, requirePermission('companies'), keyDates);
+app.use('/api/tasks', requireAuth, requirePermission('tasks'), tasks);
+app.use('/api/organisations', requireAuth, requirePermission('complaints'), organisations);
 // Greenco Invoicing calls this when an invoice changes over there. Server to
 // server, so it authenticates with the shared integration secret rather than a
 // login session — mounted on its own path so no authed route is widened.
 app.use('/api/webhooks/invoicing', invoicingWebhook);
 
-app.use('/api/contractors', requireAuth, contractors);
-app.use('/api/contractor-invoices', requireAuth, contractorInvoices);
-app.use('/api/commission-invoices', requireAuth, commissionInvoices);
-app.use('/api/complaints', complaints); // email-fetch uses a cron key; rest requireAuth in-router
+app.use('/api/contractors', requireAuth, requirePermission('commission'), contractors);
+app.use('/api/contractor-invoices', requireAuth, requirePermission('commission'), contractorInvoices);
+app.use('/api/commission-invoices', requireAuth, requirePermission('commission'), commissionInvoices);
+app.use('/api/users', requireAuth, requirePermission('admin'), users);
+app.use('/api/complaints', complaints); // email-fetch uses a cron key; rest gated in-router
 app.use('/api/dashboard', dashboard); // send-reminders allows a cron key; see route
 
 // 404 for unmatched API routes

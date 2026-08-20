@@ -131,6 +131,15 @@ export const api = {
     defaults: (type) => request(`/organisations/defaults/${type}`),
   },
 
+  users: {
+    list: () => request('/users'),
+    options: () => request('/users/access/options'),
+    create: (data) => request('/users', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id, data) => request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    invite: (id) => request(`/users/${id}/invite`, { method: 'POST' }),
+    remove: (id) => request(`/users/${id}`, { method: 'DELETE' }),
+  },
+
   contractors: {
     list: (params = {}) => {
       const qs = new URLSearchParams(params).toString();

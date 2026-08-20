@@ -6,6 +6,7 @@ import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
+import { describeAccess } from '../services/permissions.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
 
 const router = Router();
@@ -51,6 +52,9 @@ router.post(
     const user = rows[0];
     const ok = user && (await bcrypt.compare(password, user.password_hash));
     if (!ok) throw new HttpError(401, 'Invalid email or password');
+    if (user.active === false) {
+      throw new HttpError(403, 'This account has been deactivated. Ask an administrator.');
+    }
 
     clearAttempts(ip);
     // Guard against session fixation: issue a fresh session on login. Errors
@@ -62,7 +66,17 @@ router.post(
       req.session.userId = user.id;
       req.session.save((saveErr) => {
         if (saveErr) return next(saveErr);
-        res.json({ id: user.id, email: user.email, name: user.name });
+        // Records that the invitation was taken up, and stops an account that
+        // has actually been used being deleted rather than deactivated.
+        query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]).catch(
+          (e) => console.error('last_login_at update failed:', e.message),
+        );
+        res.json({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          ...describeAccess(user),
+        });
       });
     });
   }),
@@ -175,14 +189,26 @@ router.get(
   asyncHandler(async (req, res) => {
     if (!req.session?.userId) throw new HttpError(401, 'Not authenticated');
     const { rows } = await query(
-      'SELECT id, email, name FROM users WHERE id = $1',
+      'SELECT id, email, name, job_title, role, permissions, active FROM users WHERE id = $1',
       [req.session.userId],
     );
-    if (!rows[0]) {
+    const user = rows[0];
+    if (!user) {
       req.session.destroy(() => {});
       throw new HttpError(401, 'Not authenticated');
     }
-    res.json(rows[0]);
+    if (!user.active) {
+      req.session.destroy(() => {});
+      throw new HttpError(403, 'This account has been deactivated.');
+    }
+    // The UI builds its menu from exactly what the server enforces.
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      job_title: user.job_title,
+      ...describeAccess(user),
+    });
   }),
 );
 

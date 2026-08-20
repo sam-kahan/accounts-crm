@@ -496,3 +496,17 @@ th.num { text-align: right; }
   .invoice-sheet { border: none; box-shadow: none; padding: 0; max-width: none; }
   a { text-decoration: none; }
 }
+
+/* --- Staff & access ------------------------------------------------------- */
+/* Role choice: big enough to read the consequence, not just the name. */
+.role-choice {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); cursor: pointer; flex: 1 1 200px; min-width: 0;
+}
+.role-choice:hover { border-color: var(--green); }
+.role-choice.chosen { border-color: var(--green); background: var(--green-050); }
+.sidebar .user-role {
+  color: rgba(255, 255, 255, 0.45); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; margin-top: 1px;
+}

@@ -5,7 +5,7 @@ import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
 import { todayISO } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
-import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
+import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
 import {
   effectiveRule,
   computeResponseDue,
@@ -107,7 +107,7 @@ router.post(
 );
 
 // Everything below this line requires a logged-in session.
-router.use(requireAuth);
+router.use(requireAuth, requirePermission('complaints'));
 
 // Is the mailbox integration configured? (for the UI)
 router.get(
