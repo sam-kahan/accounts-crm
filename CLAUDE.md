@@ -100,6 +100,10 @@ From the Greenco logo — use these, don't invent colours:
   dates. Synced dates are stored with `source = 'companies_house'` and upserted
   in place (unique per company+category) so re-syncing never duplicates.
 - **SMTP2GO** (`SMTP_USER` / `SMTP_PASS`) — reminder digests via nodemailer.
+- **Greenco Invoicing** (`INVOICING_API_URL` / `INVOICING_API_KEY` /
+  `INVOICING_COMPANY_ID`) — commission invoices are pushed to the invoicing app
+  (`sam-kahan/invoices-manager`, the Next.js app in its `v2/`) so they are
+  emailed, tracked and chased there. See "Contractor commission" below.
 - Roadmap: Outlook calendar sync (Microsoft Graph), HMRC MTD.
   (No Sage / accounting-package integration planned.)
 
@@ -109,6 +113,55 @@ From the Greenco logo — use these, don't invent colours:
 2. `server/src/routes/<thing>.js` + mount in `server/src/index.js`
 3. `client/src/api.js` methods
 4. `client/src/pages/<Thing>.jsx` + nav entry in `client/src/App.jsx`
+
+## Contractor commission (how the money flows)
+
+Some contractors agree to include a commission for Greenco inside the invoices
+they send us. We pay the whole invoice out of the **client account** (it is
+charged to the landlord's statement), then invoice the commission back to the
+contractor at month end.
+
+    contractor invoice (£100, £10 of it ours)
+      → logged + document stored, commission costed from the agreed rate
+      → month end: one commission invoice per contractor for everything pending
+      → pushed to Greenco Invoicing, which numbers, emails and chases it
+      → paid there → refreshed back here
+
+- `contractors` holds the **agreement** (percentage or fixed, on net or gross,
+  included in their invoice or charged on top, VAT rate, payment terms). Every
+  logged invoice **snapshots** that deal, so renegotiating a rate never rewrites
+  what was already billed.
+- `contractor_invoices` is one row per invoice received. The commission is
+  computed server-side from the snapshot — a hand-typed figure is kept but
+  flagged `commission_override`, so a month-end total can always be explained.
+  A partial unique index on `(contractor_id, lower(invoice_number))` stops the
+  same invoice being logged (and claimed) twice.
+- `commission_invoices` is what we raise. Raising **locks the pending rows
+  `FOR UPDATE`** inside the transaction — two people raising the same month at
+  once would otherwise each claim the same commission. Voiding releases the
+  lines back to pending; a **paid** invoice can't be voided until it is marked
+  unpaid (that would release lines the contractor has already settled).
+- Status is **derived**, never stored twice: `commissionStatus()` in
+  `services/commission.js` is the definition; the SQL fragments in
+  `routes/contractorInvoices.js` are its filter-only twins.
+- **Money maths is integer pence** (`lib/money.js`). `toPence` reads the digits
+  out of the decimal string — `Math.round(1.005 * 100)` is 100, which loses a
+  penny. VAT is worked out **per line** (`invoiceTotalsFromLines`) because that
+  is how Greenco Invoicing adds an invoice up, and a penny of daylight between
+  the two systems is a query nobody wants to answer.
+- **Reading invoices** (`services/invoiceExtract.js`) sends the uploaded PDF /
+  photo / text to Claude and fills the form in. The document is third-party
+  material: the system prompt says so explicitly (a PDF can't be wrapped in
+  `<untrusted_content>` markers, plain text is), and every field is clamped by
+  `normaliseExtraction` before it reaches the form. Gated on
+  `ANTHROPIC_API_KEY`; without it the upload still works, you just type.
+- **The push** (`services/invoicesManager.js`) is best-effort on the raise path:
+  the commission is already claimed and the lines already linked, so a failed
+  push is recorded in `external_error` for a visible retry and never rolls back
+  a correct month-end raise. Our `GC-COM-xxxxx` goes across as the invoicing
+  system's *header reference*, which is also its **idempotency key** — a retried
+  push links to the invoice already there instead of billing twice. That system
+  assigns the number the contractor sees.
 
 ## Verify before committing
 
@@ -122,6 +175,26 @@ From the Greenco logo — use these, don't invent colours:
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-20 — contractor commission tracking + Greenco Invoicing bridge
+- **New module** (`Commission` in the nav): contractors and their commission
+  agreements, the invoices received from them, and the invoices we raise back.
+  Migrations `008` (three tables) and `009` (the invoicing link columns). Full
+  reasoning in "Contractor commission" above.
+- **Upload-and-it's-done.** Dropping an invoice PDF/photo on the log form sends
+  it to Claude (`services/invoiceExtract.js`), which fills in the number, date,
+  amounts, property and works; the commission is then costed from the
+  contractor's agreed rate. Everything is reviewed before it saves, and the
+  whole form still works by hand with no API key.
+- **Month end.** `/commission/raised` shows what each contractor owes for the
+  month; one click raises their invoice (printable, emailable, CSV export
+  alongside). The dashboard grew a "commission to invoice" tile.
+- **Greenco Invoicing.** Raising an invoice pushes it to
+  `POST /api/external/invoices` on `invoices.greenco.co.uk` (bearer token,
+  `INTEGRATION_SECRET` there = `INVOICING_API_KEY` here) so it gets a real
+  invoice number, PDF, email and the overdue/chase flow; `POST
+  /commission-invoices/:id/refresh` reads payment back. Both endpoints were
+  added to that repo in the same change.
 
 ### 2026-08-08 — reminder timing & auto-drop-off of filed items
 - **Filed items now drop off automatically.** The daily reminder cron

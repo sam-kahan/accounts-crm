@@ -23,6 +23,7 @@ dates pulled automatically from **Companies House**.
 | **Tasks** | Ad-hoc to-dos, optionally linked to a company, with due date & priority. |
 | **Complaints** | Track complaints against councils/suppliers. Auto-computes statutory response deadlines (working days + UK bank holidays), flags ignored/overdue complaints, tells you the next legal step, tracks the ombudsman referral window, and keeps a timeline/evidence trail. Escalation Stage 1 → Stage 2 → Ombudsman. |
 | **Organisations** | The bodies you complain to, each with a complaints-procedure profile (ombudsman, timescales, legal basis). Can be **AI-researched** per organisation (Claude + web search) and edited. |
+| **Commission** | Contractors who include a commission for Greenco in their invoices. Upload the invoice, the details are read off it (Claude) and the commission is costed from that contractor's agreed rate; at month end raise one invoice per contractor for everything they collected, print or email it, and push it to Greenco Invoicing to be chased. |
 | **PWA** | Installable on phone/desktop (standalone window, Greenco icon, offline app shell). |
 
 ## Integrations
@@ -31,6 +32,8 @@ dates pulled automatically from **Companies House**.
 |-------------|--------|-------|
 | **Companies House** | ✅ Built | Free API key from the [developer hub](https://developer.company-information.service.gov.uk/). Set `COMPANIES_HOUSE_API_KEY`. Without it the app still works — you just enter dates manually. |
 | **SMTP2GO email reminders** | ✅ Built | Set `SMTP_USER` / `SMTP_PASS`. The dashboard "Email me reminders" button (and the `POST /api/dashboard/send-reminders` endpoint) send a digest. |
+| **Greenco Invoicing** | ✅ Built | Commission invoices are pushed to `invoices.greenco.co.uk` (`POST /api/external/invoices`) so they get a real invoice number, a PDF, an email and the overdue/chase flow. Set `INVOICING_API_URL` / `INVOICING_API_KEY` / `INVOICING_COMPANY_ID`; the key must match `INTEGRATION_SECRET` there. Without it the commission module works standalone. |
+| **Claude (invoice reading)** | ✅ Built | `ANTHROPIC_API_KEY` — reads a contractor's uploaded invoice (PDF/photo/text) and fills in the number, date, amounts, property and works for you to check. Without it you type them in. |
 | **Outlook calendar sync** | ⏳ Roadmap | Push key dates into Outlook via Microsoft Graph (needs an Azure app registration). |
 | **HMRC MTD (VAT / Corp Tax)** | ⏳ Roadmap | Pull tax obligations/deadlines. |
 
