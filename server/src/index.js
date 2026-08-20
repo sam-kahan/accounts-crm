@@ -19,6 +19,9 @@ import tasks from './routes/tasks.js';
 import dashboard from './routes/dashboard.js';
 import organisations from './routes/organisations.js';
 import complaints from './routes/complaints.js';
+import contractors from './routes/contractors.js';
+import contractorInvoices from './routes/contractorInvoices.js';
+import commissionInvoices from './routes/commissionInvoices.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -115,6 +118,9 @@ app.use('/api/companies', requireAuth, companies);
 app.use('/api/key-dates', requireAuth, keyDates);
 app.use('/api/tasks', requireAuth, tasks);
 app.use('/api/organisations', requireAuth, organisations);
+app.use('/api/contractors', requireAuth, contractors);
+app.use('/api/contractor-invoices', requireAuth, contractorInvoices);
+app.use('/api/commission-invoices', requireAuth, commissionInvoices);
 app.use('/api/complaints', complaints); // email-fetch uses a cron key; rest requireAuth in-router
 app.use('/api/dashboard', dashboard); // send-reminders allows a cron key; see route
 
@@ -131,6 +137,15 @@ if (existsSync(clientDist)) {
 // Central error handler
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
+  // An oversized or unexpected upload is the user's mistake, not a server
+  // fault — multer's own error carries the reason, so say it plainly.
+  if (err?.name === 'MulterError') {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'That file is too large (15 MB maximum).'
+        : `Upload rejected: ${err.message}`;
+    return res.status(400).json({ error: message });
+  }
   if (err instanceof HttpError) {
     return res.status(err.status).json({ error: err.message, details: err.details });
   }

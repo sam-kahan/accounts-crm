@@ -77,6 +77,50 @@ export const config = {
   // `uploads/` dir next to the server (gitignored); override with UPLOAD_DIR.
   uploadDir: process.env.UPLOAD_DIR || 'uploads',
 
+  // Contractor commission. The prefix numbers the invoices we raise to
+  // contractors; the billing block is OUR details as they appear on that
+  // invoice (nothing is invented — an unset field is simply left off).
+  commission: {
+    invoicePrefix: process.env.COMMISSION_INVOICE_PREFIX || 'GC-COM-',
+    // Default VAT rate applied to a new contractor's commission agreement.
+    // 0 = no VAT line, which is what most of these agreements look like.
+    defaultVatRate: Number(process.env.COMMISSION_VAT_RATE) || 0,
+    paymentTermsDays: Number(process.env.COMMISSION_TERMS_DAYS) || 30,
+  },
+
+  // Greenco Invoicing (invoices.greenco.co.uk). A commission invoice raised
+  // here is pushed there so it can be emailed, tracked and chased alongside
+  // every other Greenco invoice. Unset = the module works standalone.
+  invoicing: {
+    baseUrl: (process.env.INVOICING_API_URL || '').replace(/\/+$/, ''),
+    apiKey: process.env.INVOICING_API_KEY || '',
+    // Which company in the invoicing system raises these invoices.
+    companyId: Number(process.env.INVOICING_COMPANY_ID) || 0,
+    // Push automatically the moment an invoice is raised (default on when
+    // configured); a failed push never blocks the raise, it just shows as
+    // "not sent to invoicing" with a Retry.
+    autoPush: process.env.INVOICING_AUTO_PUSH !== 'false',
+    // Whether the pushed invoice arrives as a draft or already marked sent.
+    pushAsSent: process.env.INVOICING_PUSH_AS_SENT === 'true',
+    timeoutMs: Number(process.env.INVOICING_TIMEOUT_MS) || 15000,
+    get enabled() {
+      return Boolean(this.baseUrl && this.apiKey && this.companyId);
+    },
+  },
+
+  billing: {
+    name: process.env.BILLING_NAME || 'Greenco',
+    address: process.env.BILLING_ADDRESS || '',
+    email: process.env.BILLING_EMAIL || '',
+    phone: process.env.BILLING_PHONE || '',
+    vatNumber: process.env.BILLING_VAT_NUMBER || '',
+    companyNumber: process.env.BILLING_COMPANY_NUMBER || '',
+    bankDetails: process.env.BILLING_BANK_DETAILS || '',
+    get complete() {
+      return Boolean(this.address && this.bankDetails);
+    },
+  },
+
   // Per-complaint address: <prefix><code>@<domain>, e.g.
   // complaint-71923e@greenco.co.uk. It isn't a real mailbox — it falls through
   // to the domain catch-all (ms.mailbox), where we match it by exact recipient.

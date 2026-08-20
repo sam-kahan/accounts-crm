@@ -9,6 +9,7 @@ import {
 } from '../services/mailer.js';
 import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
 import { syncAllCompanies } from '../services/companySync.js';
+import { withNumbers } from '../lib/money.js';
 
 const router = Router();
 
@@ -126,6 +127,24 @@ router.get(
       `)
     ).rows[0];
 
+    // Contractor commission at a glance: what is waiting to be invoiced, and
+    // what has been invoiced but not yet paid back to us.
+    const commission = (
+      await query(`
+        SELECT
+          (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
+             WHERE commission_invoice_id IS NULL AND NOT waived)      AS pending_commission,
+          (SELECT count(*) FROM contractor_invoices
+             WHERE commission_invoice_id IS NULL AND NOT waived)      AS pending_count,
+          (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
+             WHERE invoice_date >= date_trunc('month', CURRENT_DATE)) AS month_commission,
+          (SELECT COALESCE(sum(total_amount), 0) FROM commission_invoices
+             WHERE status = 'sent')                                   AS awaiting_payment,
+          (SELECT count(*) FROM commission_invoices
+             WHERE status = 'sent')                                   AS awaiting_count
+      `)
+    ).rows[0];
+
     res.json({
       window_days: days,
       counts: {
@@ -135,6 +154,11 @@ router.get(
       },
       overdue: items.filter((i) => i.overdue),
       upcoming: items.filter((i) => !i.overdue),
+      commission: {
+        ...withNumbers(commission, ['pending_commission', 'month_commission', 'awaiting_payment']),
+        pending_count: Number(commission.pending_count),
+        awaiting_count: Number(commission.awaiting_count),
+      },
       mailer: mailerStatus(),
     });
   }),
