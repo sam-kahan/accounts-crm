@@ -177,7 +177,14 @@ contractor at month end.
   is how Greenco Invoicing adds an invoice up, and a penny of daylight between
   the two systems is a query nobody wants to answer.
 - **Reading invoices** (`services/invoiceExtract.js`) sends the uploaded PDF /
-  photo / text to Claude and fills the form in. The document is third-party
+  photo / text to Claude and fills the form in — including *who it is from*:
+  `matchContractorByName()` traces the printed name back to a contractor on
+  file through the usual noise (Ltd/Limited, `&` vs `and`, apostrophes), and
+  only a confident match (≥ 0.8) selects one, because a half-right guess would
+  apply someone else's rate. No match offers to set the contractor up from the
+  invoice — name, address, contact, and VAT registration read off the document
+  (`contractorSuggestionFrom()`); only the commission rate is asked for, since
+  an invoice can't state the agreement. The document is third-party
   material: the system prompt says so explicitly (a PDF can't be wrapped in
   `<untrusted_content>` markers, plain text is), and every field is clamped by
   `normaliseExtraction` before it reaches the form. Gated on

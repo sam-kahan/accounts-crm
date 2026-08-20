@@ -15,6 +15,8 @@ import {
   commissionFor,
   reconcileAmounts,
   commissionStatus,
+  matchContractorByName,
+  contractorSuggestionFrom,
 } from '../services/commission.js';
 import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } from '../services/contractorDocs.js';
 import { extractInvoice } from '../services/invoiceExtract.js';
@@ -146,17 +148,40 @@ router.post(
     const extracted = await extractInvoice(req.file);
     const amounts = reconcileAmounts(extracted);
 
-    // If we know which contractor it's from, apply their deal straight away so
-    // the form comes back complete.
-    let commission = null;
+    // Work out who sent it. If the caller already chose a contractor we use
+    // that; otherwise the name printed on the invoice is matched against the
+    // contractors on file, so an upload fills the whole form in on its own.
+    let contractor = null;
+    let match = null;
     if (req.body?.contractor_id) {
-      const contractor = await getContractor(req.body.contractor_id);
-      commission = resolveCommission(contractor, {}, amounts);
+      contractor = await getContractor(req.body.contractor_id);
+    } else if (extracted.contractor_name) {
+      const { rows } = await query('SELECT * FROM contractors WHERE active ORDER BY name');
+      match = matchContractorByName(extracted.contractor_name, rows);
+      // Only fill the form in on a confident match — a half-right guess would
+      // silently apply the wrong rate to someone else's invoice.
+      if (match?.confident) contractor = match.contractor;
     }
+
+    const commission = contractor ? resolveCommission(contractor, {}, amounts) : null;
 
     res.json({
       ...extracted,
       ...amounts,
+      contractor_id: contractor ? contractor.id : null,
+      // Everything needed to set this contractor up, if they're new to us. VAT
+      // registration is read off the invoice itself: a VAT number, or VAT
+      // actually charged, means they're registered. The commission rate is the
+      // one thing an invoice can't tell us — that's the agreement.
+      contractor_suggestion: contractor ? null : contractorSuggestionFrom(extracted, amounts),
+      contractor_match: match
+        ? {
+            name: match.contractor.name,
+            id: match.contractor.id,
+            confident: match.confident,
+            score: Math.round(match.score * 100) / 100,
+          }
+        : null,
       commission_amount: commission ? commission.commission_amount : null,
       commission_rate: commission ? commission.commission_rate : null,
       commission_type: commission ? commission.commission_type : null,

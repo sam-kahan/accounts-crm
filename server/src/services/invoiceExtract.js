@@ -50,7 +50,9 @@ Read the document and report:
   total payable. If VAT is not shown, the total IS the net and vat is 0.
 - the property or job address the work relates to
 - a short description of the work done (one line, max ~120 characters)
-- the contractor's business name as printed
+- the contractor's business name as printed, and their address, email, phone and VAT
+  registration number if the invoice shows them (these set up a contractor we haven't
+  dealt with before). A VAT number, or VAT actually charged, means they are VAT registered.
 - any commission, referral fee, management fee or similar amount the invoice ITSELF names, as a
   plain number — this team's contractors sometimes itemise the commission they have included for
   the agency. Use null if the invoice doesn't mention one.
@@ -68,6 +70,10 @@ Return ONLY a single JSON object (no prose, no markdown fences) with exactly the
   "property": string|null,
   "description": string|null,
   "contractor_name": string|null,
+  "contractor_address": string|null,
+  "contractor_email": string|null,
+  "contractor_phone": string|null,
+  "contractor_vat_number": string|null,
   "commission_stated": number|null,
   "caution": string|null
 }`;
@@ -104,6 +110,12 @@ function cleanAmount(v) {
   return Math.round(n * 100) / 100;
 }
 
+const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+function cleanEmail(v) {
+  const s = cleanStr(v, 320);
+  return s && EMAIL_RE.test(s) ? s : null;
+}
+
 // Accept only a real calendar date in a plausible window — a mis-parsed
 // "01/02/25" landing in 2125 must not silently set an invoice date.
 export function cleanInvoiceDate(v) {
@@ -132,6 +144,15 @@ export function normaliseExtraction(raw) {
     property: cleanStr(r.property, 200),
     description: cleanStr(r.description, 300),
     contractor_name: cleanStr(r.contractor_name, 200),
+    contractor_address: cleanStr(r.contractor_address, 500),
+    contractor_email: cleanEmail(r.contractor_email),
+    contractor_phone: cleanStr(r.contractor_phone, 40),
+    contractor_vat_number: cleanStr(
+      typeof r.contractor_vat_number === 'string'
+        ? r.contractor_vat_number.replace(/[^\w\s.-]/g, '')
+        : '',
+      40,
+    ),
     commission_stated: cleanAmount(r.commission_stated),
     caution: cleanStr(r.caution, 500),
   };

@@ -374,3 +374,83 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
 
   return { subject, text, html };
 }
+
+// --- matching an invoice to a contractor ------------------------------------
+
+// Company names on invoices never match the register exactly: "Bob's Plumbing
+// Ltd" vs "Bobs Plumbing", "J & J Electrical" vs "J and J Electrical". Strip
+// everything that varies — punctuation, "&"/"and", and the company suffixes —
+// and compare what's left.
+const NAME_NOISE = /\b(ltd|limited|llp|llc|plc|inc|co|company|the)\b/g;
+
+export function normaliseName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(NAME_NOISE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// One name contains the other, and the shorter is distinctive enough to mean
+// something: a bare "plumbing" must not auto-select Bob's Plumbing and apply
+// their rate to someone else's invoice.
+function containsName(a, b) {
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.split(' ').length < 2) return false;
+  return longer.includes(shorter);
+}
+
+// Match a name read off an invoice against the contractors on file. Returns the
+// best candidate with a score: 1 is an exact match once normalised, and only
+// 0.8 or better is confident enough to fill the form in without being asked.
+export function matchContractorByName(name, contractors = []) {
+  const target = normaliseName(name);
+  if (!target) return null;
+  const targetWords = new Set(target.split(' ').filter((w) => w.length > 2));
+
+  let best = null;
+  for (const contractor of contractors) {
+    const candidate = normaliseName(contractor.name);
+    if (!candidate) continue;
+
+    let score = 0;
+    if (candidate === target) {
+      score = 1;
+    } else if (containsName(candidate, target)) {
+      // "Bobs Plumbing" inside "Bobs Plumbing and Heating".
+      score = 0.85;
+    } else if (targetWords.size) {
+      // Otherwise judge on how much of the distinctive wording they share.
+      const candidateWords = candidate.split(' ').filter((w) => w.length > 2);
+      const shared = candidateWords.filter((w) => targetWords.has(w)).length;
+      const ratio = shared / Math.max(targetWords.size, candidateWords.length || 1);
+      if (ratio >= 0.5) score = 0.5 + ratio * 0.3;
+    }
+
+    if (score > 0 && (!best || score > best.score)) best = { contractor, score };
+  }
+
+  if (!best) return null;
+  return { ...best, confident: best.score >= 0.8 };
+}
+
+// Everything needed to set up a contractor we haven't dealt with before, taken
+// from the invoice they sent. Whether they are VAT registered is read off the
+// document itself — a VAT number, or VAT actually charged, means they are. The
+// commission rate is deliberately absent: an invoice can't tell us the
+// agreement, so it has to be confirmed by a person.
+export function contractorSuggestionFrom(extracted = {}, amounts = {}) {
+  if (!extracted.contractor_name) return null;
+  return {
+    name: extracted.contractor_name,
+    address: extracted.contractor_address || null,
+    email: extracted.contractor_email || null,
+    phone: extracted.contractor_phone || null,
+    vat_registered: Boolean(
+      extracted.contractor_vat_number || (toPence(amounts.vat_amount) ?? 0) > 0,
+    ),
+  };
+}

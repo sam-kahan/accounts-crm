@@ -22,6 +22,19 @@ function num(v) {
   return v === '' || v === null || v === undefined ? undefined : Number(v);
 }
 
+// The date a new invoice starts on: today when you're looking at this month,
+// otherwise the last day of the month you have open — so an invoice logged
+// while reviewing September lands in September, not in today's month where you
+// wouldn't see it.
+function defaultDateFor(month) {
+  const today = todayISO();
+  if (month === today.slice(0, 7)) return today;
+  const [y, m] = month.split('-').map(Number);
+  if (!y || !m) return today;
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${month}-${String(last).padStart(2, '0')}`;
+}
+
 // A preview of what the server will charge, shown live as the amounts are
 // typed. The server recomputes from the contractor's agreement when it saves —
 // this figure is only sent if the user deliberately overrides it.
@@ -48,11 +61,19 @@ function previewCommission(contractor, { net, vat, total }) {
   return basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
 }
 
-function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }) {
+function LogInvoiceModal({
+  contractors,
+  aiEnabled,
+  preselect,
+  month,
+  onContractorAdded,
+  onClose,
+  onSaved,
+}) {
   const [form, setForm] = useState({
     contractor_id: preselect || '',
     invoice_number: '',
-    invoice_date: todayISO(),
+    invoice_date: defaultDateFor(month),
     property: '',
     landlord_ref: '',
     description: '',
@@ -67,6 +88,10 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState(null);
   const [stated, setStated] = useState(null); // commission the invoice itself named
+  const [match, setMatch] = useState(null); // which contractor the invoice was traced to
+  const [suggestion, setSuggestion] = useState(null); // set up a contractor we don't have
+  const [newRate, setNewRate] = useState('10');
+  const [adding, setAdding] = useState(false);
   const [commission, setCommission] = useState(''); // '' = use the agreed rate
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -96,6 +121,8 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
       const d = await api.contractorInvoices.extract(f, contractorId || form.contractor_id);
       setForm((prev) => ({
         ...prev,
+        // Whoever the invoice says it's from, unless one was already chosen.
+        contractor_id: prev.contractor_id || d.contractor_id || '',
         invoice_number: d.invoice_number || prev.invoice_number,
         invoice_date: d.invoice_date || prev.invoice_date,
         property: d.property || prev.property,
@@ -105,6 +132,14 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
         total_amount: d.total_amount ?? prev.total_amount,
       }));
       setStated(d.commission_stated ?? null);
+      setSuggestion(d.contractor_id ? null : d.contractor_suggestion || null);
+      setMatch(
+        d.contractor_id || d.contractor_match
+          ? { ...(d.contractor_match || {}), name_on_invoice: d.contractor_name }
+          : d.contractor_name
+            ? { name_on_invoice: d.contractor_name, confident: false }
+            : null,
+      );
       setReadNote(
         d.caution
           ? `Read from the invoice — check these: ${d.caution}`
@@ -114,6 +149,41 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
       setReadNote(`Couldn’t read the invoice automatically (${e.message}). Enter the details below.`);
     } finally {
       setReading(false);
+    }
+  }
+
+  // The invoice tells us who they are, where they are and whether they charge
+  // VAT. The commission rate is the one thing it can't — that's the agreement —
+  // so it's asked for here and nothing is created until it's confirmed.
+  async function createFromInvoice() {
+    const rate = Number(newRate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      setError('Enter the commission rate agreed with them first.');
+      return;
+    }
+    setAdding(true);
+    setError(null);
+    try {
+      const created = await api.contractors.create({
+        name: suggestion.name,
+        address: suggestion.address || '',
+        email: suggestion.email || '',
+        phone: suggestion.phone || '',
+        vat_registered: !!suggestion.vat_registered,
+        commission_rate: rate,
+        commission_type: 'percentage',
+        commission_basis: 'markup',
+        commission_on: 'net',
+        agreement_notes: `Set up from invoice ${form.invoice_number || ''}`.trim(),
+      });
+      onContractorAdded(created);
+      set('contractor_id', created.id);
+      setSuggestion(null);
+      setMatch({ name: created.name, confident: true, name_on_invoice: suggestion.name });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAdding(false);
     }
   }
 
@@ -155,27 +225,6 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
     <Modal title="Log a contractor invoice" onClose={onClose}>
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
-        <label className="field">
-          <span className="lbl">Contractor *</span>
-          <select
-            required
-            value={form.contractor_id}
-            onChange={(e) => {
-              set('contractor_id', e.target.value);
-              // Re-read with the new contractor so their rate is applied.
-              if (file && aiEnabled) readFile(file, e.target.value);
-            }}
-          >
-            <option value="">Choose…</option>
-            {contractors.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.trade ? ` — ${c.trade}` : ''} ({c.deal_summary})
-              </option>
-            ))}
-          </select>
-        </label>
-
         <div
           className={`dropzone ${dragOver ? 'over' : ''} ${file ? 'filled' : ''}`}
           role="button"
@@ -223,8 +272,92 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
           )}
         </div>
 
+        <label className="field">
+          <span className="lbl">Contractor *</span>
+          <select
+            required
+            value={form.contractor_id}
+            onChange={(e) => {
+              set('contractor_id', e.target.value);
+              setMatch(null);
+            }}
+          >
+            <option value="">Choose…</option>
+            {contractors.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.trade ? ` — ${c.trade}` : ''} ({c.deal_summary})
+              </option>
+            ))}
+          </select>
+        </label>
+
         {readNote && (
           <div className="inline-note" style={{ marginBottom: 14 }}>{readNote}</div>
+        )}
+        {match && (
+          <div
+            className={`inline-note ${match.confident ? '' : 'warn'}`}
+            style={{ marginBottom: 14 }}
+          >
+            {match.confident ? (
+              <>
+                From <strong>{match.name}</strong> — their agreed rate has been applied.
+                {match.name_on_invoice && match.name_on_invoice !== match.name
+                  ? ` (the invoice says “${match.name_on_invoice}”)`
+                  : ''}
+              </>
+            ) : match.name ? (
+              <>
+                The invoice says “{match.name_on_invoice}”. Closest on file is{' '}
+                <strong>{match.name}</strong>, but not close enough to be sure — pick the
+                contractor below.
+              </>
+            ) : (
+              <>No contractor on file matches “{match.name_on_invoice}”.</>
+            )}
+          </div>
+        )}
+
+        {suggestion?.name && (
+          <div className="calc-box" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <div className="calc-label">Set up {suggestion.name}</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {[suggestion.address, suggestion.email, suggestion.phone]
+                  .filter(Boolean)
+                  .join(' · ') || 'Taken from the invoice'}
+                <br />
+                {suggestion.vat_registered
+                  ? 'VAT registered (their invoice charges VAT)'
+                  : 'Not VAT registered (no VAT on their invoice)'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ fontSize: 12 }}>
+                Commission
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="100"
+                  value={newRate}
+                  onChange={(e) => setNewRate(e.target.value)}
+                  style={{ width: 80, marginLeft: 6 }}
+                  aria-label="Commission rate for the new contractor"
+                />
+                %
+              </label>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                disabled={adding}
+                onClick={createFromInvoice}
+              >
+                {adding ? 'Adding…' : 'Add contractor'}
+              </button>
+            </div>
+          </div>
         )}
         {!aiEnabled && (
           <div className="inline-note warn" style={{ marginBottom: 14 }}>
@@ -250,6 +383,12 @@ function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }
               value={form.invoice_date}
               onChange={(e) => set('invoice_date', e.target.value)}
             />
+            <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Goes into {monthLabel((form.invoice_date || '').slice(0, 7)) || '—'}
+              {(form.invoice_date || '').slice(0, 7) !== month
+                ? ` — not the ${monthLabel(month)} you're viewing`
+                : ''}
+            </span>
           </label>
           <label className="field">
             <span className="lbl">Property</span>
@@ -362,6 +501,7 @@ export default function ContractorInvoices() {
   const [contractors, setContractors] = useState([]);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [logging, setLogging] = useState(false);
+  const [notice, setNotice] = useState(null);
   const [err, setErr] = useState(null);
 
   const contractorId = params.get('contractor_id') || '';
@@ -458,6 +598,15 @@ export default function ContractorInvoices() {
           <div className="value">{formatMoney(totals.invoiced)}</div>
         </div>
       </div>
+
+      {notice && (
+        <div className="inline-note" style={{ marginBottom: 12 }}>
+          {notice.text}{' '}
+          <button className="linkish" onClick={() => { setParam('month', notice.month); setNotice(null); }}>
+            Show {monthLabel(notice.month)}
+          </button>
+        </div>
+      )}
 
       <div className="toolbar flex-between">
         <div className="btn-row">
@@ -610,9 +759,22 @@ export default function ContractorInvoices() {
           contractors={contractors}
           aiEnabled={aiEnabled}
           preselect={contractorId}
+          month={month}
+          onContractorAdded={(c) => setContractors((list) => [...list, c])}
           onClose={() => setLogging(false)}
-          onSaved={() => {
+          onSaved={(saved) => {
             setLogging(false);
+            // An invoice dated outside the month on screen (often because the
+            // date was read off the document) would otherwise just not appear.
+            const savedMonth = (saved?.invoice_date || '').slice(0, 7);
+            setNotice(
+              savedMonth && savedMonth !== month
+                ? {
+                    month: savedMonth,
+                    text: `Saved — but it's dated ${formatDate(saved.invoice_date)}, so it's in ${monthLabel(savedMonth)}, not the month you're viewing.`,
+                  }
+                : null,
+            );
             load();
           }}
         />

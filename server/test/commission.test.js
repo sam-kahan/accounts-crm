@@ -17,6 +17,9 @@ import {
   dueDateFor,
   escapeHtml,
   buildCommissionInvoiceEmail,
+  matchContractorByName,
+  normaliseName,
+  contractorSuggestionFrom,
 } from '../src/services/commission.js';
 import { buildInvoicePayload, lineFor } from '../src/services/invoicesManager.js';
 
@@ -585,4 +588,76 @@ test('the push sends the NET commission, so their gross matches what was collect
   });
   assert.equal(payload.lines[0].unitPrice, 7.5);
   assert.equal(payload.lines[0].vatRate, 20);
+});
+
+// --- tracing an invoice back to a contractor --------------------------------
+
+const ON_FILE = [
+  { id: 'a', name: "Bob's Plumbing Ltd" },
+  { id: 'b', name: 'J & J Electrical Limited' },
+  { id: 'c', name: 'Mersey Roofing Co' },
+];
+
+test('names on invoices match the register through the usual noise', () => {
+  for (const printed of [
+    "Bob's Plumbing Ltd",
+    'BOBS PLUMBING LIMITED',
+    'Bobs Plumbing',
+    'Bob’s Plumbing Ltd.',
+  ]) {
+    const m = matchContractorByName(printed, ON_FILE);
+    assert.equal(m?.contractor.id, 'a', `"${printed}" should match Bob`);
+    assert.equal(m.confident, true);
+  }
+  // "&" and "and" are the same company.
+  assert.equal(matchContractorByName('J and J Electrical', ON_FILE)?.contractor.id, 'b');
+  // Company suffixes never decide a match.
+  assert.equal(matchContractorByName('Mersey Roofing Limited', ON_FILE)?.contractor.id, 'c');
+});
+
+test('a vague or unknown name never auto-fills the wrong contractor', () => {
+  // A single generic word must not pick someone and apply their rate.
+  for (const vague of ['plumbing', 'roofing', 'Electrical']) {
+    const m = matchContractorByName(vague, ON_FILE);
+    assert.equal(m?.confident, false, `"${vague}" should only be a suggestion`);
+  }
+  assert.equal(matchContractorByName('Totally Different Ltd', ON_FILE), null);
+  assert.equal(matchContractorByName('', ON_FILE), null);
+  assert.equal(matchContractorByName('Bob', []), null);
+});
+
+test('normaliseName strips what varies and keeps what identifies', () => {
+  assert.equal(normaliseName("Bob's Plumbing Ltd"), 'bobs plumbing');
+  assert.equal(normaliseName('J & J Electrical Limited'), 'j and j electrical');
+  assert.equal(normaliseName('  The Mersey Roofing Co.  '), 'mersey roofing');
+  assert.equal(normaliseName(null), '');
+});
+
+test('a new contractor is set up from the invoice, bar the agreement', () => {
+  const s = contractorSuggestionFrom(
+    {
+      contractor_name: 'Davies Gardening Services',
+      contractor_address: 'Unit 7, Speke Business Park',
+      contractor_email: 'accounts@daviesgardening.co.uk',
+      contractor_phone: '0151 555 0142',
+    },
+    { net_amount: 143, vat_amount: 0, total_amount: 143 },
+  );
+  assert.equal(s.name, 'Davies Gardening Services');
+  assert.equal(s.email, 'accounts@daviesgardening.co.uk');
+  // No VAT number and no VAT charged — they aren't registered.
+  assert.equal(s.vat_registered, false);
+  // The rate is the agreement, and an invoice can't tell us it.
+  assert.equal(s.commission_rate, undefined);
+});
+
+test('VAT registration is read off the invoice, either way it shows', () => {
+  const byNumber = contractorSuggestionFrom(
+    { contractor_name: 'X', contractor_vat_number: 'GB 123 4567 89' },
+    { vat_amount: 0 },
+  );
+  assert.equal(byNumber.vat_registered, true);
+  const byVatCharged = contractorSuggestionFrom({ contractor_name: 'X' }, { vat_amount: 39.6 });
+  assert.equal(byVatCharged.vat_registered, true);
+  assert.equal(contractorSuggestionFrom({}, {}), null);
 });
