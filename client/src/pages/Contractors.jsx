@@ -8,7 +8,7 @@ import Modal from '../components/Modal.jsx';
 const EMPTY = {
   name: '', trade: '', contact_name: '', email: '', phone: '', address: '',
   commission_type: 'percentage', commission_rate: '', commission_fixed: '',
-  commission_on: 'net', commission_basis: 'markup', commission_vat_rate: '',
+  commission_on: 'net', commission_basis: 'markup',
   payment_terms_days: '', vat_registered: true, agreement_notes: '', active: true, notes: '',
 };
 
@@ -33,7 +33,6 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
       ...form,
       commission_rate: num(form.commission_rate) ?? 0,
       commission_fixed: num(form.commission_fixed) ?? 0,
-      commission_vat_rate: num(form.commission_vat_rate) ?? 0,
       payment_terms_days: num(form.payment_terms_days) ?? 30,
     };
     try {
@@ -187,18 +186,16 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
                 : 'They can’t charge VAT, so the commission they collect is treated as VAT-inclusive — we bill it netted down, and they pay back exactly what they took.'}
             </span>
           </label>
-          <label className="field">
-            <span className="lbl">VAT on our commission invoice (%)</span>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="100"
-              value={form.commission_vat_rate ?? ''}
-              onChange={(e) => set('commission_vat_rate', e.target.value)}
-              placeholder="0"
-            />
-          </label>
+          <div className="field full">
+            <span className="lbl">VAT on our commission invoice</span>
+            <div className="inline-note" style={{ marginTop: 2 }}>
+              {form.vat_registered
+                ? `${defaults?.vat_rate ?? 20}% is added to the commission we invoice — Greenco is VAT registered, so it applies to every one.`
+                : `They can’t charge VAT, so the commission they collect is treated as including it: we invoice it netted down at ${
+                    defaults?.vat_rate ?? 20
+                  }%, and they pay back exactly what they took.`}
+            </div>
+          </div>
           <label className="field full">
             <span className="lbl">What was agreed</span>
             <textarea
@@ -336,9 +333,13 @@ export default function Contractors() {
                   </td>
                   <td>
                     <span className="badge green">{c.deal_summary}</span>
-                    {Number(c.commission_vat_rate) > 0 && (
-                      <span className="badge navy" style={{ marginLeft: 6 }}>
-                        +{Number(c.commission_vat_rate)}% VAT
+                    {!c.vat_registered && (
+                      <span
+                        className="badge amber"
+                        style={{ marginLeft: 6 }}
+                        title="Not VAT registered — the commission they collect is treated as including VAT, so we invoice it netted down"
+                      >
+                        not VAT reg.
                       </span>
                     )}
                   </td>

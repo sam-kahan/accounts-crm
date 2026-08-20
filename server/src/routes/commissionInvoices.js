@@ -50,7 +50,12 @@ function billingBlock() {
 router.get(
   '/settings',
   asyncHandler(async (_req, res) => {
-    res.json({ billing: billingBlock(), mailer: mailerStatus(), invoicing: invoicingStatus() });
+    res.json({
+      billing: billingBlock(),
+      mailer: mailerStatus(),
+      invoicing: invoicingStatus(),
+      commission: { vat_rate: config.commission.vatRate, invoice_prefix: config.commission.invoicePrefix },
+    });
   }),
 );
 
@@ -143,7 +148,7 @@ router.get(
       period_end: to,
       month,
       lines: lines.map((l) => withNumbers(l, LINE_MONEY_COLS)),
-      ...invoiceTotalsFromLines(lines, contractors[0].commission_vat_rate),
+      ...invoiceTotalsFromLines(lines, config.commission.vatRate),
     });
   }),
 );
@@ -200,7 +205,10 @@ router.post(
         throw new HttpError(400, 'There is no commission left to invoice for that period.');
       }
 
-      const vatRate = d.vat_rate ?? Number(contractor.commission_vat_rate) ?? 0;
+      // Greenco's own VAT, one setting for every commission invoice. The
+      // per-raise override stays for the odd exception, but nothing routine
+      // needs it.
+      const vatRate = d.vat_rate ?? config.commission.vatRate;
       const totals = invoiceTotalsFromLines(lines, vatRate);
 
       const { rows: seq } = await client.query("SELECT nextval('commission_invoice_number_seq') AS n");

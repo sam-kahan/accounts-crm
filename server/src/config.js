@@ -82,9 +82,12 @@ export const config = {
   // invoice (nothing is invented — an unset field is simply left off).
   commission: {
     invoicePrefix: process.env.COMMISSION_INVOICE_PREFIX || 'GC-COM-',
-    // Default VAT rate applied to a new contractor's commission agreement.
-    // 0 = no VAT line, which is what most of these agreements look like.
-    defaultVatRate: Number(process.env.COMMISSION_VAT_RATE) || 0,
+    // VAT charged on OUR commission invoices. This is Greenco's own VAT — it
+    // applies because Greenco is VAT registered, and has nothing to do with
+    // the contractor, so it is one setting rather than one per contractor.
+    vatRate: process.env.COMMISSION_VAT_RATE === undefined
+      ? 20
+      : Number(process.env.COMMISSION_VAT_RATE) || 0,
     paymentTermsDays: Number(process.env.COMMISSION_TERMS_DAYS) || 30,
   },
 

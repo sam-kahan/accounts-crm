@@ -9,11 +9,11 @@ import { COMMISSION_TYPES, COMMISSION_ON, COMMISSION_BASES, describeDeal } from 
 
 const router = Router();
 
-const NUMERIC_COLS = ['commission_rate', 'commission_fixed', 'commission_vat_rate'];
+const NUMERIC_COLS = ['commission_rate', 'commission_fixed'];
 
 const COLS = `id, name, trade, contact_name, email, phone, address,
   commission_type, commission_rate, commission_fixed, commission_on, commission_basis,
-  commission_vat_rate, payment_terms_days, vat_registered, agreement_notes, active, notes,
+  payment_terms_days, vat_registered, agreement_notes, active, notes,
   created_at, updated_at`;
 
 const input = z.object({
@@ -28,7 +28,6 @@ const input = z.object({
   commission_fixed: z.number().min(0).max(1000000).optional(),
   commission_on: z.enum(COMMISSION_ON).optional(),
   commission_basis: z.enum(COMMISSION_BASES).optional(),
-  commission_vat_rate: z.number().min(0).max(100).optional(),
   payment_terms_days: z.number().int().min(0).max(365).optional(),
   vat_registered: z.boolean().optional(),
   agreement_notes: z.string().max(4000).optional().nullable(),
@@ -54,8 +53,10 @@ router.get(
       commission_fixed: 0,
       commission_on: 'net',
       commission_basis: 'markup',
-      commission_vat_rate: config.commission.defaultVatRate,
       payment_terms_days: config.commission.paymentTermsDays,
+      // Shown read-only on the form: it is Greenco's VAT, not a per-contractor
+      // choice, so there is nothing to set here.
+      vat_rate: config.commission.vatRate,
       vat_registered: true,
       active: true,
     });
@@ -106,9 +107,9 @@ router.post(
     const { rows } = await query(
       `INSERT INTO contractors
         (name, trade, contact_name, email, phone, address, commission_type, commission_rate,
-         commission_fixed, commission_on, commission_basis, commission_vat_rate,
+         commission_fixed, commission_on, commission_basis,
          payment_terms_days, vat_registered, agreement_notes, active, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING ${COLS}`,
       [
         d.name, d.trade || null, d.contact_name || null, d.email || null, d.phone || null,
@@ -118,7 +119,6 @@ router.post(
         d.commission_fixed ?? 0,
         d.commission_on ?? 'net',
         d.commission_basis ?? 'markup',
-        d.commission_vat_rate ?? config.commission.defaultVatRate,
         d.payment_terms_days ?? config.commission.paymentTermsDays,
         d.vat_registered ?? true,
         d.agreement_notes || null,
@@ -148,7 +148,6 @@ router.put(
       commission_fixed: d.commission_fixed,
       commission_on: d.commission_on,
       commission_basis: d.commission_basis,
-      commission_vat_rate: d.commission_vat_rate,
       payment_terms_days: d.payment_terms_days,
       vat_registered: d.vat_registered,
       agreement_notes: d.agreement_notes,

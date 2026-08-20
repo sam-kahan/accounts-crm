@@ -128,7 +128,7 @@ contractor at month end.
       → paid there → refreshed back here
 
 - `contractors` holds the **agreement** (percentage or fixed, on net or gross,
-  the basis below, VAT rate, payment terms). Every logged invoice **snapshots**
+  the basis below, whether they are VAT registered, payment terms). Every logged invoice **snapshots**
   that deal, so renegotiating a rate never rewrites what was already billed.
 - **What the percentage is a percentage OF is the whole ball game**
   (`commission_basis`, migration `010`):
@@ -152,8 +152,15 @@ contractor at month end.
 - Status is **derived**, never stored twice: `commissionStatus()` in
   `services/commission.js` is the definition; the SQL fragments in
   `routes/contractorInvoices.js` are its filter-only twins.
-- **VAT turns on whether the CONTRACTOR is registered** (`contractors.vat_registered`,
-  snapshotted per invoice as `commission_vat_inclusive`, migration `011`):
+- **The VAT rate is Greenco's own** — `COMMISSION_VAT_RATE`, default 20, one
+  setting for every commission invoice (migration `012` dropped the
+  per-contractor column, which was only ever a way to under-declare VAT by
+  leaving one at 0). `commission_invoices.vat_rate` still snapshots the rate
+  each raised invoice used.
+- **What VAT *treatment* applies turns on whether the CONTRACTOR is registered**
+  (`contractors.vat_registered`, snapshotted per invoice as
+  `commission_vat_inclusive`, migration `011`) — worked out automatically, with
+  nothing to set per invoice:
   - **Registered** — their invoice carried VAT, so they collected the £9 *and*
     the £1.80 on it. Their £9 is the net: we invoice £9 + £1.80 = £10.80.
   - **Not registered** — they invoiced £99 flat and only ever collected £9.
