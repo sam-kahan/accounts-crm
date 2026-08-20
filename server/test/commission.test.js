@@ -9,6 +9,7 @@ import {
   reconcileAmounts,
   invoiceTotals,
   invoiceTotalsFromLines,
+  commissionNetPence,
   sumCommissionPence,
   commissionInvoiceNumber,
   commissionStatus,
@@ -506,4 +507,82 @@ test('asSent controls whether it arrives as a draft or already sent', () => {
   };
   assert.equal(buildInvoicePayload({ ...base, asSent: true }).status, 'sent');
   assert.equal(buildInvoicePayload({ ...base, asSent: false }).status, 'draft');
+});
+
+// --- VAT: the contractor's registration status ------------------------------
+
+test('a VAT-registered contractor: the £9 collected is the net, VAT on top', () => {
+  // Their own invoice carried the VAT, so they collected £9 + £1.80 alongside it.
+  assert.deepEqual(invoiceTotalsFromLines([{ commission_amount: 9 }], 20), {
+    net_amount: 9,
+    vat_rate: 20,
+    vat_amount: 1.8,
+    total_amount: 10.8,
+  });
+});
+
+test('a contractor who is not VAT registered: the £9 collected is the gross', () => {
+  // They invoiced £99 flat and only ever took £9, so we net it down and they
+  // pay back exactly what they collected.
+  assert.deepEqual(
+    invoiceTotalsFromLines([{ commission_amount: 9, commission_vat_inclusive: true }], 20),
+    { net_amount: 7.5, vat_rate: 20, vat_amount: 1.5, total_amount: 9 },
+  );
+});
+
+test('the netted-down total comes back to what was collected', () => {
+  // Greenco Invoicing recomputes VAT from the net we send it, so the net has to
+  // be one that adds back up — otherwise the contractor's copy disagrees.
+  for (const collected of [9, 12.5, 20, 33.33, 100, 250.75, 1234.56]) {
+    const t = invoiceTotalsFromLines(
+      [{ commission_amount: collected, commission_vat_inclusive: true }],
+      20,
+    );
+    assert.equal(t.net_amount + t.vat_amount, t.total_amount);
+    assert.ok(
+      Math.abs(t.total_amount - collected) <= 0.01,
+      `£${collected} collected -> £${t.total_amount} due`,
+    );
+    // The VAT is exactly what the invoicing system will work out from the net.
+    assert.equal(t.vat_amount, Math.round(t.net_amount * 20) / 100);
+  }
+});
+
+test('with no VAT rate the status makes no difference', () => {
+  assert.deepEqual(
+    invoiceTotalsFromLines([{ commission_amount: 9, commission_vat_inclusive: true }], 0),
+    { net_amount: 9, vat_rate: 0, vat_amount: 0, total_amount: 9 },
+  );
+});
+
+test('commissionNetPence leaves a registered contractor’s figure alone', () => {
+  assert.equal(commissionNetPence({ commission_amount: 9 }, 20), 900);
+  assert.equal(commissionNetPence({ commission_amount: 9, commission_vat_inclusive: true }, 20), 750);
+  assert.equal(commissionNetPence({ commission_amount: 0, commission_vat_inclusive: true }, 20), 0);
+});
+
+test('a month mixing both kinds of line totals correctly', () => {
+  const t = invoiceTotalsFromLines(
+    [
+      { commission_amount: 9 },                                   // registered: net
+      { commission_amount: 9, commission_vat_inclusive: true },    // not: gross
+    ],
+    20,
+  );
+  assert.deepEqual(t, { net_amount: 16.5, vat_rate: 20, vat_amount: 3.3, total_amount: 19.8 });
+});
+
+test('the push sends the NET commission, so their gross matches what was collected', () => {
+  const invoice = {
+    invoice_number: 'GC-COM-00001', issue_date: '2026-09-01', due_date: '2026-10-01',
+    period_start: '2026-08-01', period_end: '2026-08-31', vat_rate: 20,
+  };
+  const payload = buildInvoicePayload({
+    invoice,
+    contractor: { name: 'Bob' },
+    lines: [{ invoice_number: 'A', commission_amount: 9, commission_vat_inclusive: true }],
+    companyId: 1,
+  });
+  assert.equal(payload.lines[0].unitPrice, 7.5);
+  assert.equal(payload.lines[0].vatRate, 20);
 });

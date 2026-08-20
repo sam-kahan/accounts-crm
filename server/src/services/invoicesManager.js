@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
-import { toPence } from '../lib/money.js';
+import { toPence, fromPence } from '../lib/money.js';
+import { commissionNetPence } from './commission.js';
 
 // ---------------------------------------------------------------------------
 // Bridge to Greenco Invoicing (invoices.greenco.co.uk).
@@ -35,7 +36,7 @@ export function invoicingStatus() {
 // One line per contractor invoice the commission came from, so the contractor
 // can see exactly which jobs are being claimed — that is the whole argument for
 // the invoice, and it's what stops the "what is this for?" email.
-export function lineFor(row) {
+export function lineFor(row, vatRate = 0) {
   const parts = [];
   if (row.invoice_number) parts.push(row.invoice_number);
   if (row.property) parts.push(row.property);
@@ -44,7 +45,11 @@ export function lineFor(row) {
   return {
     description: `Commission — ${head}${works}`.slice(0, 500),
     quantity: 1,
-    unitPrice: Number(row.commission_amount || 0),
+    // The NET commission: the invoicing system adds VAT to the unit price it
+    // is given. For a contractor who isn't VAT registered that is the amount
+    // they collected netted down, so the gross there comes back to what they
+    // actually took from us.
+    unitPrice: fromPence(commissionNetPence(row, vatRate)),
     vatRate: 0,
   };
 }
@@ -81,7 +86,7 @@ export function buildInvoicePayload({ invoice, contractor, lines, companyId, asS
     notes:
       invoice.notes ||
       `Commission included in your invoices between ${invoice.period_start} and ${invoice.period_end}.`,
-    lines: billable.map((l) => ({ ...lineFor(l), vatRate })),
+    lines: billable.map((l) => ({ ...lineFor(l, vatRate), vatRate })),
   };
 }
 

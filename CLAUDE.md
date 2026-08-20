@@ -152,6 +152,18 @@ contractor at month end.
 - Status is **derived**, never stored twice: `commissionStatus()` in
   `services/commission.js` is the definition; the SQL fragments in
   `routes/contractorInvoices.js` are its filter-only twins.
+- **VAT turns on whether the CONTRACTOR is registered** (`contractors.vat_registered`,
+  snapshotted per invoice as `commission_vat_inclusive`, migration `011`):
+  - **Registered** — their invoice carried VAT, so they collected the £9 *and*
+    the £1.80 on it. Their £9 is the net: we invoice £9 + £1.80 = £10.80.
+  - **Not registered** — they invoiced £99 flat and only ever collected £9.
+    Greenco is VAT registered and must charge VAT on its own supply, so that £9
+    is the VAT-**inclusive** total: we invoice £7.50 + £1.50 = £9.00 and they
+    pay back exactly what they took. `commissionNetPence()` does the netting.
+  - The net is chosen so `net + round(net x rate)` returns the amount collected,
+    because Greenco Invoicing recomputes VAT from the net we send it — agreeing
+    with the copy the contractor reads beats textbook arithmetic. About one
+    penny value in six has no exact split; those land a penny under.
 - **Money maths is integer pence** (`lib/money.js`). `toPence` reads the digits
   out of the decimal string — `Math.round(1.005 * 100)` is 100, which loses a
   penny. VAT is worked out **per line** (`invoiceTotalsFromLines`) because that

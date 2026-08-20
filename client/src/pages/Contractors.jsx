@@ -9,7 +9,7 @@ const EMPTY = {
   name: '', trade: '', contact_name: '', email: '', phone: '', address: '',
   commission_type: 'percentage', commission_rate: '', commission_fixed: '',
   commission_on: 'net', commission_basis: 'markup', commission_vat_rate: '',
-  payment_terms_days: '', agreement_notes: '', active: true, notes: '',
+  payment_terms_days: '', vat_registered: true, agreement_notes: '', active: true, notes: '',
 };
 
 function num(v) {
@@ -168,6 +168,23 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
                   : `They invoice us £90 for their work, and we bill them £${(
                       (90 * (Number(form.commission_rate) || 10)) / 100
                     ).toFixed(2)} on top.`}
+            </span>
+          </label>
+          <label className="field full" style={{ gap: 6 }}>
+            <span className="lbl">Is the contractor VAT registered?</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={!!form.vat_registered}
+                onChange={(e) => set('vat_registered', e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              <span>Yes — they charge VAT on their invoices</span>
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {form.vat_registered
+                ? 'They collect the VAT on our commission within their own invoice, so we bill the commission plus VAT on top.'
+                : 'They can’t charge VAT, so the commission they collect is treated as VAT-inclusive — we bill it netted down, and they pay back exactly what they took.'}
             </span>
           </label>
           <label className="field">

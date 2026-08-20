@@ -299,7 +299,14 @@ export default function CommissionInvoiceDetail() {
                 </td>
                 <td className="num">{formatMoney(l.total_amount)}</td>
                 <td className="num muted">{Number(l.commission_rate) ? `${Number(l.commission_rate)}%` : '—'}</td>
-                <td className="num">{formatMoney(l.commission_amount)}</td>
+                <td className="num">
+                  {formatMoney(l.commission_net ?? l.commission_amount)}
+                  {l.commission_vat_inclusive && (
+                    <div className="muted" style={{ fontSize: 11 }}>
+                      {formatMoney(l.commission_amount)} inc VAT
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
             {hasVat && (

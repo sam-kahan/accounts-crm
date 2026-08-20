@@ -25,7 +25,8 @@ const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate
 
 const COLS = `i.id, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
-  i.commission_on, i.commission_basis, i.commission_amount, i.commission_override, i.paid_from,
+  i.commission_on, i.commission_basis, i.commission_amount, i.commission_override,
+  i.commission_vat_inclusive, i.paid_from,
   i.paid_on, i.waived, i.waived_reason, i.commission_invoice_id, i.filename, i.mimetype,
   i.size_bytes, i.extracted, i.notes, i.created_at, i.updated_at`;
 
@@ -334,9 +335,10 @@ router.post(
         `INSERT INTO contractor_invoices
           (contractor_id, invoice_number, invoice_date, property, landlord_ref, description,
            net_amount, vat_amount, total_amount, commission_type, commission_rate, commission_on,
-           commission_basis, commission_amount, commission_override, paid_from, paid_on, notes,
+           commission_basis, commission_amount, commission_override, commission_vat_inclusive,
+           paid_from, paid_on, notes,
            filename, mimetype, size_bytes, storage_path, extracted)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$24,
                  COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false))
          RETURNING id`,
         [
@@ -348,6 +350,9 @@ router.post(
           d.paid_from ?? null, d.paid_on || null, d.notes || null,
           file?.originalname || null, file?.mimetype || null, file?.size || null,
           file?.path || null, d.extracted ?? null,
+          // Snapshot the VAT treatment: a contractor registering for VAT later
+          // must not re-rate commission they have already collected.
+          !contractor.vat_registered,
         ],
       );
 

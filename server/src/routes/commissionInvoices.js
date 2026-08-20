@@ -4,10 +4,11 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { config } from '../config.js';
 import { todayISO, monthRange, monthOf } from '../lib/dates.js';
-import { withNumbers } from '../lib/money.js';
+import { withNumbers, fromPence } from '../lib/money.js';
 import {
   commissionInvoiceNumber,
   invoiceTotalsFromLines,
+  commissionNetPence,
   dueDateFor,
   buildCommissionInvoiceEmail,
 } from '../services/commission.js';
@@ -88,7 +89,7 @@ router.get(
     const { rows: lines } = await query(
       `SELECT id, invoice_number, invoice_date, property, landlord_ref, description,
               net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-              (storage_path IS NOT NULL) AS has_document
+              commission_vat_inclusive, (storage_path IS NOT NULL) AS has_document
          FROM contractor_invoices
         WHERE commission_invoice_id = $1
         ORDER BY invoice_date, created_at`,
@@ -97,7 +98,13 @@ router.get(
 
     res.json({
       ...decorate(rows[0]),
-      lines: lines.map((l) => withNumbers(l, LINE_MONEY_COLS)),
+      // `commission_amount` is what the contractor collected; `commission_net`
+      // is what we invoice before VAT — the same for a VAT-registered
+      // contractor, netted down for one who isn't.
+      lines: lines.map((l) => ({
+        ...withNumbers(l, LINE_MONEY_COLS),
+        commission_net: fromPence(commissionNetPence(l, rows[0].vat_rate)),
+      })),
       billing: billingBlock(),
       invoicing: invoicingStatus(),
     });
@@ -121,7 +128,8 @@ router.get(
 
     const { rows: lines } = await query(
       `SELECT id, invoice_number, invoice_date, property, description,
-              net_amount, vat_amount, total_amount, commission_rate, commission_amount
+              net_amount, vat_amount, total_amount, commission_rate, commission_amount,
+              commission_vat_inclusive
          FROM contractor_invoices
         WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
           AND invoice_date BETWEEN $2 AND $3
@@ -179,7 +187,7 @@ router.post(
       // two people raising the same month's invoice at once would otherwise
       // each claim the same commission, and we'd bill the contractor twice.
       const { rows: lines } = await client.query(
-        `SELECT id, commission_amount FROM contractor_invoices
+        `SELECT id, commission_amount, commission_vat_inclusive FROM contractor_invoices
           WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
             AND invoice_date BETWEEN $2 AND $3
             AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[]))
@@ -283,7 +291,8 @@ router.post(
     }
 
     const { rows: lines } = await query(
-      `SELECT invoice_number, invoice_date, property, description, total_amount, commission_amount
+      `SELECT invoice_number, invoice_date, property, description, total_amount,
+              commission_amount, commission_vat_inclusive
          FROM contractor_invoices WHERE commission_invoice_id = $1 ORDER BY invoice_date, created_at`,
       [req.params.id],
     );
@@ -291,7 +300,10 @@ router.post(
     const mail = buildCommissionInvoiceEmail({
       invoice: { ...invoice, notes: d.message || invoice.notes },
       contractor: { name: invoice.contractor_name },
-      lines: lines.map((l) => withNumbers(l, LINE_MONEY_COLS)),
+      lines: lines.map((l) => ({
+        ...withNumbers(l, LINE_MONEY_COLS),
+        commission_amount: fromPence(commissionNetPence(l, invoice.vat_rate)),
+      })),
       billing: billingBlock(),
       invoicing: invoicingStatus(),
     });
@@ -323,7 +335,8 @@ async function loadForPush(id, client = { query }) {
   const invoice = decorate(rows[0]);
   if (!invoice) throw new HttpError(404, 'Commission invoice not found');
   const { rows: lines } = await client.query(
-    `SELECT invoice_number, invoice_date, property, description, commission_amount
+    `SELECT invoice_number, invoice_date, property, description, commission_amount,
+            commission_vat_inclusive
        FROM contractor_invoices WHERE commission_invoice_id = $1
       ORDER BY invoice_date, created_at`,
     [id],

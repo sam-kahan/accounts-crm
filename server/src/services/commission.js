@@ -118,7 +118,36 @@ export function invoiceTotals(netAmount, vatRate) {
   };
 }
 
-// The same totals, but with VAT worked out per line and then summed — which is
+// The net commission on one line, in pence — what goes on the invoice we raise
+// before VAT is added.
+//
+// For a VAT-registered contractor the amount they collected IS the net: their
+// own invoice carried the VAT alongside it, so they collected £9 + £1.80 and we
+// bill £9 + £1.80. For a contractor who isn't VAT registered there was no VAT
+// on their invoice at all — they only ever collected the £9 — so that £9 is
+// treated as the VAT-INCLUSIVE total and netted down to £7.50 + £1.50, and they
+// pay back exactly what they took.
+//
+// The net is chosen so that `net + round(net x rate)` comes back to the amount
+// collected, because Greenco Invoicing recomputes the VAT from the net we send
+// it: agreeing with that system matters more than the arithmetic being
+// text-book, since its copy is the one the contractor reads. About one penny
+// value in six has no exact split (£0.10 at 5% is the smallest); those land a
+// penny under rather than a penny over.
+export function commissionNetPence(line, vatRate) {
+  const collected = Math.max(0, toPence(line.commission_amount) ?? 0);
+  const rate = Number(vatRate || 0);
+  if (!line.commission_vat_inclusive || !rate || !collected) return collected;
+  const start = Math.floor((collected * 100) / (100 + rate));
+  for (const candidate of [start, start + 1, start - 1]) {
+    if (candidate >= 0 && candidate + percentOfPence(candidate, rate) === collected) {
+      return candidate;
+    }
+  }
+  return start;
+}
+
+// The invoice totals, with VAT worked out per line and then summed — which is
 // how invoicing systems (ours included, once an invoice is pushed to Greenco
 // Invoicing) add an invoice up. Rounding per line and rounding the sum can
 // differ by a penny, and a penny between two systems showing the same invoice
@@ -127,9 +156,9 @@ export function invoiceTotalsFromLines(lines, vatRate) {
   let netPence = 0;
   let vatPence = 0;
   for (const line of lines) {
-    const linePence = toPence(line.commission_amount) ?? 0;
-    netPence += linePence;
-    vatPence += percentOfPence(linePence, vatRate);
+    const lineNet = commissionNetPence(line, vatRate);
+    netPence += lineNet;
+    vatPence += percentOfPence(lineNet, vatRate);
   }
   return {
     net_amount: fromPence(netPence),
