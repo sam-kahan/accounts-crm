@@ -128,9 +128,17 @@ contractor at month end.
       → paid there → refreshed back here
 
 - `contractors` holds the **agreement** (percentage or fixed, on net or gross,
-  included in their invoice or charged on top, VAT rate, payment terms). Every
-  logged invoice **snapshots** that deal, so renegotiating a rate never rewrites
-  what was already billed.
+  the basis below, VAT rate, payment terms). Every logged invoice **snapshots**
+  that deal, so renegotiating a rate never rewrites what was already billed.
+- **What the percentage is a percentage OF is the whole ball game**
+  (`commission_basis`, migration `010`):
+  - `markup` (**the default, and how the real agreements work**) — the
+    contractor adds the rate to *their own price* and invoices us the total.
+    They want £90, add 10%, invoice £99, and £9 is ours:
+    `net x rate / (100 + rate)`. Taking 10% *of the £99* gives £9.90 and
+    over-claims every single job — that was the original bug.
+  - `inclusive` — the rate really is a slice of the invoice they send us.
+  - `on_top` — we bill the rate in addition to their invoice.
 - `contractor_invoices` is one row per invoice received. The commission is
   computed server-side from the snapshot — a hand-typed figure is kept but
   flagged `commission_override`, so a month-end total can always be explained.

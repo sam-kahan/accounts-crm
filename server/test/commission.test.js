@@ -61,24 +61,56 @@ test('formatPence renders UK money with thousands separators', () => {
 
 // --- the commission calculation --------------------------------------------
 
-test('the tap-repair case: 10% of a £100 invoice is £10', () => {
+test('the real deal: their £90 price + 10% is invoiced at £99, and £9 is ours', () => {
+  // The percentage is a mark-up on the CONTRACTOR's price, not a slice of the
+  // invoice: 10% of the £99 invoice would be £9.90 and over-claim every job.
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'markup' };
+  assert.equal(commissionFor(deal, { net_amount: 99, vat_amount: 19.8, total_amount: 118.8 }), 9);
+  assert.equal(commissionFor(deal, { net_amount: 275, total_amount: 275 }), 25); // £250 + 10%
+  assert.equal(commissionFor(deal, { net_amount: 0, total_amount: 0 }), 0);
+});
+
+test('mark-up is the default basis — an unstated deal is not read as a slice', () => {
   const deal = { commission_type: 'percentage', commission_rate: 10 };
+  assert.equal(commissionFor(deal, { net_amount: 99, total_amount: 99 }), 9);
+});
+
+test('mark-up on the gross, when that is how it was agreed', () => {
+  const deal = {
+    commission_type: 'percentage',
+    commission_rate: 10,
+    commission_basis: 'markup',
+    commission_on: 'gross',
+  };
+  // £118.80 gross carries £10.80 of commission (£108 + 10%).
+  assert.equal(commissionFor(deal, { net_amount: 99, vat_amount: 19.8, total_amount: 118.8 }), 10.8);
+});
+
+test('mark-up rounds to the penny and stays exact at odd rates', () => {
+  const deal = { commission_type: 'percentage', commission_rate: 12.5, commission_basis: 'markup' };
+  // £80 + 12.5% = £90; the commission inside £90 is £10.
+  assert.equal(commissionFor(deal, { net_amount: 90, total_amount: 90 }), 10);
+  // £137.55 -> 137.55 * 12.5 / 112.5 = 15.283... -> 15.28
+  assert.equal(commissionFor(deal, { net_amount: 137.55, total_amount: 137.55 }), 15.28);
+});
+
+test('a mark-up commission can never swallow the whole invoice', () => {
+  const deal = { commission_type: 'percentage', commission_rate: 500, commission_basis: 'markup' };
+  // Even at an absurd rate it stays below the invoice: 100 * 500/600 = 83.33.
+  assert.equal(commissionFor(deal, { net_amount: 100, total_amount: 100 }), 83.33);
+});
+
+test('a slice-of-the-invoice deal still works, for contractors worded that way', () => {
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'inclusive' };
   assert.equal(commissionFor(deal, { net_amount: 100, vat_amount: 0, total_amount: 100 }), 10);
+  assert.equal(commissionFor(deal, { net_amount: 99, total_amount: 99 }), 9.9);
 });
 
 test('percentage commission is taken on the net by default, gross on request', () => {
   const amounts = { net_amount: 100, vat_amount: 20, total_amount: 120 };
-  assert.equal(
-    commissionFor({ commission_type: 'percentage', commission_rate: 10 }, amounts),
-    10,
-  );
-  assert.equal(
-    commissionFor(
-      { commission_type: 'percentage', commission_rate: 10, commission_on: 'gross' },
-      amounts,
-    ),
-    12,
-  );
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'inclusive' };
+  assert.equal(commissionFor(deal, amounts), 10);
+  assert.equal(commissionFor({ ...deal, commission_on: 'gross' }, amounts), 12);
 });
 
 test('a fixed-fee agreement ignores the rate', () => {
@@ -88,7 +120,7 @@ test('a fixed-fee agreement ignores the rate', () => {
 
 test('an inclusive commission can never exceed the invoice it came out of', () => {
   // A mis-keyed 500% rate must not produce a claim for more than we paid.
-  const deal = { commission_type: 'percentage', commission_rate: 500 };
+  const deal = { commission_type: 'percentage', commission_rate: 500, commission_basis: 'inclusive' };
   assert.equal(commissionFor(deal, { net_amount: 100, vat_amount: 0, total_amount: 100 }), 100);
   // ...but an on-top commission is charged in addition, so it isn't capped.
   assert.equal(
@@ -106,12 +138,14 @@ test('a missing or malformed deal falls back to zero commission, not NaN', () =>
 });
 
 test('negative amounts never yield a negative claim', () => {
-  const deal = { commission_type: 'percentage', commission_rate: 10 };
-  assert.equal(commissionPence(deal, { netPence: -10000, totalPence: -10000 }), 0);
+  for (const commission_basis of ['markup', 'inclusive', 'on_top']) {
+    const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis };
+    assert.equal(commissionPence(deal, { netPence: -10000, totalPence: -10000 }), 0);
+  }
 });
 
 test('rounding is per invoice, so a month of odd amounts stays exact', () => {
-  const deal = { commission_type: 'percentage', commission_rate: 10 };
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'inclusive' };
   const invoices = [8.15, 8.15, 8.15].map((net) => ({
     commission_amount: commissionFor(deal, { net_amount: net, total_amount: net }),
   }));
@@ -195,7 +229,11 @@ test('commissionStatus is derived from the link, not stored separately', () => {
 test('describeDeal reads as the agreement in words', () => {
   assert.equal(
     describeDeal({ commission_type: 'percentage', commission_rate: 10 }),
-    '10% of the net, included in their invoice',
+    'their price + 10%, included in their invoice',
+  );
+  assert.equal(
+    describeDeal({ commission_type: 'percentage', commission_rate: 10, commission_basis: 'inclusive' }),
+    '10% of the invoice net, included in their invoice',
   );
   assert.equal(
     describeDeal({ commission_type: 'fixed', commission_fixed: 15, commission_basis: 'on_top' }),

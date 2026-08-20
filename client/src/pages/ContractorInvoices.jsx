@@ -30,12 +30,22 @@ function previewCommission(contractor, { net, vat, total }) {
   const netN = Number(net || 0);
   const vatN = Number(vat || 0);
   const totalN = Number(total || 0) || netN + vatN;
+  const base = Math.max(0, contractor.commission_on === 'gross' ? totalN : netN);
+  const rate = Number(contractor.commission_rate || 0);
+  const basis = contractor.commission_basis || 'markup';
+
   if (contractor.commission_type === 'fixed') {
-    return Math.min(Number(contractor.commission_fixed || 0), totalN || Infinity);
+    const fixed = Number(contractor.commission_fixed || 0);
+    return basis === 'on_top' ? fixed : Math.min(fixed, totalN || fixed);
   }
-  const base = contractor.commission_on === 'gross' ? totalN : netN;
-  const raw = Math.round(base * Number(contractor.commission_rate || 0)) / 100;
-  return contractor.commission_basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
+  // markup: the rate was added to the contractor's own price, so the
+  // commission inside the invoice is net x rate / (100 + rate) — £9 on a £99
+  // invoice at 10%, not £9.90.
+  if (basis === 'markup') {
+    return rate > 0 ? Math.round((base * rate * 100) / (100 + rate)) / 100 : 0;
+  }
+  const raw = Math.round(base * rate) / 100;
+  return basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
 }
 
 function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }) {

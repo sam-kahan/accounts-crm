@@ -8,7 +8,7 @@ import Modal from '../components/Modal.jsx';
 const EMPTY = {
   name: '', trade: '', contact_name: '', email: '', phone: '', address: '',
   commission_type: 'percentage', commission_rate: '', commission_fixed: '',
-  commission_on: 'net', commission_basis: 'inclusive', commission_vat_rate: '',
+  commission_on: 'net', commission_basis: 'markup', commission_vat_rate: '',
   payment_terms_days: '', agreement_notes: '', active: true, notes: '',
 };
 
@@ -145,12 +145,30 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
               </select>
             </label>
           )}
-          <label className="field">
-            <span className="lbl">Included or on top?</span>
+          <label className="field full">
+            <span className="lbl">How the percentage works</span>
             <select value={form.commission_basis} onChange={(e) => set('commission_basis', e.target.value)}>
-              <option value="inclusive">Included in their invoice</option>
-              <option value="on_top">Charged on top of their invoice</option>
+              <option value="markup">
+                They add it to their own price, and invoice us the total (usual)
+              </option>
+              <option value="inclusive">It is that percentage of the invoice they send us</option>
+              <option value="on_top">We charge it on top of what they invoice us</option>
             </select>
+            <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {form.commission_basis === 'markup'
+                ? `They want £90, add ${form.commission_rate || 10}%, invoice us ${
+                    form.commission_rate ? '' : 'e.g. '
+                  }£${(90 * (1 + (Number(form.commission_rate) || 10) / 100)).toFixed(2)} — and £${(
+                    (90 * (Number(form.commission_rate) || 10)) / 100
+                  ).toFixed(2)} of that is ours.`
+                : form.commission_basis === 'inclusive'
+                  ? `They invoice us £99 and ${form.commission_rate || 10}% of it — £${(
+                      (99 * (Number(form.commission_rate) || 10)) / 100
+                    ).toFixed(2)} — is ours.`
+                  : `They invoice us £90 for their work, and we bill them £${(
+                      (90 * (Number(form.commission_rate) || 10)) / 100
+                    ).toFixed(2)} on top.`}
+            </span>
           </label>
           <label className="field">
             <span className="lbl">VAT on our commission invoice (%)</span>

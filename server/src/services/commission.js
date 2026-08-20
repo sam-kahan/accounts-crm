@@ -13,7 +13,7 @@ import { addDays, monthLabel } from '../lib/dates.js';
 
 export const COMMISSION_TYPES = ['percentage', 'fixed'];
 export const COMMISSION_ON = ['net', 'gross'];
-export const COMMISSION_BASES = ['inclusive', 'on_top'];
+export const COMMISSION_BASES = ['markup', 'inclusive', 'on_top'];
 export const PAID_FROM = ['client', 'business'];
 export const COMMISSION_INVOICE_STATUSES = ['draft', 'sent', 'paid', 'void'];
 
@@ -25,7 +25,7 @@ export function dealFor(contractor = {}) {
   const on = COMMISSION_ON.includes(contractor.commission_on) ? contractor.commission_on : 'net';
   const basis = COMMISSION_BASES.includes(contractor.commission_basis)
     ? contractor.commission_basis
-    : 'inclusive';
+    : 'markup';
   return {
     commission_type: type,
     commission_rate: Number(contractor.commission_rate ?? 0) || 0,
@@ -37,24 +37,42 @@ export function dealFor(contractor = {}) {
 
 // The commission on one invoice, in pence.
 //
-//   percentage → rate% of the net (or gross, if that's the deal)
-//   fixed      → a flat amount per invoice
+// The basis decides what the percentage is a percentage OF, which is the whole
+// ball game:
 //
-// An 'inclusive' commission is part of what we already paid the contractor, so
-// it can never exceed the invoice itself — a mis-keyed 500% rate would
-// otherwise produce a claim for more than the job was worth. An 'on_top'
-// commission is charged in addition, so it isn't capped by the invoice.
+//   markup    — the contractor's own price plus X%, already inside the invoice.
+//               They want £90, add 10%, and invoice us £99 — £9 of it ours.
+//               So the commission is net x rate / (100 + rate), NOT rate% of
+//               the invoice, which would be £9.90 and over-claim every job.
+//   inclusive — X% of the invoice total, already inside it (£99 -> £9.90).
+//   on_top    — X%, charged in addition to what they invoiced.
+//
+// A commission that is already inside the invoice can never exceed the invoice
+// itself: a mis-keyed 500% rate must not produce a claim for more than the job
+// was worth. An 'on_top' commission is charged separately, so it isn't capped.
 export function commissionPence(deal, { netPence = 0, totalPence = 0 }) {
   const d = dealFor(deal);
-  const base = d.commission_on === 'gross' ? totalPence : netPence;
-  const raw =
-    d.commission_type === 'fixed'
-      ? Math.max(0, toPence(d.commission_fixed) ?? 0)
-      : percentOfPence(Math.max(0, base), d.commission_rate);
-  if (d.commission_basis === 'inclusive') {
-    return Math.min(raw, Math.max(0, totalPence || base));
+  const base = Math.max(0, d.commission_on === 'gross' ? totalPence : netPence);
+
+  if (d.commission_type === 'fixed') {
+    const fixed = Math.max(0, toPence(d.commission_fixed) ?? 0);
+    return d.commission_basis === 'on_top'
+      ? fixed
+      : Math.min(fixed, Math.max(0, totalPence || base));
   }
-  return raw;
+
+  if (d.commission_basis === 'markup') {
+    // Integer maths throughout: rate is scaled to thousandths so 12.375% is
+    // exact, and the divisor is (100% + rate) in the same units.
+    const rateMilli = Math.round(Number(d.commission_rate || 0) * 1000);
+    if (!Number.isFinite(rateMilli) || rateMilli <= 0) return 0;
+    return Math.round((base * rateMilli) / (100000 + rateMilli));
+  }
+
+  const raw = percentOfPence(base, d.commission_rate);
+  return d.commission_basis === 'inclusive'
+    ? Math.min(raw, Math.max(0, totalPence || base))
+    : raw;
 }
 
 // Commission for an invoice expressed in pounds, ready for the API/DB.
@@ -143,13 +161,19 @@ export function commissionStatus(row) {
 // A one-line description of the agreement, for the UI and the invoice email.
 export function describeDeal(contractor) {
   const d = dealFor(contractor);
-  const amount =
-    d.commission_type === 'fixed'
-      ? `${formatPence(toPence(d.commission_fixed) ?? 0)} per invoice`
-      : `${d.commission_rate}% of the ${d.commission_on === 'gross' ? 'gross (inc VAT)' : 'net'}`;
+  const of = d.commission_on === 'gross' ? 'gross (inc VAT)' : 'net';
+  if (d.commission_type === 'fixed') {
+    const amount = `${formatPence(toPence(d.commission_fixed) ?? 0)} per invoice`;
+    return d.commission_basis === 'on_top'
+      ? `${amount}, charged on top`
+      : `${amount}, included in their invoice`;
+  }
+  if (d.commission_basis === 'markup') {
+    return `their price + ${d.commission_rate}%, included in their invoice`;
+  }
   return d.commission_basis === 'inclusive'
-    ? `${amount}, included in their invoice`
-    : `${amount}, charged on top`;
+    ? `${d.commission_rate}% of the invoice ${of}, included in their invoice`
+    : `${d.commission_rate}% of the ${of}, charged on top`;
 }
 
 export function dueDateFor(issueDate, termsDays) {
