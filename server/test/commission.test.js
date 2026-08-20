@@ -23,7 +23,11 @@ import {
   contractorSuggestionFrom,
 } from '../src/services/commission.js';
 import { buildInvoicePayload, lineFor } from '../src/services/invoicesManager.js';
-import { stripPersonName, normaliseExtraction } from '../src/services/invoiceExtract.js';
+import {
+  stripPersonName,
+  spaceAfterNumber,
+  normaliseExtraction,
+} from '../src/services/invoiceExtract.js';
 
 // --- money -----------------------------------------------------------------
 
@@ -772,4 +776,21 @@ test('unpaying over there clears the paid date here', () => {
 test('falls back to the marked-paid date when no payment was recorded', () => {
   const next = applyExternalState({ status: 'sent' }, { status: 'paid', paidAt: '2026-10-02T09:00:00Z' });
   assert.equal(next.paid_on, '2026-10-02');
+});
+
+test('a missing space after the house number is repaired', () => {
+  assert.equal(spaceAfterNumber('15New Cross St'), '15 New Cross St');
+  assert.equal(spaceAfterNumber('12Bath Street, Liverpool'), '12 Bath Street, Liverpool');
+  // Flat and house letters must survive — "2A" is not "2 A".
+  for (const address of ['Flat 2A, 30 Park Road', '14B Sefton Road', 'L1 8JQ', 'Unit 7, L24 9GB']) {
+    assert.equal(spaceAfterNumber(address), address, address);
+  }
+  assert.equal(spaceAfterNumber(null), null);
+});
+
+test('the property is cleaned of both the tenant and the missing space', () => {
+  assert.equal(
+    normaliseExtraction({ property: 'Mrs J Smith, 15New Cross St' }).property,
+    '15 New Cross St',
+  );
 });
