@@ -1,6 +1,12 @@
 import 'dotenv/config';
 
 const bool = (v) => v === 'true' || v === '1';
+// A VAT rate is only honoured when it is deliberate and sane; see config.commission.
+function vatRate(v, fallback = 20) {
+  if ((v ?? '').trim() === '') return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : fallback;
+}
 const list = (v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
 
 export const config = {
@@ -85,9 +91,11 @@ export const config = {
     // VAT charged on OUR commission invoices. This is Greenco's own VAT — it
     // applies because Greenco is VAT registered, and has nothing to do with
     // the contractor, so it is one setting rather than one per contractor.
-    vatRate: process.env.COMMISSION_VAT_RATE === undefined
-      ? 20
-      : Number(process.env.COMMISSION_VAT_RATE) || 0,
+    // Anything that isn't a deliberate, valid rate falls back to the standard
+    // 20% — blank, missing or mistyped must never quietly become 0%, which
+    // would under-declare VAT on every commission invoice raised. Setting it
+    // to an explicit 0 is the only way to switch VAT off.
+    vatRate: vatRate(process.env.COMMISSION_VAT_RATE),
     paymentTermsDays: Number(process.env.COMMISSION_TERMS_DAYS) || 30,
   },
 
