@@ -43,7 +43,7 @@ export function lineFor(row, vatRate = 0) {
   const head = parts.length ? parts.join(', ') : 'works';
   const works = row.description ? ` (${row.description})` : '';
   return {
-    description: `Commission — ${head}${works}`.slice(0, 500),
+    description: `Commission - ${head}${works}`.slice(0, 500),
     quantity: 1,
     // The NET commission: the invoicing system adds VAT to the unit price it
     // is given. For a contractor who isn't VAT registered that is the amount

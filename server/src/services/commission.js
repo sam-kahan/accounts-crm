@@ -238,8 +238,8 @@ function fmtDate(iso) {
 // own name/address/bank details from config; `lines` are the logged contractor
 // invoices being claimed.
 export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billing = {} }) {
-  const period = `${fmtDate(invoice.period_start)} – ${fmtDate(invoice.period_end)}`;
-  const subject = `${billing.name || 'Greenco'} commission invoice ${invoice.invoice_number} — ${monthLabel(
+  const period = `${fmtDate(invoice.period_start)} - ${fmtDate(invoice.period_end)}`;
+  const subject = `${billing.name || 'Greenco'} commission invoice ${invoice.invoice_number} - ${monthLabel(
     String(invoice.period_end).slice(0, 7),
   )}`;
 
@@ -253,7 +253,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
   );
 
   const text = [
-    `${billing.name || 'Greenco'} — commission invoice ${invoice.invoice_number}`,
+    `${billing.name || 'Greenco'} - commission invoice ${invoice.invoice_number}`,
     '',
     `To:      ${contractor.name}`,
     `Period:  ${period}`,
@@ -452,5 +452,46 @@ export function contractorSuggestionFrom(extracted = {}, amounts = {}) {
     vat_registered: Boolean(
       extracted.contractor_vat_number || (toPence(amounts.vat_amount) ?? 0) > 0,
     ),
+  };
+}
+
+// --- reacting to the invoicing system ---------------------------------------
+
+// How a state read from Greenco Invoicing lands on our copy. Their 'overdue' is
+// our 'sent': an unpaid invoice past its due date is still just sent as far as
+// this side is concerned, and the chasing happens over there.
+//
+// Shared by the webhook and the manual Refresh so the two can never drift.
+// A voided invoice here is never resurrected by anything arriving from there.
+export function applyExternalState(current, state) {
+  const externalStatus = String(state?.status || '').toLowerCase();
+  const status =
+    current?.status === 'void'
+      ? 'void'
+      : externalStatus === 'paid'
+        ? 'paid'
+        : externalStatus === 'draft'
+          ? 'draft'
+          : 'sent';
+
+  // When the money actually arrived, falling back to when it was marked paid.
+  // Their date wins over anything already here: payments are recorded on that
+  // side, so a correction over there is the correction — keeping our older copy
+  // would just leave a stale date nobody could explain. We only fall back to
+  // what we hold when they send no date at all.
+  const paidOn =
+    status === 'paid'
+      ? (state?.lastPaymentOn ? String(state.lastPaymentOn).slice(0, 10) : null) ||
+        (state?.paidAt ? String(state.paidAt).slice(0, 10) : null) ||
+        current?.paid_on ||
+        null
+      : null;
+
+  return {
+    status,
+    paid_on: paidOn,
+    external_status: externalStatus || null,
+    external_total: state?.grandTotal ?? null,
+    changed: current?.status !== status || (current?.external_status || null) !== (externalStatus || null),
   };
 }

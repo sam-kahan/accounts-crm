@@ -9,6 +9,7 @@ import {
   commissionInvoiceNumber,
   invoiceTotalsFromLines,
   commissionNetPence,
+  applyExternalState,
   dueDateFor,
   buildCommissionInvoiceEmail,
 } from '../services/commission.js';
@@ -416,7 +417,7 @@ router.post(
   '/:id/refresh',
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      'SELECT id, external_id, status FROM commission_invoices WHERE id = $1',
+      'SELECT id, external_id, status, paid_on, external_status FROM commission_invoices WHERE id = $1',
       [req.params.id],
     );
     const row = rows[0];
@@ -426,26 +427,19 @@ router.post(
     }
 
     const state = await fetchInvoiceState(row.external_id);
-    // Their 'overdue' is our 'sent' — an unpaid invoice past its due date is
-    // still just sent as far as this side is concerned.
-    const mapped = state.status === 'paid' ? 'paid' : state.status === 'draft' ? 'draft' : 'sent';
+    // Same mapping the webhook uses, so a refresh and a pushed update can never
+    // leave the invoice in different states.
+    const next = applyExternalState(row, state);
     const { rows: updated } = await query(
       `UPDATE commission_invoices SET
          external_status = $2,
-         external_total = $3,
+         external_total = COALESCE($3, external_total),
          external_synced_at = now(),
          external_error = NULL,
-         status = CASE WHEN status = 'void' THEN status ELSE $4 END,
-         paid_on = CASE WHEN $4 = 'paid' THEN COALESCE(paid_on, $5::date, CURRENT_DATE) ELSE NULL END
+         status = $4,
+         paid_on = $5
        WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
-      [
-        req.params.id,
-        state.status,
-        state.grandTotal,
-        mapped,
-        // When the money arrived, falling back to when it was marked paid.
-        state.lastPaymentOn || (state.paidAt ? String(state.paidAt).slice(0, 10) : null),
-      ],
+      [req.params.id, next.external_status, next.external_total, next.status, next.paid_on],
     );
     res.json({ invoice: decorate(updated[0]), external: state });
   }),

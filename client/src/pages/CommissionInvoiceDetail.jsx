@@ -196,7 +196,10 @@ export default function CommissionInvoiceDetail() {
       </div>
 
       {msg && <div className="inline-note no-print" style={{ marginBottom: 12 }}>{msg}</div>}
-      {!b.complete && (
+      {/* Only worth saying when this copy is the one that gets sent. With the
+          bridge on, the contractor's invoice comes from Greenco Invoicing,
+          which carries its own company and bank details. */}
+      {!b.complete && !invoicing?.enabled && (
         <div className="inline-note warn no-print" style={{ marginBottom: 12 }}>
           Your address and bank details are missing from the invoice. Set <code>BILLING_ADDRESS</code>{' '}
           and <code>BILLING_BANK_DETAILS</code> in the server .env so the contractor knows where to pay.
@@ -266,7 +269,7 @@ export default function CommissionInvoiceDetail() {
           <div>
             <div className="lbl">Period</div>
             <div>
-              {formatDate(inv.period_start)} – {formatDate(inv.period_end)}
+              {formatDate(inv.period_start)} - {formatDate(inv.period_end)}
             </div>
           </div>
         </div>

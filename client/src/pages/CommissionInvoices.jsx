@@ -229,7 +229,7 @@ export default function CommissionInvoices() {
                   </td>
                   <td>{i.contractor_name}</td>
                   <td className="muted">
-                    {formatDate(i.period_start)} – {formatDate(i.period_end)}
+                    {formatDate(i.period_start)} - {formatDate(i.period_end)}
                   </td>
                   <td className="muted">{formatDate(i.issue_date)}</td>
                   <td className="muted">{formatDate(i.due_date)}</td>

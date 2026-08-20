@@ -22,6 +22,7 @@ import complaints from './routes/complaints.js';
 import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
 import commissionInvoices from './routes/commissionInvoices.js';
+import invoicingWebhook from './routes/invoicingWebhook.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -118,6 +119,11 @@ app.use('/api/companies', requireAuth, companies);
 app.use('/api/key-dates', requireAuth, keyDates);
 app.use('/api/tasks', requireAuth, tasks);
 app.use('/api/organisations', requireAuth, organisations);
+// Greenco Invoicing calls this when an invoice changes over there. Server to
+// server, so it authenticates with the shared integration secret rather than a
+// login session — mounted on its own path so no authed route is widened.
+app.use('/api/webhooks/invoicing', invoicingWebhook);
+
 app.use('/api/contractors', requireAuth, contractors);
 app.use('/api/contractor-invoices', requireAuth, contractorInvoices);
 app.use('/api/commission-invoices', requireAuth, commissionInvoices);

@@ -10,6 +10,7 @@ import {
   invoiceTotals,
   invoiceTotalsFromLines,
   commissionNetPence,
+  applyExternalState,
   sumCommissionPence,
   commissionInvoiceNumber,
   commissionStatus,
@@ -440,16 +441,16 @@ test('a pushed invoice carries one line per contractor invoice', () => {
   assert.equal(payload.client.name, "Bob's Plumbing");
   assert.equal(payload.status, 'draft');
   assert.equal(payload.lines.length, 2);
-  assert.equal(payload.lines[0].description, 'Commission — INV-1001, 12 Mill St (Tap repair)');
+  assert.equal(payload.lines[0].description, 'Commission - INV-1001, 12 Mill St (Tap repair)');
   assert.equal(payload.lines[0].unitPrice, 10);
   assert.equal(payload.lines[0].quantity, 1);
   assert.match(payload.notes, /2026-08-01/);
 });
 
 test('a line still describes itself when the invoice number or works are missing', () => {
-  assert.equal(lineFor({ property: '9 Bridge Rd' }).description, 'Commission — 9 Bridge Rd');
-  assert.equal(lineFor({ invoice_number: 'INV-7' }).description, 'Commission — INV-7');
-  assert.equal(lineFor({}).description, 'Commission — works');
+  assert.equal(lineFor({ property: '9 Bridge Rd' }).description, 'Commission - 9 Bridge Rd');
+  assert.equal(lineFor({ invoice_number: 'INV-7' }).description, 'Commission - INV-7');
+  assert.equal(lineFor({}).description, 'Commission - works');
 });
 
 test('zero-commission lines are left off the invoice', () => {
@@ -463,7 +464,7 @@ test('zero-commission lines are left off the invoice', () => {
     companyId: 1,
   });
   assert.equal(payload.lines.length, 1);
-  assert.equal(payload.lines[0].description, 'Commission — INV-1');
+  assert.equal(payload.lines[0].description, 'Commission - INV-1');
 });
 
 test('an invoice with nothing billable is refused rather than sent empty', () => {
@@ -715,4 +716,60 @@ test('an address that is only a name comes back empty, not as the name', () => {
 test('the extractor applies it to the property it returns', () => {
   const out = normaliseExtraction({ property: 'Mrs J Smith, 14 Sefton Road' });
   assert.equal(out.property, '14 Sefton Road');
+});
+
+// --- reacting to the invoicing system ---------------------------------------
+
+test('paid over there becomes paid here, dated when the money arrived', () => {
+  const next = applyExternalState(
+    { status: 'sent', paid_on: null, external_status: 'sent' },
+    { status: 'paid', grandTotal: 10.8, lastPaymentOn: '2026-09-30', paidAt: '2026-10-02T09:00:00Z' },
+  );
+  assert.equal(next.status, 'paid');
+  assert.equal(next.paid_on, '2026-09-30'); // the payment date, not the marking date
+  assert.equal(next.changed, true);
+});
+
+test('their overdue is still just sent here — chasing happens there', () => {
+  const next = applyExternalState({ status: 'sent', external_status: 'sent' }, { status: 'overdue' });
+  assert.equal(next.status, 'sent');
+  assert.equal(next.external_status, 'overdue');
+  assert.equal(next.changed, true); // the external status moved, so it is worth recording
+});
+
+test('a voided invoice here is never resurrected from over there', () => {
+  const next = applyExternalState({ status: 'void' }, { status: 'paid', grandTotal: 10.8 });
+  assert.equal(next.status, 'void');
+  assert.equal(next.paid_on, null);
+});
+
+test('a payment date corrected over there wins — that is where payments live', () => {
+  const next = applyExternalState(
+    { status: 'paid', paid_on: '2026-09-15', external_status: 'paid' },
+    { status: 'paid', lastPaymentOn: '2026-09-30' },
+  );
+  assert.equal(next.paid_on, '2026-09-30');
+});
+
+test('our date is kept only when they send none at all', () => {
+  const next = applyExternalState(
+    { status: 'paid', paid_on: '2026-09-15', external_status: 'paid' },
+    { status: 'paid' },
+  );
+  assert.equal(next.paid_on, '2026-09-15');
+  assert.equal(next.changed, false); // nothing moved
+});
+
+test('unpaying over there clears the paid date here', () => {
+  const next = applyExternalState(
+    { status: 'paid', paid_on: '2026-09-30', external_status: 'paid' },
+    { status: 'sent' },
+  );
+  assert.equal(next.status, 'sent');
+  assert.equal(next.paid_on, null);
+});
+
+test('falls back to the marked-paid date when no payment was recorded', () => {
+  const next = applyExternalState({ status: 'sent' }, { status: 'paid', paidAt: '2026-10-02T09:00:00Z' });
+  assert.equal(next.paid_on, '2026-10-02');
 });

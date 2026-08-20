@@ -202,6 +202,15 @@ contractor at month end.
   system's *header reference*, which is also its **idempotency key** — a retried
   push links to the invoice already there instead of billing twice. That system
   assigns the number the contractor sees.
+- **Status comes back on its own.** Greenco Invoicing posts to
+  `POST /api/webhooks/invoicing` (`routes/invoicingWebhook.js`) whenever one of
+  our invoices moves there — emailed, paid, overdue. It sits outside
+  `requireAuth` on its own path, authenticated with the shared
+  `INVOICING_API_KEY` in constant time, because the caller is a server, not a
+  person. `applyExternalState()` is the single mapping, shared with the manual
+  Refresh so the two can't drift: their `overdue` is our `sent` (chasing lives
+  over there), their payment date wins over ours (payments are recorded there),
+  and an invoice **voided here is never resurrected** by anything arriving.
 
 ## Verify before committing
 
