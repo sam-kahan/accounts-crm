@@ -59,12 +59,36 @@ a { color: inherit; text-decoration: none; }
   height: 100vh;
   flex-shrink: 0;
 }
+/* The logo and the user box stay put; only the menu between them scrolls.
+   Without this the sidebar simply overflowed 100vh once the menu grew — the
+   bottom entries and the sign-out box became unreachable, and clicking a link
+   near the bottom scrolled the whole page to bring it into view. */
 .sidebar .brand {
   padding: 24px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
 }
 .sidebar .brand img { height: 52px; width: auto; max-width: 100%; display: block; }
-.sidebar nav { padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar nav {
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* min-height:0 is what actually lets a flex child shrink far enough to
+     scroll; without it the nav keeps its content height and overflows. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* A discreet scrollbar against the navy, rather than a bright default one. */
+.sidebar nav::-webkit-scrollbar { width: 8px; }
+.sidebar nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+.sidebar nav::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+.sidebar nav { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
 .sidebar .nav-group { margin-bottom: 14px; }
 .sidebar .nav-heading {
   font-size: 11px;
@@ -88,6 +112,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar nav a.active { background: var(--green); color: var(--navy); font-weight: 600; }
 .sidebar .foot {
   margin-top: auto;
+  flex-shrink: 0;
   padding: 16px 20px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
