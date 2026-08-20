@@ -214,8 +214,8 @@ export default function CommissionInvoiceDetail() {
           {inv.external_id ? (
             <>
               In Greenco Invoicing as <strong>{inv.external_number}</strong>
-              {inv.external_status ? ` (${inv.external_status})` : ''} — emailing and chasing
-              happen there.{' '}
+              {inv.external_status ? ` (${inv.external_status})` : ''}, under{' '}
+              {inv.company_name} — emailing and chasing happen there.{' '}
               {inv.external_url && (
                 <a href={inv.external_url} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
                   Open it
@@ -234,7 +234,10 @@ export default function CommissionInvoiceDetail() {
         <div className="inv-head">
           <div>
             <h2>Commission invoice</h2>
-            <div className="muted">{b.name || 'Greenco'}</div>
+            <div className="muted">
+              {b.name || 'Greenco'}
+              {inv.region_label ? ` · ${inv.region_label}` : ''}
+            </div>
           </div>
           <div className="inv-meta">
             <div><strong>{inv.external_number || inv.invoice_number}</strong></div>

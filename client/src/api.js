@@ -317,6 +317,18 @@ export const INVOICE_STATUS_LABEL = {
   void: 'Void',
 };
 
+// The two Greenco offices. Which one bills a job is worked out on the server
+// from the site address on the contractor's invoice
+// (server/src/services/regions.js) — these are only the names for it. The
+// company each one invoices as comes from the server too (settings.regions),
+// since it is configuration, not something the browser should assume.
+export const REGIONS = [
+  { key: 'manchester', label: 'Manchester' },
+  { key: 'liverpool', label: 'Liverpool' },
+];
+
+export const REGION_LABEL = Object.fromEntries(REGIONS.map((r) => [r.key, r.label]));
+
 export function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));

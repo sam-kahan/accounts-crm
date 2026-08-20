@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { toPence, fromPence } from '../lib/money.js';
 import { commissionNetPence } from './commission.js';
+import { REGIONS, REGION_LABEL, isRegion } from './regions.js';
 
 // ---------------------------------------------------------------------------
 // Bridge to Greenco Invoicing (invoices.greenco.co.uk).
@@ -13,9 +14,14 @@ import { commissionNetPence } from './commission.js';
 // our GC-COM-xxxxx goes across as its header reference, so a payment queried at
 // either end reconciles to the same document.
 //
-// Everything is gated on INVOICING_API_URL / INVOICING_API_KEY /
-// INVOICING_COMPANY_ID: with any of them unset the commission module works
-// exactly as before, just without the push.
+// WHICH company it is raised from is the invoice's region: Manchester work goes
+// to Greenco Group Limited, Liverpool work to Greenco Liverpool Limited, each
+// its own company over there. The region was settled when the contractor's
+// invoice was logged (services/regions.js); nothing is decided here.
+//
+// Everything is gated on INVOICING_API_URL / INVOICING_API_KEY and at least one
+// office's company id: with those unset the commission module works exactly as
+// before, just without the push.
 // ---------------------------------------------------------------------------
 
 // The invoicing app only accepts the VAT rates its own invoice form offers.
@@ -23,13 +29,36 @@ import { commissionNetPence } from './commission.js';
 // relayed from another system.
 const ALLOWED_VAT_RATES = [0, 5, 20];
 
+// Which company over there raises this region's invoices. A region nobody has
+// linked yet is a configuration gap, not a bad invoice — say which setting is
+// missing rather than letting the push fail as an opaque rejection.
+export function companyIdFor(region) {
+  const key = isRegion(region) ? region : 'manchester';
+  const id = config.invoicing.companies[key] || 0;
+  if (!id) {
+    throw new HttpError(
+      503,
+      `${config.regions[key].company_name} isn’t linked to a company in Greenco Invoicing yet — set INVOICING_COMPANY_ID_${key.toUpperCase()} in the server environment.`,
+    );
+  }
+  return id;
+}
+
 export function invoicingStatus() {
   return {
     enabled: config.invoicing.enabled,
     url: config.invoicing.baseUrl,
-    company_id: config.invoicing.companyId,
     auto_push: config.invoicing.autoPush,
     push_as_sent: config.invoicing.pushAsSent,
+    // One entry per office, so the UI can say "Liverpool isn't linked yet"
+    // before somebody raises an invoice that can't be sent.
+    companies: REGIONS.map((r) => ({
+      region: r.key,
+      label: REGION_LABEL[r.key],
+      company_name: config.regions[r.key].company_name,
+      company_id: config.invoicing.companies[r.key] || null,
+      linked: Boolean(config.invoicing.companies[r.key]),
+    })),
   };
 }
 
@@ -94,7 +123,7 @@ function requireEnabled() {
   if (!config.invoicing.enabled) {
     throw new HttpError(
       503,
-      'Greenco Invoicing isn’t configured. Set INVOICING_API_URL, INVOICING_API_KEY and INVOICING_COMPANY_ID in the server environment.',
+      'Greenco Invoicing isn’t configured. Set INVOICING_API_URL, INVOICING_API_KEY and at least one of INVOICING_COMPANY_ID_MANCHESTER / INVOICING_COMPANY_ID_LIVERPOOL in the server environment.',
     );
   }
 }
@@ -136,15 +165,20 @@ async function call(path, { method = 'GET', body } = {}) {
 
 // Push a commission invoice across. Returns the linkage to store against it.
 export async function pushInvoice({ invoice, contractor, lines }) {
+  // The region decides the company, and it is checked before the request goes
+  // out: a Liverpool invoice must never land in Manchester's books because a
+  // setting was missing.
+  const companyId = companyIdFor(invoice.region);
   const payload = buildInvoicePayload({
     invoice,
     contractor,
     lines,
-    companyId: config.invoicing.companyId,
+    companyId,
     asSent: config.invoicing.pushAsSent,
   });
   const data = await call('/api/external/invoices', { method: 'POST', body: payload });
   return {
+    external_company_id: companyId,
     external_id: String(data.invoice.id),
     external_number: data.invoice.invoiceNumber,
     external_url: data.invoice.url,

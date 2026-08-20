@@ -19,6 +19,7 @@ import {
   contractorSuggestionFrom,
   resolveContractor,
 } from '../services/commission.js';
+import { REGION_KEYS, REGION_LABEL, isRegion, regionForAddress } from '../services/regions.js';
 import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } from '../services/contractorDocs.js';
 import { extractInvoice } from '../services/invoiceExtract.js';
 
@@ -29,7 +30,7 @@ const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate
 const COLS = `i.id, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
   i.commission_on, i.commission_basis, i.commission_amount, i.commission_override,
-  i.commission_vat_inclusive, i.paid_from,
+  i.commission_vat_inclusive, i.region, i.paid_from,
   i.paid_on, i.waived, i.waived_reason, i.commission_invoice_id, i.filename, i.mimetype,
   i.size_bytes, i.extracted, i.notes, i.created_at, i.updated_at`;
 
@@ -55,7 +56,11 @@ const STATUS_SQL = {
 function decorate(row) {
   if (!row) return row;
   const r = withNumbers(row, MONEY_COLS);
-  return { ...r, status: commissionStatus(r) };
+  return {
+    ...r,
+    status: commissionStatus(r),
+    region_label: REGION_LABEL[r.region] || r.region || null,
+  };
 }
 
 // Multipart fields all arrive as strings, and an untouched form field arrives
@@ -94,6 +99,9 @@ const input = z.object({
   commission_basis: z.enum(COMMISSION_BASES).optional(),
   commission_amount: money.optional(),
   paid_from: z.enum(PAID_FROM).optional(),
+  // Which Greenco office bills this job. Worked out from the property address
+  // when it isn't stated; see resolveRegion below.
+  region: z.enum(REGION_KEYS).optional(),
   paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   notes: z.string().max(4000).optional().nullable(),
   extracted: boolish.optional(),
@@ -126,6 +134,24 @@ function resolveCommission(contractor, d, amounts) {
     commission_override: override,
     computed_commission: computed,
   };
+}
+
+// Which Greenco office bills this job. The site address decides it — Manchester
+// work is Greenco Group Limited's, Liverpool work is Greenco Liverpool
+// Limited's — and a stated region always wins, because the person looking at
+// the invoice knows things the postcode doesn't. When neither settles it we
+// stop and ask rather than picking one: the two are separate companies, and an
+// invoice raised by the wrong one is a real accounting problem, not a typo.
+function resolveRegion(supplied, property) {
+  if (isRegion(supplied)) return { region: supplied, detected: null };
+  const detected = regionForAddress(property);
+  if (!detected.region) {
+    throw new HttpError(
+      400,
+      `Which office is this job — ${REGION_LABEL.manchester} or ${REGION_LABEL.liverpool}? ${detected.reason}`,
+    );
+  }
+  return { region: detected.region, detected };
 }
 
 // --- AI extraction ----------------------------------------------------------
@@ -166,9 +192,17 @@ router.post(
 
     const commission = contractor ? resolveCommission(contractor, {}, amounts) : null;
 
+    // Which office the job belongs to, read off the site address the same way
+    // the save path reads it. Null means the address didn't settle it — the
+    // form then asks, and says why it couldn't tell.
+    const region = regionForAddress(extracted.property);
+
     res.json({
       ...extracted,
       ...amounts,
+      region: region.region,
+      region_reason: region.reason,
+      region_source: region.source,
       contractor_id: contractor ? contractor.id : null,
       // How we got there: 'given' (already chosen), 'matched' (traced from the
       // invoice), or null (nobody could be identified).
@@ -208,9 +242,14 @@ function windowFrom(q) {
   return { ...monthRange(month), month };
 }
 
+// The month end, one row per contractor PER OFFICE. Two Greenco companies
+// cannot bill on one document, so a contractor who worked both cities owes two
+// invoices — splitting here is what makes that the obvious thing to raise
+// rather than something to remember.
 async function summarise({ from, to }) {
   const { rows } = await query(
     `SELECT c.id AS contractor_id, c.name AS contractor_name, c.email AS contractor_email,
+            i.region                                                AS region,
             count(i.id)::int                                        AS invoice_count,
             COALESCE(sum(i.total_amount), 0)                        AS invoiced_total,
             COALESCE(sum(i.commission_amount), 0)                   AS commission_total,
@@ -224,21 +263,22 @@ async function summarise({ from, to }) {
        FROM contractors c
        JOIN contractor_invoices i
          ON i.contractor_id = c.id AND i.invoice_date BETWEEN $1 AND $2
-      GROUP BY c.id, c.name, c.email
+      GROUP BY c.id, c.name, c.email, i.region
       HAVING count(i.id) > 0
-      ORDER BY pending_commission DESC, c.name ASC`,
+      ORDER BY pending_commission DESC, c.name ASC, i.region ASC`,
     [from, to],
   );
 
-  const contractors = rows.map((r) =>
-    withNumbers(r, [
+  const contractors = rows.map((r) => ({
+    ...withNumbers(r, [
       'invoiced_total',
       'commission_total',
       'pending_commission',
       'billed_commission',
       'waived_commission',
     ]),
-  );
+    region_label: REGION_LABEL[r.region] || r.region,
+  }));
 
   const sum = (key) => fromPence(contractors.reduce((acc, r) => acc + (toPence(r[key]) ?? 0), 0));
   return {
@@ -275,15 +315,22 @@ router.get(
     const { rows } = await query(
       `SELECT * FROM (SELECT ${JOINED} ${FROM}
          WHERE i.invoice_date BETWEEN $1 AND $2
-           AND ($3::uuid IS NULL OR i.contractor_id = $3::uuid)) t
-       ORDER BY t.contractor_name, t.invoice_date`,
-      [w.from, w.to, req.query.contractor_id || null],
+           AND ($3::uuid IS NULL OR i.contractor_id = $3::uuid)
+           AND ($4 = '' OR i.region = $4)) t
+       ORDER BY t.contractor_name, t.region, t.invoice_date`,
+      [
+        w.from,
+        w.to,
+        req.query.contractor_id || null,
+        isRegion(req.query.region) ? req.query.region : '',
+      ],
     );
 
     const lines = rows.map(decorate).filter((r) => !statusKey || r.status === statusKey);
     const csv = toCsv(
       [
         { key: 'contractor_name', label: 'Contractor' },
+        { key: 'region_label', label: 'Office' },
         { key: 'invoice_date', label: 'Invoice date' },
         { key: 'invoice_number', label: 'Their invoice no.' },
         { key: 'property', label: 'Property' },
@@ -325,6 +372,7 @@ router.get(
                        OR COALESCE(i.property, '') ILIKE '%' || $4 || '%'
                        OR COALESCE(i.description, '') ILIKE '%' || $4 || '%'
                        OR c.name ILIKE '%' || $4 || '%')
+          AND ($6 = '' OR i.region = $6)
           ${statusKey ? `AND ${STATUS_SQL[statusKey]}` : ''}
         ORDER BY i.invoice_date DESC, i.created_at DESC
         LIMIT $5`,
@@ -334,6 +382,7 @@ router.get(
         req.query.to || null,
         (req.query.search || '').trim(),
         limit,
+        isRegion(req.query.region) ? req.query.region : '',
       ],
     );
     res.json(rows.map(decorate));
@@ -360,6 +409,7 @@ router.post(
       const contractor = await getContractor(d.contractor_id);
       const amounts = reconcileAmounts(d);
       const commission = resolveCommission(contractor, d, amounts);
+      const { region } = resolveRegion(d.region, d.property);
       const file = req.file;
 
       const { rows } = await query(
@@ -368,9 +418,9 @@ router.post(
            net_amount, vat_amount, total_amount, commission_type, commission_rate, commission_on,
            commission_basis, commission_amount, commission_override, commission_vat_inclusive,
            paid_from, paid_on, notes,
-           filename, mimetype, size_bytes, storage_path, extracted)
+           filename, mimetype, size_bytes, storage_path, extracted, region)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$24,
-                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false))
+                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25)
          RETURNING id`,
         [
           d.contractor_id, d.invoice_number || null, d.invoice_date, d.property || null,
@@ -384,6 +434,7 @@ router.post(
           // Snapshot the VAT treatment: a contractor registering for VAT later
           // must not re-rate commission they have already collected.
           !contractor.vat_registered,
+          region,
         ],
       );
 
@@ -446,7 +497,8 @@ router.put(
          net_amount = $7, vat_amount = $8, total_amount = $9,
          commission_type = $10, commission_rate = $11, commission_on = $12,
          commission_basis = $13, commission_amount = $14, commission_override = $15,
-         paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18
+         paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
+         region = COALESCE($19, region)
        WHERE id = $1 RETURNING id`,
       [
         req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
@@ -456,6 +508,10 @@ router.put(
         commission.commission_type, commission.commission_rate, commission.commission_on,
         commission.commission_basis, commission.commission_amount, commission.commission_override,
         d.paid_from ?? null, d.paid_on ?? current.paid_on, d.notes ?? current.notes,
+        // Only ever moved deliberately. Re-reading the address on every edit
+        // would let a tidied-up property line move an invoice between two
+        // companies without anyone asking for it.
+        isRegion(d.region) ? d.region : null,
       ],
     );
     const { rows: full } = await query(`SELECT ${JOINED} ${FROM} WHERE i.id = $1`, [rows[0].id]);

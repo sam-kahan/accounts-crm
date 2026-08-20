@@ -123,7 +123,8 @@ From the Greenco logo — use these, don't invent colours:
   in place (unique per company+category) so re-syncing never duplicates.
 - **SMTP2GO** (`SMTP_USER` / `SMTP_PASS`) — reminder digests via nodemailer.
 - **Greenco Invoicing** (`INVOICING_API_URL` / `INVOICING_API_KEY` /
-  `INVOICING_COMPANY_ID`) — commission invoices are pushed to the invoicing app
+  `INVOICING_COMPANY_ID_MANCHESTER` + `INVOICING_COMPANY_ID_LIVERPOOL`, one
+  company per office) — commission invoices are pushed to the invoicing app
   (`sam-kahan/invoices-manager`, the Next.js app in its `v2/`) so they are
   emailed, tracked and chased there. See "Contractor commission" below.
 - Roadmap: Outlook calendar sync (Microsoft Graph), HMRC MTD.
@@ -149,6 +150,20 @@ contractor at month end.
       → pushed to Greenco Invoicing, which numbers, emails and chases it
       → paid there → refreshed back here
 
+- **Two Greenco companies, and the site address picks one.** Manchester work is
+  Greenco Group Limited's, Liverpool work is Greenco Liverpool Limited's, and
+  each raises from its own company in Greenco Invoicing. `services/regions.js`
+  is the whole rule: postcode areas first (M/BL/OL/SK/WN → Manchester, L →
+  Liverpool), then the areas that straddle them district by district — WA1-5 and
+  WA13-16 to Manchester, WA7-12 to Liverpool, the Wirral half of CH and Southport
+  to Liverpool. An address with no postcode falls back to a town name, but never
+  one used as a street ("Liverpool Road" runs through Eccles). Anything it can't
+  place returns **null with a reason**, and the form asks — the two are separate
+  legal entities, so a wrong guess is a real accounting problem rather than a
+  typo. The region is stored per logged invoice (migration `014`), so month end
+  raises **one commission invoice per contractor per office**; `commission_invoices.region`
+  decides which company id the push goes to and whose name and VAT number appear
+  on the paperwork.
 - `contractors` holds the **agreement** (percentage or fixed, on net or gross,
   the basis below, whether they are VAT registered, payment terms). Every logged invoice **snapshots**
   that deal, so renegotiating a rate never rewrites what was already billed.
@@ -246,6 +261,23 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-20 — Manchester and Liverpool invoice separately
+- **Two companies, routed by the site address.** Commission used to be invoiced
+  from Greenco Group Limited whatever the job. It is now raised by whichever
+  office the work was in — Greenco Group Limited (Manchester) or Greenco
+  Liverpool Limited (Liverpool) — each pushing to its own company in Greenco
+  Invoicing (`INVOICING_COMPANY_ID_MANCHESTER` / `_LIVERPOOL`; the old
+  `INVOICING_COMPANY_ID` is still read as Manchester's).
+- **`services/regions.js`** decides it from the property address on the
+  contractor's invoice, pure and unit-tested — see "Contractor commission" above
+  for the rules. Uploading an invoice fills the office in and says how it got
+  there ("WA10 is St Helens"); when it can't tell, it says why and the form
+  asks. A stated office always wins over the postcode.
+- **Month end is per office** (migration `014` adds `region` to both tables and
+  backfills the existing rows to Manchester, which is where they went). The
+  summary, the CSV and the raised list all carry it, and a contractor who worked
+  both cities shows two rows to raise.
 
 ### 2026-08-20 — contractor commission tracking + Greenco Invoicing bridge
 - **New module** (`Commission` in the nav): contractors and their commission

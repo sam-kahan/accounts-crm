@@ -8,6 +8,8 @@ import {
   monthOf,
   monthLabel,
   COMMISSION_STATUS_LABEL,
+  REGIONS,
+  REGION_LABEL,
 } from '../api';
 import Modal from '../components/Modal.jsx';
 
@@ -81,9 +83,13 @@ function LogInvoiceModal({
     vat_amount: '',
     total_amount: '',
     paid_from: 'client',
+    region: '',
     notes: '',
   });
   const [file, setFile] = useState(null);
+  // Why the office ended up where it did — shown either way, because "we
+  // couldn't tell" and "we read it off the postcode" both want checking.
+  const [regionNote, setRegionNote] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState(null);
@@ -130,7 +136,11 @@ function LogInvoiceModal({
         net_amount: d.net_amount ?? prev.net_amount,
         vat_amount: d.vat_amount ?? prev.vat_amount,
         total_amount: d.total_amount ?? prev.total_amount,
+        // Only ever filled in, never overwritten: if the user has already said
+        // which office this is, the postcode doesn't get to argue.
+        region: prev.region || d.region || '',
       }));
+      setRegionNote(d.region_reason || null);
       setStated(d.commission_stated ?? null);
       setSuggestion(d.contractor_id ? null : d.contractor_suggestion || null);
       setMatch(
@@ -204,6 +214,14 @@ function LogInvoiceModal({
     e.preventDefault();
     if (!form.contractor_id) {
       setError('Choose the contractor first.');
+      return;
+    }
+    // With neither an office nor an address there is nothing to work it out
+    // from, and the server would only bounce it back. Otherwise let the server
+    // read the address — it says which office it landed on, and why, if it
+    // can't tell.
+    if (!form.region && !form.property.trim()) {
+      setError('Choose which office this job belongs to — Manchester or Liverpool.');
       return;
     }
     setBusy(true);
@@ -302,6 +320,12 @@ function LogInvoiceModal({
 
         {readNote && (
           <div className="inline-note" style={{ marginBottom: 14 }}>{readNote}</div>
+        )}
+        {regionNote && !form.region && (
+          <div className="inline-note warn" style={{ marginBottom: 14 }}>
+            Which office is this job — {REGION_LABEL.manchester} or {REGION_LABEL.liverpool}?{' '}
+            {regionNote} Choose one under <strong>Invoiced by</strong> below.
+          </div>
         )}
         {match && (
           <div
@@ -416,6 +440,23 @@ function LogInvoiceModal({
             <input value={form.property} onChange={(e) => set('property', e.target.value)} />
           </label>
           <label className="field">
+            <span className="lbl">Invoiced by</span>
+            <select value={form.region} onChange={(e) => set('region', e.target.value)}>
+              <option value="">Work it out from the address</option>
+              {REGIONS.map((r) => (
+                <option key={r.key} value={r.key}>{r.label}</option>
+              ))}
+            </select>
+            <span
+              className="muted"
+              style={{ fontSize: 12, marginTop: 4 }}
+            >
+              {form.region
+                ? `${REGION_LABEL[form.region]} raises the commission invoice for this job.`
+                : regionNote || 'Manchester and Liverpool invoice separately.'}
+            </span>
+          </label>
+          <label className="field">
             <span className="lbl">Landlord / statement ref</span>
             <input value={form.landlord_ref} onChange={(e) => set('landlord_ref', e.target.value)} />
           </label>
@@ -528,6 +569,7 @@ export default function ContractorInvoices() {
   const contractorId = params.get('contractor_id') || '';
   const status = params.get('status') || '';
   const month = params.get('month') || monthOf();
+  const region = params.get('region') || '';
   const search = params.get('search') || '';
 
   const setParam = (k, v) => {
@@ -543,11 +585,12 @@ export default function ContractorInvoices() {
     return {
       contractor_id: contractorId,
       status,
+      region,
       search,
       from: `${month}-01`,
       to: `${month}-${String(last).padStart(2, '0')}`,
     };
-  }, [contractorId, status, search, month]);
+  }, [contractorId, status, region, search, month]);
 
   const load = () => {
     setErr(null);
@@ -560,7 +603,7 @@ export default function ContractorInvoices() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contractorId, status, search, month]);
+  }, [contractorId, status, region, search, month]);
 
   useEffect(() => {
     api.contractors.list({ active: 'true' }).then(setContractors).catch(() => setContractors([]));
@@ -648,6 +691,16 @@ export default function ContractorInvoices() {
             ))}
           </select>
           <select
+            value={region}
+            onChange={(e) => setParam('region', e.target.value)}
+            aria-label="Office"
+          >
+            <option value="">Both offices</option>
+            {REGIONS.map((r) => (
+              <option key={r.key} value={r.key}>{r.label}</option>
+            ))}
+          </select>
+          <select
             value={status}
             onChange={(e) => setParam('status', e.target.value)}
             aria-label="Status"
@@ -671,7 +724,12 @@ export default function ContractorInvoices() {
         <div className="btn-row">
           <a
             className="btn"
-            href={api.contractorInvoices.exportUrl({ month, contractor_id: contractorId, status })}
+            href={api.contractorInvoices.exportUrl({
+              month,
+              contractor_id: contractorId,
+              status,
+              region,
+            })}
           >
             Export CSV
           </a>
@@ -702,6 +760,7 @@ export default function ContractorInvoices() {
               <tr>
                 <th>Date</th>
                 <th>Contractor</th>
+                <th>Office</th>
                 <th>Invoice</th>
                 <th>Property / works</th>
                 <th className="num">Invoice total</th>
@@ -715,6 +774,7 @@ export default function ContractorInvoices() {
                 <tr key={r.id}>
                   <td className="muted" style={{ whiteSpace: 'nowrap' }}>{formatDate(r.invoice_date)}</td>
                   <td>{r.contractor_name}</td>
+                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>{r.region_label || '—'}</td>
                   <td>
                     {r.invoice_number || <span className="muted">—</span>}
                     {r.has_document && (
@@ -765,7 +825,7 @@ export default function ContractorInvoices() {
                 </tr>
               ))}
               <tr className="total-row">
-                <td colSpan={4}>{monthLabel(month)} total</td>
+                <td colSpan={5}>{monthLabel(month)} total</td>
                 <td className="num">{formatMoney(totals.invoiced)}</td>
                 <td className="num">{formatMoney(totals.commission)}</td>
                 <td colSpan={2} />

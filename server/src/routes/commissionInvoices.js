@@ -19,6 +19,7 @@ import {
   pushInvoice,
   fetchInvoiceState,
 } from '../services/invoicesManager.js';
+import { REGION_KEYS, REGION_LABEL, isRegion } from '../services/regions.js';
 
 const router = Router();
 
@@ -27,24 +28,38 @@ const LINE_MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission
 
 const COLS = `ci.id, ci.contractor_id, ci.invoice_number, ci.period_start, ci.period_end,
   ci.issue_date, ci.due_date, ci.net_amount, ci.vat_rate, ci.vat_amount, ci.total_amount,
-  ci.status, ci.sent_at, ci.sent_to, ci.paid_on, ci.notes, ci.external_id, ci.external_number,
-  ci.external_url, ci.external_status, ci.external_total, ci.external_synced_at,
-  ci.external_error, ci.created_at, ci.updated_at`;
+  ci.status, ci.sent_at, ci.sent_to, ci.paid_on, ci.notes, ci.region, ci.external_id,
+  ci.external_number, ci.external_url, ci.external_status, ci.external_total,
+  ci.external_synced_at, ci.external_company_id, ci.external_error, ci.created_at, ci.updated_at`;
 
-const decorate = (row) => (row ? withNumbers(row, MONEY_COLS) : row);
+const decorate = (row) =>
+  row
+    ? {
+        ...withNumbers(row, MONEY_COLS),
+        region_label: REGION_LABEL[row.region] || row.region || null,
+        // Which Greenco company this invoice is raised by. The region is the
+        // decision; this is the name that goes on the paperwork.
+        company_name: config.regions[row.region]?.company_name || config.billing.name,
+      }
+    : row;
 
-// Our own details as they appear on the invoice. Anything unset is simply left
-// off the page rather than invented.
-function billingBlock() {
+// Our own details as they appear on the invoice — the details of whichever
+// Greenco company is raising it, since Manchester and Liverpool are separate
+// legal entities with their own VAT and company numbers. Anything unset falls
+// back to the shared block and is otherwise left off rather than invented.
+function billingBlock(region) {
+  const office = config.regions[region] || {};
   return {
-    name: config.billing.name,
-    address: config.billing.address,
+    name: office.company_name || config.billing.name,
+    address: office.address || config.billing.address,
     email: config.billing.email,
     phone: config.billing.phone,
-    vat_number: config.billing.vatNumber,
-    company_number: config.billing.companyNumber,
+    vat_number: office.vat_number || config.billing.vatNumber,
+    company_number: office.company_number || config.billing.companyNumber,
     bank_details: config.billing.bankDetails,
     complete: config.billing.complete,
+    region: region || null,
+    region_label: REGION_LABEL[region] || null,
   };
 }
 
@@ -56,6 +71,12 @@ router.get(
       mailer: mailerStatus(),
       invoicing: invoicingStatus(),
       commission: { vat_rate: config.commission.vatRate, invoice_prefix: config.commission.invoicePrefix },
+      // The offices an invoice can be raised from, and who each of them is.
+      regions: REGION_KEYS.map((key) => ({
+        key,
+        label: REGION_LABEL[key],
+        company_name: config.regions[key].company_name,
+      })),
     });
   }),
 );
@@ -70,8 +91,13 @@ router.get(
          JOIN contractors c ON c.id = ci.contractor_id
         WHERE ($1::uuid IS NULL OR ci.contractor_id = $1::uuid)
           AND ($2 = '' OR ci.status = $2)
+          AND ($3 = '' OR ci.region = $3)
         ORDER BY ci.issue_date DESC, ci.invoice_number DESC`,
-      [req.query.contractor_id || null, req.query.status || ''],
+      [
+        req.query.contractor_id || null,
+        req.query.status || '',
+        isRegion(req.query.region) ? req.query.region : '',
+      ],
     );
     res.json(rows.map(decorate));
   }),
@@ -95,7 +121,7 @@ router.get(
     const { rows: lines } = await query(
       `SELECT id, invoice_number, invoice_date, property, landlord_ref, description,
               net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-              commission_vat_inclusive, (storage_path IS NOT NULL) AS has_document
+              commission_vat_inclusive, region, (storage_path IS NOT NULL) AS has_document
          FROM contractor_invoices
         WHERE commission_invoice_id = $1
         ORDER BY invoice_date, created_at`,
@@ -111,7 +137,7 @@ router.get(
         ...withNumbers(l, LINE_MONEY_COLS),
         commission_net: fromPence(commissionNetPence(l, rows[0].vat_rate)),
       })),
-      billing: billingBlock(),
+      billing: billingBlock(rows[0].region),
       invoicing: invoicingStatus(),
     });
   }),
@@ -132,22 +158,31 @@ router.get(
     ]);
     if (!contractors[0]) throw new HttpError(404, 'Contractor not found');
 
+    // An invoice is raised by one Greenco company, so a preview is of one
+    // office's work. Without a region the preview would total up jobs that can
+    // never share a document.
+    const region = isRegion(req.query.region) ? req.query.region : null;
+
     const { rows: lines } = await query(
       `SELECT id, invoice_number, invoice_date, property, description,
               net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-              commission_vat_inclusive
+              commission_vat_inclusive, region
          FROM contractor_invoices
         WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
           AND invoice_date BETWEEN $2 AND $3
+          AND ($4 = '' OR region = $4)
         ORDER BY invoice_date, created_at`,
-      [req.params.contractorId, from, to],
+      [req.params.contractorId, from, to, region || ''],
     );
 
     res.json({
-      contractor: withNumbers(contractors[0], ['commission_rate', 'commission_fixed', 'commission_vat_rate']),
+      contractor: withNumbers(contractors[0], ['commission_rate', 'commission_fixed']),
       period_start: from,
       period_end: to,
       month,
+      region,
+      region_label: REGION_LABEL[region] || null,
+      billing: billingBlock(region),
       lines: lines.map((l) => withNumbers(l, LINE_MONEY_COLS)),
       ...invoiceTotalsFromLines(lines, config.commission.vatRate),
     });
@@ -164,6 +199,10 @@ const raiseInput = z.object({
   invoice_ids: z.array(z.string().uuid()).max(500).optional(),
   vat_rate: z.number().min(0).max(100).optional(),
   notes: z.string().max(2000).optional().nullable(),
+  // Which Greenco company raises it. Required, because the two are separate
+  // legal entities: an invoice has to be one company's, and picking one on the
+  // caller's behalf would be picking whose VAT return the money lands in.
+  region: z.enum(REGION_KEYS),
 });
 
 // Raise the month's commission invoice: claim every pending line in the period,
@@ -196,14 +235,18 @@ router.post(
         `SELECT id, commission_amount, commission_vat_inclusive FROM contractor_invoices
           WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
             AND invoice_date BETWEEN $2 AND $3
+            AND region = $5
             AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[]))
           ORDER BY invoice_date, created_at
           FOR UPDATE`,
-        [d.contractor_id, from, to, d.invoice_ids?.length ? d.invoice_ids : null],
+        [d.contractor_id, from, to, d.invoice_ids?.length ? d.invoice_ids : null, d.region],
       );
 
       if (lines.length === 0) {
-        throw new HttpError(400, 'There is no commission left to invoice for that period.');
+        throw new HttpError(
+          400,
+          `There is no ${REGION_LABEL[d.region]} commission left to invoice for that period.`,
+        );
       }
 
       // Greenco's own VAT, one setting for every commission invoice. The
@@ -218,14 +261,14 @@ router.post(
       const { rows: created } = await client.query(
         `INSERT INTO commission_invoices
            (contractor_id, invoice_number, period_start, period_end, issue_date, due_date,
-            net_amount, vat_rate, vat_amount, total_amount, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            net_amount, vat_rate, vat_amount, total_amount, notes, region)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          RETURNING id`,
         [
           d.contractor_id, number, from, to, issue,
           dueDateFor(issue, contractor.payment_terms_days),
           totals.net_amount, totals.vat_rate, totals.vat_amount, totals.total_amount,
-          d.notes || null,
+          d.notes || null, d.region,
         ],
       );
 
@@ -257,6 +300,9 @@ router.post(
       res.status(201).json({
         id: created[0].id,
         invoice_number: number,
+        region: d.region,
+        region_label: REGION_LABEL[d.region],
+        company_name: config.regions[d.region].company_name,
         lines: lines.length,
         pushed: pushed
           ? { number: pushed.external_number, url: pushed.external_url }
@@ -313,7 +359,7 @@ router.post(
         ...withNumbers(l, LINE_MONEY_COLS),
         commission_amount: fromPence(commissionNetPence(l, invoice.vat_rate)),
       })),
-      billing: billingBlock(),
+      billing: billingBlock(invoice.region),
       invoicing: invoicingStatus(),
     });
 
@@ -372,6 +418,7 @@ async function recordPush(id, link, error) {
        external_url = COALESCE($4, external_url),
        external_status = COALESCE($5, external_status),
        external_total = COALESCE($6, external_total),
+       external_company_id = COALESCE($8, external_company_id),
        external_synced_at = CASE WHEN $2 IS NULL THEN external_synced_at ELSE now() END,
        external_error = $7
      WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
@@ -383,6 +430,7 @@ async function recordPush(id, link, error) {
       link?.external_status ?? null,
       link?.external_total ?? null,
       error ?? null,
+      link?.external_company_id ?? null,
     ],
   );
   return decorate(rows[0]);

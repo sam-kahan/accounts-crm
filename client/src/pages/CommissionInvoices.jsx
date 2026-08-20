@@ -9,6 +9,10 @@ import {
   INVOICE_STATUS_LABEL,
 } from '../api';
 
+// A row is a contractor's work for ONE office: Manchester and Liverpool are
+// separate companies and cannot share an invoice, so they are raised separately.
+const rowKey = (r) => `${r.contractor_id}:${r.region}`;
+
 const STATUS_BADGE = { draft: 'grey', sent: 'amber', paid: 'ok', void: 'red' };
 
 export default function CommissionInvoices() {
@@ -17,6 +21,7 @@ export default function CommissionInvoices() {
 
   const [summary, setSummary] = useState(null);
   const [invoices, setInvoices] = useState(null);
+  const [settings, setSettings] = useState(null);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -35,6 +40,18 @@ export default function CommissionInvoices() {
     ]).catch((e) => setErr(e.message));
   };
 
+  // Which company each office invoices as, and whether it is linked to Greenco
+  // Invoicing yet — better said before an invoice is raised than after.
+  useEffect(() => {
+    api.commissionInvoices.settings().then(setSettings).catch(() => setSettings(null));
+  }, []);
+
+  const officeOf = (region) =>
+    settings?.regions?.find((r) => r.key === region)?.company_name || null;
+  const unlinked = (settings?.invoicing?.enabled ? settings.invoicing.companies || [] : []).filter(
+    (c) => !c.linked,
+  );
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,24 +60,26 @@ export default function CommissionInvoices() {
   // Raise the month's invoice for one contractor: every pending commission in
   // the period becomes a line on it.
   async function raise(row) {
+    const from = officeOf(row.region) || row.region_label;
     if (
       !confirm(
-        `Raise a commission invoice to ${row.contractor_name} for ${formatMoney(
+        `Raise a commission invoice from ${from} to ${row.contractor_name} for ${formatMoney(
           row.pending_commission,
         )} (${row.pending_count} invoice(s), ${monthLabel(month)})?`,
       )
     ) {
       return;
     }
-    setBusyId(row.contractor_id);
+    setBusyId(rowKey(row));
     setMsg(null);
     try {
       const res = await api.commissionInvoices.raise({
         contractor_id: row.contractor_id,
+        region: row.region,
         month,
       });
       setMsg(
-        `Raised ${res.invoice_number} for ${row.contractor_name} (${res.lines} line(s)).` +
+        `Raised ${res.invoice_number} from ${res.company_name} for ${row.contractor_name} (${res.lines} line(s)).` +
           (res.pushed
             ? ` Sent to Greenco Invoicing as ${res.pushed.number}.`
             : res.push_error
@@ -101,6 +120,19 @@ export default function CommissionInvoices() {
       )}
       {msg && <div className="inline-note" style={{ marginBottom: 12 }}>{msg}</div>}
 
+      {unlinked.length > 0 && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }}>
+          {unlinked.map((c) => c.company_name).join(' and ')}{' '}
+          {unlinked.length > 1 ? 'are' : 'is'} not linked to a company in Greenco Invoicing yet, so{' '}
+          {unlinked.length > 1 ? 'those offices’' : 'that office’s'} invoices will raise here but
+          won’t be sent, emailed or chased there. Set{' '}
+          {unlinked
+            .map((c) => `INVOICING_COMPANY_ID_${c.region.toUpperCase()}`)
+            .join(' and ')}{' '}
+          in the server environment.
+        </div>
+      )}
+
       {totals && (
         <div className="stat-row">
           <div className="stat accent">
@@ -135,6 +167,7 @@ export default function CommissionInvoices() {
             <thead>
               <tr>
                 <th>Contractor</th>
+                <th>Invoiced by</th>
                 <th className="num">Invoices</th>
                 <th className="num">Paid to them</th>
                 <th className="num">Commission</th>
@@ -144,10 +177,14 @@ export default function CommissionInvoices() {
             </thead>
             <tbody>
               {summary.contractors.map((r) => (
-                <tr key={r.contractor_id}>
+                <tr key={rowKey(r)}>
                   <td>
                     <strong>{r.contractor_name}</strong>
                     <div className="muted" style={{ fontSize: 12 }}>{r.contractor_email || '—'}</div>
+                  </td>
+                  <td>
+                    {r.region_label}
+                    <div className="muted" style={{ fontSize: 12 }}>{officeOf(r.region) || ''}</div>
                   </td>
                   <td className="num muted">{r.invoice_count}</td>
                   <td className="num muted">{formatMoney(r.invoiced_total)}</td>
@@ -161,13 +198,13 @@ export default function CommissionInvoices() {
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <Link
                       className="btn-ghost btn-sm"
-                      to={`/commission/invoices?month=${month}&contractor_id=${r.contractor_id}`}
+                      to={`/commission/invoices?month=${month}&contractor_id=${r.contractor_id}&region=${r.region}`}
                     >
                       View lines
                     </Link>
                     <button
                       className="btn-primary btn-sm"
-                      disabled={busyId === r.contractor_id || Number(r.pending_commission) <= 0}
+                      disabled={busyId === rowKey(r) || Number(r.pending_commission) <= 0}
                       onClick={() => raise(r)}
                       title={
                         Number(r.pending_commission) > 0
@@ -175,13 +212,13 @@ export default function CommissionInvoices() {
                           : 'Nothing left to invoice for this month'
                       }
                     >
-                      {busyId === r.contractor_id ? 'Raising…' : 'Raise invoice'}
+                      {busyId === rowKey(r) ? 'Raising…' : 'Raise invoice'}
                     </button>
                   </td>
                 </tr>
               ))}
               <tr className="total-row">
-                <td>Total</td>
+                <td colSpan={2}>Total</td>
                 <td className="num">{totals.invoice_count}</td>
                 <td className="num">{formatMoney(totals.invoiced_total)}</td>
                 <td className="num">{formatMoney(totals.commission_total)}</td>
@@ -205,6 +242,7 @@ export default function CommissionInvoices() {
               <tr>
                 <th>Number</th>
                 <th>Contractor</th>
+                <th>Invoiced by</th>
                 <th>Period</th>
                 <th>Issued</th>
                 <th>Due</th>
@@ -228,6 +266,7 @@ export default function CommissionInvoices() {
                     )}
                   </td>
                   <td>{i.contractor_name}</td>
+                  <td className="muted">{i.company_name || i.region_label || '—'}</td>
                   <td className="muted">
                     {formatDate(i.period_start)} - {formatDate(i.period_end)}
                   </td>

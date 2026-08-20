@@ -105,8 +105,15 @@ export const config = {
   invoicing: {
     baseUrl: (process.env.INVOICING_API_URL || '').replace(/\/+$/, ''),
     apiKey: process.env.INVOICING_API_KEY || '',
-    // Which company in the invoicing system raises these invoices.
-    companyId: Number(process.env.INVOICING_COMPANY_ID) || 0,
+    // Which company in the invoicing system raises the invoice — one per
+    // Greenco office, because they are two separate legal entities. The plain
+    // INVOICING_COMPANY_ID is still read as Manchester's, so an installation
+    // set up before Liverpool existed keeps working untouched.
+    companies: {
+      manchester:
+        Number(process.env.INVOICING_COMPANY_ID_MANCHESTER || process.env.INVOICING_COMPANY_ID) || 0,
+      liverpool: Number(process.env.INVOICING_COMPANY_ID_LIVERPOOL) || 0,
+    },
     // Push automatically the moment an invoice is raised (default on when
     // configured); a failed push never blocks the raise, it just shows as
     // "not sent to invoicing" with a Retry.
@@ -114,8 +121,31 @@ export const config = {
     // Whether the pushed invoice arrives as a draft or already marked sent.
     pushAsSent: process.env.INVOICING_PUSH_AS_SENT === 'true',
     timeoutMs: Number(process.env.INVOICING_TIMEOUT_MS) || 15000,
+    // The bridge is on once EITHER office is linked: Liverpool can be added
+    // later without Manchester's invoices stopping in the meantime.
     get enabled() {
-      return Boolean(this.baseUrl && this.apiKey && this.companyId);
+      return Boolean(
+        this.baseUrl && this.apiKey && (this.companies.manchester || this.companies.liverpool),
+      );
+    },
+  },
+
+  // The two Greenco offices, and the company that invoices from each. Which
+  // one bills a job is worked out from the site address on the contractor's
+  // invoice (services/regions.js) — nothing here decides it, this is only who
+  // the answer maps to.
+  regions: {
+    manchester: {
+      company_name: process.env.REGION_MANCHESTER_NAME || 'Greenco Group Limited',
+      vat_number: process.env.REGION_MANCHESTER_VAT_NUMBER || '',
+      company_number: process.env.REGION_MANCHESTER_COMPANY_NUMBER || '',
+      address: process.env.REGION_MANCHESTER_ADDRESS || '',
+    },
+    liverpool: {
+      company_name: process.env.REGION_LIVERPOOL_NAME || 'Greenco Liverpool Limited',
+      vat_number: process.env.REGION_LIVERPOOL_VAT_NUMBER || '',
+      company_number: process.env.REGION_LIVERPOOL_COMPANY_NUMBER || '',
+      address: process.env.REGION_LIVERPOOL_ADDRESS || '',
     },
   },
 

@@ -23,7 +23,13 @@ import {
   contractorSuggestionFrom,
   resolveContractor,
 } from '../src/services/commission.js';
-import { buildInvoicePayload, lineFor } from '../src/services/invoicesManager.js';
+import {
+  buildInvoicePayload,
+  lineFor,
+  companyIdFor,
+  invoicingStatus,
+} from '../src/services/invoicesManager.js';
+import { config } from '../src/config.js';
 import {
   stripPersonName,
   spaceAfterNumber,
@@ -843,4 +849,43 @@ test('"ADS Maintenance" on an invoice finds "ADS Maintenance Ltd" on file', () =
   const m = matchContractorByName('ADS Maintenance', [ADS, BOB]);
   assert.equal(m?.contractor.id, 'ads');
   assert.equal(m.confident, true);
+});
+
+// --- which company raises the invoice ---------------------------------------
+
+test('the push goes to the office\'s own company, and says so when one is missing', () => {
+  const saved = { ...config.invoicing.companies };
+  try {
+    config.invoicing.companies.manchester = 2;
+    config.invoicing.companies.liverpool = 3;
+    assert.equal(companyIdFor('manchester'), 2);
+    assert.equal(companyIdFor('liverpool'), 3);
+    // Anything unrecognised falls back to Manchester rather than guessing: it
+    // is where every invoice went before Liverpool existed.
+    assert.equal(companyIdFor(null), 2);
+
+    // An office nobody has linked yet is a settings problem, and the message
+    // names the setting instead of letting the other system reject it.
+    config.invoicing.companies.liverpool = 0;
+    assert.throws(() => companyIdFor('liverpool'), /INVOICING_COMPANY_ID_LIVERPOOL/);
+    // ...and it never quietly bills the Manchester company instead.
+    assert.throws(() => companyIdFor('liverpool'), /Liverpool/);
+  } finally {
+    Object.assign(config.invoicing.companies, saved);
+  }
+});
+
+test('every office reports whether it is linked', () => {
+  const saved = { ...config.invoicing.companies };
+  try {
+    config.invoicing.companies.manchester = 2;
+    config.invoicing.companies.liverpool = 0;
+    const status = invoicingStatus();
+    assert.deepEqual(
+      status.companies.map((c) => [c.region, c.linked]),
+      [['manchester', true], ['liverpool', false]],
+    );
+  } finally {
+    Object.assign(config.invoicing.companies, saved);
+  }
 });
