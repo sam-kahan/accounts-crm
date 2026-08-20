@@ -495,3 +495,23 @@ export function applyExternalState(current, state) {
     changed: current?.status !== status || (current?.external_status || null) !== (externalStatus || null),
   };
 }
+
+// Who the logged invoice belongs to, once the name has been read off it.
+//
+// Three things can be true at once and were previously conflated: a contractor
+// may already be chosen (the form was opened from a filtered view, or the user
+// picked one), the printed name may match somebody on file, and those two may
+// disagree. Returning that as one shape stops the form reporting "no contractor
+// matches" about an invoice whose contractor is sitting selected in front of it.
+export function resolveContractor({ given = null, match = null }) {
+  if (given) {
+    const mismatch = Boolean(
+      match?.confident && String(match.contractor.id) !== String(given.id),
+    );
+    return { contractor: given, selected_by: 'given', mismatch };
+  }
+  if (match?.confident) {
+    return { contractor: match.contractor, selected_by: 'matched', mismatch: false };
+  }
+  return { contractor: null, selected_by: null, mismatch: false };
+}

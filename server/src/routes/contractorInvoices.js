@@ -17,6 +17,7 @@ import {
   commissionStatus,
   matchContractorByName,
   contractorSuggestionFrom,
+  resolveContractor,
 } from '../services/commission.js';
 import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } from '../services/contractorDocs.js';
 import { extractInvoice } from '../services/invoiceExtract.js';
@@ -148,20 +149,20 @@ router.post(
     const extracted = await extractInvoice(req.file);
     const amounts = reconcileAmounts(extracted);
 
-    // Work out who sent it. If the caller already chose a contractor we use
-    // that; otherwise the name printed on the invoice is matched against the
-    // contractors on file, so an upload fills the whole form in on its own.
-    let contractor = null;
-    let match = null;
-    if (req.body?.contractor_id) {
-      contractor = await getContractor(req.body.contractor_id);
-    } else if (extracted.contractor_name) {
-      const { rows } = await query('SELECT * FROM contractors WHERE active ORDER BY name');
-      match = matchContractorByName(extracted.contractor_name, rows);
-      // Only fill the form in on a confident match — a half-right guess would
-      // silently apply the wrong rate to someone else's invoice.
-      if (match?.confident) contractor = match.contractor;
-    }
+    // Trace the invoice back to a contractor. The name printed on it is always
+    // matched, even when one is already chosen — that is what catches an
+    // invoice logged against the wrong contractor. Only a confident match
+    // selects one on its own: a half-right guess would silently apply somebody
+    // else's rate.
+    const match = extracted.contractor_name
+      ? matchContractorByName(
+          extracted.contractor_name,
+          (await query('SELECT * FROM contractors WHERE active ORDER BY name')).rows,
+        )
+      : null;
+    const given = req.body?.contractor_id ? await getContractor(req.body.contractor_id) : null;
+    const resolved = resolveContractor({ given, match });
+    const contractor = resolved.contractor;
 
     const commission = contractor ? resolveCommission(contractor, {}, amounts) : null;
 
@@ -169,6 +170,11 @@ router.post(
       ...extracted,
       ...amounts,
       contractor_id: contractor ? contractor.id : null,
+      // How we got there: 'given' (already chosen), 'matched' (traced from the
+      // invoice), or null (nobody could be identified).
+      contractor_selected_by: resolved.selected_by,
+      // The chosen contractor isn't the one the invoice names.
+      contractor_mismatch: resolved.mismatch,
       // Everything needed to set this contractor up, if they're new to us. VAT
       // registration is read off the invoice itself: a VAT number, or VAT
       // actually charged, means they're registered. The commission rate is the

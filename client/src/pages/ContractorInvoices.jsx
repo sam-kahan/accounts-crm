@@ -134,11 +134,19 @@ function LogInvoiceModal({
       setStated(d.commission_stated ?? null);
       setSuggestion(d.contractor_id ? null : d.contractor_suggestion || null);
       setMatch(
-        d.contractor_id || d.contractor_match
-          ? { ...(d.contractor_match || {}), name_on_invoice: d.contractor_name }
-          : d.contractor_name
-            ? { name_on_invoice: d.contractor_name, confident: false }
-            : null,
+        d.contractor_name
+          ? {
+              name_on_invoice: d.contractor_name,
+              selected_by: d.contractor_selected_by || null,
+              mismatch: !!d.contractor_mismatch,
+              // The best candidate on file, when there was one.
+              candidate: d.contractor_match?.name || null,
+              chosen:
+                contractors.find((c) => c.id === (d.contractor_id || ''))?.name ||
+                d.contractor_match?.name ||
+                null,
+            }
+          : null,
       );
       setReadNote(
         d.caution
@@ -297,24 +305,37 @@ function LogInvoiceModal({
         )}
         {match && (
           <div
-            className={`inline-note ${match.confident ? '' : 'warn'}`}
+            className={`inline-note ${
+              match.mismatch || !match.selected_by ? 'warn' : ''
+            }`}
             style={{ marginBottom: 14 }}
           >
-            {match.confident ? (
+            {match.mismatch ? (
               <>
-                From <strong>{match.name}</strong> — their agreed rate has been applied.
-                {match.name_on_invoice && match.name_on_invoice !== match.name
-                  ? ` (the invoice says “${match.name_on_invoice}”)`
+                This invoice is from <strong>{match.name_on_invoice}</strong>, but{' '}
+                <strong>{match.chosen}</strong> is selected below. Check which is right — the
+                commission is worked out from whoever is selected.
+              </>
+            ) : match.selected_by === 'matched' ? (
+              <>
+                From <strong>{match.chosen}</strong> - their agreed rate has been applied.
+                {match.name_on_invoice !== match.chosen
+                  ? ` (the invoice says "${match.name_on_invoice}")`
                   : ''}
               </>
-            ) : match.name ? (
+            ) : match.selected_by === 'given' ? (
               <>
-                The invoice says “{match.name_on_invoice}”. Closest on file is{' '}
-                <strong>{match.name}</strong>, but not close enough to be sure — pick the
+                Read from the invoice, logged against <strong>{match.chosen}</strong> - their
+                agreed rate has been applied.
+              </>
+            ) : match.candidate ? (
+              <>
+                The invoice says "{match.name_on_invoice}". Closest on file is{' '}
+                <strong>{match.candidate}</strong>, but not close enough to be sure - pick the
                 contractor below.
               </>
             ) : (
-              <>No contractor on file matches “{match.name_on_invoice}”.</>
+              <>No contractor on file matches "{match.name_on_invoice}".</>
             )}
           </div>
         )}

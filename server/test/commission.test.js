@@ -21,6 +21,7 @@ import {
   matchContractorByName,
   normaliseName,
   contractorSuggestionFrom,
+  resolveContractor,
 } from '../src/services/commission.js';
 import { buildInvoicePayload, lineFor } from '../src/services/invoicesManager.js';
 import {
@@ -793,4 +794,53 @@ test('the property is cleaned of both the tenant and the missing space', () => {
     normaliseExtraction({ property: 'Mrs J Smith, 15New Cross St' }).property,
     '15 New Cross St',
   );
+});
+
+// --- who the invoice gets logged against ------------------------------------
+
+const ADS = { id: 'ads', name: 'ADS Maintenance Ltd' };
+const BOB = { id: 'bob', name: "Bob's Plumbing" };
+
+test('a contractor already chosen stays chosen, and is not reported as unmatched', () => {
+  // The bug this covers: opening the form from a contractor-filtered view
+  // pre-selects one, and the form then announced "no contractor on file
+  // matches" about an invoice whose contractor was sitting selected.
+  const r = resolveContractor({ given: ADS, match: { contractor: ADS, confident: true } });
+  assert.equal(r.contractor.id, 'ads');
+  assert.equal(r.selected_by, 'given');
+  assert.equal(r.mismatch, false);
+});
+
+test('a chosen contractor is kept even when the name could not be matched', () => {
+  const r = resolveContractor({ given: ADS, match: null });
+  assert.equal(r.contractor.id, 'ads');
+  assert.equal(r.selected_by, 'given');
+  assert.equal(r.mismatch, false);
+});
+
+test('an invoice naming someone else than the one selected is flagged', () => {
+  const r = resolveContractor({ given: BOB, match: { contractor: ADS, confident: true } });
+  assert.equal(r.contractor.id, 'bob'); // the choice stands
+  assert.equal(r.mismatch, true); // but it is worth checking
+});
+
+test('a low-confidence candidate never overrides or contradicts a choice', () => {
+  const r = resolveContractor({ given: BOB, match: { contractor: ADS, confident: false } });
+  assert.equal(r.contractor.id, 'bob');
+  assert.equal(r.mismatch, false);
+});
+
+test('with nothing chosen, only a confident match selects one', () => {
+  assert.equal(
+    resolveContractor({ match: { contractor: ADS, confident: true } }).selected_by,
+    'matched',
+  );
+  assert.equal(resolveContractor({ match: { contractor: ADS, confident: false } }).contractor, null);
+  assert.equal(resolveContractor({}).selected_by, null);
+});
+
+test('"ADS Maintenance" on an invoice finds "ADS Maintenance Ltd" on file', () => {
+  const m = matchContractorByName('ADS Maintenance', [ADS, BOB]);
+  assert.equal(m?.contractor.id, 'ads');
+  assert.equal(m.confident, true);
 });
