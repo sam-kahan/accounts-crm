@@ -107,7 +107,10 @@ From the Greenco logo — use these, don't invent colours:
   - Staff are invited by email (`routes/users.js` → `sendInviteEmail`): a
     password is never set by an administrator, only by the person themselves.
     Leavers are **deactivated, not deleted**, so their work stays attributable;
-    delete is only allowed for someone who never signed in.
+    delete is only allowed for an invitation that was never taken up
+    (`invited_at` set, `last_login_at` null). "No login recorded" is NOT that
+    test — accounts predating this feature have none either, and deleting one
+    would destroy a colleague's account rather than tidy away a mistake.
 - Manage users in the app: **Admin → Staff & access**. The script
   `node server/src/scripts/create-user.mjs <email> [name]` still exists for
   bootstrapping the first administrator (re-run to reset a password). Scripts that hit the API (bulk-import) log in

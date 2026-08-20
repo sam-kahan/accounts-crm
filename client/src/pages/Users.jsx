@@ -260,7 +260,7 @@ export default function Users() {
   }
 
   async function remove(u) {
-    if (!confirm(`Remove ${u.name || u.email}? They have never signed in.`)) return;
+    if (!confirm(`Remove ${u.name || u.email}? They were invited and never signed in.`)) return;
     try {
       await api.users.remove(u.id);
       await load();
@@ -363,16 +363,20 @@ export default function Users() {
                   <td className="muted">
                     {u.last_login_at ? (
                       formatDate(u.last_login_at)
-                    ) : (
+                    ) : u.invited_at ? (
                       <span className="badge amber">invited, not yet signed in</span>
+                    ) : (
+                      <span title="This account is older than staff accounts, so there is nothing recorded yet — it will show the next time they sign in.">
+                        —
+                      </span>
                     )}
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(u)}>Edit</button>
-                    {u.active && !u.last_login_at && (
+                    {u.active && !u.last_login_at && u.invited_at && (
                       <button className="btn-ghost btn-sm" onClick={() => resend(u)}>Resend invite</button>
                     )}
-                    {!u.last_login_at && u.id !== me?.id && (
+                    {!u.last_login_at && u.invited_at && u.id !== me?.id && (
                       <button className="btn-danger btn-sm" onClick={() => remove(u)}>Remove</button>
                     )}
                   </td>

@@ -232,16 +232,22 @@ router.post(
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
-    const { rows } = await query('SELECT id, last_login_at FROM users WHERE id = $1', [
-      req.params.id,
-    ]);
+    const { rows } = await query(
+      'SELECT id, last_login_at, invited_at FROM users WHERE id = $1',
+      [req.params.id],
+    );
     const user = rows[0];
     if (!user) throw new HttpError(404, 'User not found');
     if (req.user?.id === user.id) throw new HttpError(400, 'You can’t delete your own account.');
-    if (user.last_login_at) {
+    // Only an invitation that was never taken up can be deleted. "No login
+    // recorded" is not the same thing: accounts that predate staff accounts
+    // have none either, and deleting one of those would destroy a colleague's
+    // account rather than tidying away a mistake.
+    const neverAccepted = !user.last_login_at && !!user.invited_at;
+    if (!neverAccepted) {
       throw new HttpError(
         409,
-        'This person has used the system — deactivate them instead, so their work stays attributable.',
+        'This account is in use — deactivate it instead, so the work stays attributable.',
       );
     }
     await query('DELETE FROM users WHERE id = $1', [req.params.id]);
