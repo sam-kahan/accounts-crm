@@ -5,6 +5,7 @@ import { csvCell, toCsv } from '../src/lib/csv.js';
 import { addDays, monthRange, monthLabel } from '../src/lib/dates.js';
 import {
   commissionFor,
+  dealFor,
   commissionPence,
   reconcileAmounts,
   invoiceTotals,
@@ -946,4 +947,28 @@ test('an invoice reading gets the address and the office, without the date', () 
   assert.equal(regionForAddress(out.property).region, 'liverpool');
   // "on the front door" is part of what was done and stays where it is.
   assert.equal(out.description, 'Changed the lock on the front door.');
+});
+
+test('a flat-fee invoice keeps its fee when it is amended', () => {
+  // The row snapshots the whole agreement. Before migration 015 the flat fee
+  // wasn't a column on it, so re-costing an amended invoice read a fee of zero
+  // and wiped the commission on every fixed-fee job anyone corrected.
+  const contractor = { commission_type: 'fixed', commission_fixed: 15, commission_basis: 'inclusive' };
+  const row = {
+    commission_type: 'fixed',
+    commission_rate: 0,
+    commission_fixed: 15,
+    commission_on: 'net',
+    commission_basis: 'inclusive',
+  };
+  const snapshot = dealFor(row);
+  assert.equal(snapshot.commission_fixed, 15);
+  assert.equal(commissionFor({ ...contractor, ...snapshot }, { net_amount: 200, total_amount: 240 }), 15);
+
+  // A fee renegotiated since still doesn't re-rate what was already logged.
+  const renegotiated = { ...contractor, commission_fixed: 25 };
+  assert.equal(
+    commissionFor({ ...renegotiated, ...snapshot }, { net_amount: 200, total_amount: 240 }),
+    15,
+  );
 });

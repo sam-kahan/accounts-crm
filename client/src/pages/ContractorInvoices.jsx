@@ -64,6 +64,56 @@ function previewCommission(contractor, { net, vat, total }) {
   return basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
 }
 
+
+// Ask the server which office an address belongs to, the same way the save path
+// will. Debounced, because it runs while the address is being typed.
+function useDetectedRegion(property) {
+  const [detected, setDetected] = useState(null);
+  useEffect(() => {
+    const address = (property || '').trim();
+    if (!address) {
+      setDetected(null);
+      return undefined;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      api.contractorInvoices
+        .region(address)
+        .then((d) => live && setDetected(d))
+        .catch(() => live && setDetected(null));
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [property]);
+  return detected;
+}
+
+// The office field, with whatever the address says about it underneath. Shared
+// by logging an invoice and amending one, so the two can never explain the
+// same address differently.
+function RegionField({ value, onChange, detected }) {
+  return (
+    <label className="field">
+      <span className="lbl">Invoiced by</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Work it out from the address</option>
+        {REGIONS.map((r) => (
+          <option key={r.key} value={r.key}>{r.label}</option>
+        ))}
+      </select>
+      <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {value
+          ? `${REGION_LABEL[value]} raises the commission invoice for this job.`
+          : detected?.region
+            ? `${detected.region_label} — ${detected.reason}`
+            : detected?.reason || 'Manchester and Liverpool invoice separately.'}
+      </span>
+    </label>
+  );
+}
+
 function LogInvoiceModal({
   contractors,
   aiEnabled,
@@ -88,9 +138,6 @@ function LogInvoiceModal({
     notes: '',
   });
   const [file, setFile] = useState(null);
-  // Why the office ended up where it did — shown either way, because "we
-  // couldn't tell" and "we read it off the postcode" both want checking.
-  const [regionNote, setRegionNote] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState(null);
@@ -106,6 +153,9 @@ function LogInvoiceModal({
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const contractor = contractors.find((c) => c.id === form.contractor_id) || null;
+  // Why the office ended up where it did — read live off the address, so a
+  // property typed by hand is explained the same way an uploaded one is.
+  const detectedRegion = useDetectedRegion(form.property);
 
   const computed = useMemo(
     () =>
@@ -141,7 +191,6 @@ function LogInvoiceModal({
         // which office this is, the postcode doesn't get to argue.
         region: prev.region || d.region || '',
       }));
-      setRegionNote(d.region_reason || null);
       setStated(d.commission_stated ?? null);
       setSuggestion(d.contractor_id ? null : d.contractor_suggestion || null);
       setMatch(
@@ -322,10 +371,10 @@ function LogInvoiceModal({
         {readNote && (
           <div className="inline-note" style={{ marginBottom: 14 }}>{readNote}</div>
         )}
-        {regionNote && !form.region && (
+        {detectedRegion && !detectedRegion.region && !form.region && (
           <div className="inline-note warn" style={{ marginBottom: 14 }}>
             Which office is this job — {REGION_LABEL.manchester} or {REGION_LABEL.liverpool}?{' '}
-            {regionNote} Choose one under <strong>Invoiced by</strong> below.
+            {detectedRegion.reason} Choose one under <strong>Invoiced by</strong> below.
           </div>
         )}
         {match && (
@@ -440,23 +489,11 @@ function LogInvoiceModal({
             <span className="lbl">Property</span>
             <input value={form.property} onChange={(e) => set('property', e.target.value)} />
           </label>
-          <label className="field">
-            <span className="lbl">Invoiced by</span>
-            <select value={form.region} onChange={(e) => set('region', e.target.value)}>
-              <option value="">Work it out from the address</option>
-              {REGIONS.map((r) => (
-                <option key={r.key} value={r.key}>{r.label}</option>
-              ))}
-            </select>
-            <span
-              className="muted"
-              style={{ fontSize: 12, marginTop: 4 }}
-            >
-              {form.region
-                ? `${REGION_LABEL[form.region]} raises the commission invoice for this job.`
-                : regionNote || 'Manchester and Liverpool invoice separately.'}
-            </span>
-          </label>
+          <RegionField
+            value={form.region}
+            onChange={(v) => set('region', v)}
+            detected={detectedRegion}
+          />
           <label className="field">
             <span className="lbl">Landlord / statement ref</span>
             <input value={form.landlord_ref} onChange={(e) => set('landlord_ref', e.target.value)} />
@@ -558,12 +595,221 @@ function LogInvoiceModal({
   );
 }
 
+
+// Amend a logged invoice. Only the details are editable — the contractor is
+// not, because the commission was costed under THEIR agreement and the row
+// carries that agreement as a snapshot; logging it against somebody else is a
+// different invoice, so it is deleted and logged again. The document stays as
+// uploaded: it is the evidence, and a correction to what was read off it must
+// not quietly replace it.
+function EditInvoiceModal({ invoice, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    invoice_number: invoice.invoice_number || '',
+    invoice_date: invoice.invoice_date || '',
+    property: invoice.property || '',
+    region: invoice.region || '',
+    landlord_ref: invoice.landlord_ref || '',
+    description: invoice.description || '',
+    net_amount: invoice.net_amount ?? '',
+    vat_amount: invoice.vat_amount ?? '',
+    total_amount: invoice.total_amount ?? '',
+    paid_from: invoice.paid_from || 'client',
+    paid_on: invoice.paid_on || '',
+    notes: invoice.notes || '',
+  });
+  // A hand-typed figure is kept as an override; blank means "use the agreed
+  // rate", which is what the server recomputes.
+  const [commission, setCommission] = useState(
+    invoice.commission_override ? String(invoice.commission_amount) : '',
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const detectedRegion = useDetectedRegion(form.property);
+
+  // The deal as it stood when this invoice was logged, not the contractor's
+  // deal today — the same snapshot the server recomputes from.
+  const computed = useMemo(
+    () =>
+      previewCommission(invoice, {
+        net: form.net_amount,
+        vat: form.vat_amount,
+        total: form.total_amount,
+      }),
+    [invoice, form.net_amount, form.vat_amount, form.total_amount],
+  );
+  const overridden = commission !== '' && Number(commission) !== computed;
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.contractorInvoices.update(invoice.id, {
+        ...form,
+        net_amount: num(form.net_amount),
+        vat_amount: num(form.vat_amount),
+        total_amount: num(form.total_amount),
+        paid_on: form.paid_on || null,
+        // Blank means "whatever the office works out to"; the server keeps the
+        // one already stored rather than re-reading a corrected address behind
+        // anyone's back.
+        region: form.region || undefined,
+        commission_amount: overridden ? Number(commission) : undefined,
+      });
+      onSaved(saved);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Amend ${invoice.invoice_number || 'invoice'}`} onClose={onClose}>
+      {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
+      <form onSubmit={save}>
+        <div className="inline-note" style={{ marginBottom: 14 }}>
+          From <strong>{invoice.contractor_name}</strong>, logged at{' '}
+          {invoice.commission_type === 'fixed'
+            ? `${formatMoney(invoice.commission_fixed)} a job`
+            : `${Number(invoice.commission_rate)}%`}
+          {invoice.has_document ? ' · the uploaded document stays as it is' : ''}.
+        </div>
+
+        <div className="form-grid">
+          <label className="field">
+            <span className="lbl">Their invoice number</span>
+            <input
+              value={form.invoice_number}
+              onChange={(e) => set('invoice_number', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Invoice date *</span>
+            <input
+              type="date"
+              required
+              value={form.invoice_date}
+              onChange={(e) => set('invoice_date', e.target.value)}
+            />
+            <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Goes into {monthLabel((form.invoice_date || '').slice(0, 7)) || '—'}
+            </span>
+          </label>
+          <label className="field">
+            <span className="lbl">Property</span>
+            <input value={form.property} onChange={(e) => set('property', e.target.value)} />
+          </label>
+          <RegionField
+            value={form.region}
+            onChange={(v) => set('region', v)}
+            detected={detectedRegion}
+          />
+          <label className="field">
+            <span className="lbl">Landlord / statement ref</span>
+            <input value={form.landlord_ref} onChange={(e) => set('landlord_ref', e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">Paid from</span>
+            <select value={form.paid_from} onChange={(e) => set('paid_from', e.target.value)}>
+              <option value="client">Client account</option>
+              <option value="business">Business account</option>
+            </select>
+          </label>
+          <label className="field full">
+            <span className="lbl">Works</span>
+            <input value={form.description} onChange={(e) => set('description', e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">Net (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.net_amount}
+              onChange={(e) => set('net_amount', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">VAT (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.vat_amount}
+              onChange={(e) => set('vat_amount', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Invoice total (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.total_amount}
+              onChange={(e) => set('total_amount', e.target.value)}
+              placeholder="Leave blank to use net + VAT"
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Paid on</span>
+            <input
+              type="date"
+              value={form.paid_on}
+              onChange={(e) => set('paid_on', e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className={`calc-box ${overridden ? 'overridden' : ''}`}>
+          <div>
+            <div className="calc-label">
+              {overridden ? 'Commission (edited by hand)' : 'Commission to reclaim'}
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Worked out from the rate this invoice was logged under
+              {overridden ? ` · that rate gives ${formatMoney(computed)}` : ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="calc-value">{formatMoney(overridden ? commission : computed)}</div>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={commission}
+              onChange={(e) => setCommission(e.target.value)}
+              placeholder="Override"
+              style={{ width: 110 }}
+              aria-label="Override the commission amount"
+            />
+          </div>
+        </div>
+
+        <label className="field">
+          <span className="lbl">Notes</span>
+          <textarea rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+        </label>
+
+        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export default function ContractorInvoices() {
   const [params, setParams] = useSearchParams();
   const [rows, setRows] = useState(null);
   const [contractors, setContractors] = useState([]);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [logging, setLogging] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -809,8 +1055,22 @@ export default function ContractorInvoices() {
                     )}
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {r.status !== 'invoiced' && r.status !== 'paid' && (
+                    {r.status === 'invoiced' || r.status === 'paid' ? (
+                      // On a commission invoice: changing it now would leave
+                      // what was billed and what is recorded disagreeing. Void
+                      // that invoice and the line comes back here to amend.
+                      <span
+                        className="muted"
+                        style={{ fontSize: 12 }}
+                        title={`Void ${r.commission_invoice_number || 'the commission invoice'} to amend this`}
+                      >
+                        billed
+                      </span>
+                    ) : (
                       <>
+                        <button className="btn-ghost btn-sm" onClick={() => setEditing(r)}>
+                          Amend
+                        </button>
                         <button className="btn-ghost btn-sm" onClick={() => waive(r)}>
                           {r.waived ? 'Un-waive' : 'Waive'}
                         </button>
@@ -830,6 +1090,26 @@ export default function ContractorInvoices() {
           </table>
         )}
       </div>
+
+      {editing && (
+        <EditInvoiceModal
+          invoice={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(saved) => {
+            setEditing(null);
+            const savedMonth = (saved?.invoice_date || '').slice(0, 7);
+            setNotice(
+              savedMonth && savedMonth !== month
+                ? {
+                    month: savedMonth,
+                    text: `Saved — but it's now dated ${formatDate(saved.invoice_date)}, so it's in ${monthLabel(savedMonth)}, not the month you're viewing.`,
+                  }
+                : null,
+            );
+            load();
+          }}
+        />
+      )}
 
       {logging && (
         <LogInvoiceModal

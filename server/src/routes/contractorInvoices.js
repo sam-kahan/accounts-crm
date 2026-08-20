@@ -25,11 +25,11 @@ import { extractInvoice } from '../services/invoiceExtract.js';
 
 const router = Router();
 
-const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_amount'];
+const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_fixed', 'commission_amount'];
 
 const COLS = `i.id, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
-  i.commission_on, i.commission_basis, i.commission_amount, i.commission_override,
+  i.commission_on, i.commission_basis, i.commission_fixed, i.commission_amount, i.commission_override,
   i.commission_vat_inclusive, i.region, i.paid_from,
   i.paid_on, i.waived, i.waived_reason, i.commission_invoice_id, i.filename, i.mimetype,
   i.size_bytes, i.extracted, i.notes, i.created_at, i.updated_at`;
@@ -229,6 +229,23 @@ router.post(
   }),
 );
 
+// Which office an address belongs to, without saving anything — so a property
+// typed or corrected by hand gets the same answer, and the same explanation, as
+// one read off an uploaded invoice.
+router.get(
+  '/region',
+  asyncHandler(async (req, res) => {
+    const property = String(req.query.property || '').slice(0, 300);
+    const detected = regionForAddress(property);
+    res.json({
+      region: detected.region,
+      region_label: REGION_LABEL[detected.region] || null,
+      reason: detected.reason,
+      source: detected.source || null,
+    });
+  }),
+);
+
 // --- reporting --------------------------------------------------------------
 
 // Resolve the report window: ?month=YYYY-MM, or explicit ?from/&to, defaulting
@@ -418,9 +435,9 @@ router.post(
            net_amount, vat_amount, total_amount, commission_type, commission_rate, commission_on,
            commission_basis, commission_amount, commission_override, commission_vat_inclusive,
            paid_from, paid_on, notes,
-           filename, mimetype, size_bytes, storage_path, extracted, region)
+           filename, mimetype, size_bytes, storage_path, extracted, region, commission_fixed)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$24,
-                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25)
+                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25,$26)
          RETURNING id`,
         [
           d.contractor_id, d.invoice_number || null, d.invoice_date, d.property || null,
@@ -435,6 +452,9 @@ router.post(
           // must not re-rate commission they have already collected.
           !contractor.vat_registered,
           region,
+          // The flat fee is part of the agreement, so it is snapshotted with
+          // the rest of it — a renegotiated fee must not re-cost this invoice.
+          commission.commission_fixed,
         ],
       );
 
@@ -482,7 +502,9 @@ router.put(
       total_amount: d.total_amount,
     });
     // Recompute against the snapshot on the row, not today's contractor deal —
-    // re-saving an old invoice must not silently re-rate it.
+    // re-saving an old invoice must not silently re-rate it. The row carries
+    // every part of the deal including the flat fee (migration 015), so the
+    // contractor underneath only supplies what isn't costing anything.
     const commission = resolveCommission(
       { ...contractor, ...dealFor(current) },
       d,
@@ -498,7 +520,7 @@ router.put(
          commission_type = $10, commission_rate = $11, commission_on = $12,
          commission_basis = $13, commission_amount = $14, commission_override = $15,
          paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
-         region = COALESCE($19, region)
+         region = COALESCE($19, region), commission_fixed = $20
        WHERE id = $1 RETURNING id`,
       [
         req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
@@ -512,6 +534,7 @@ router.put(
         // would let a tidied-up property line move an invoice between two
         // companies without anyone asking for it.
         isRegion(d.region) ? d.region : null,
+        commission.commission_fixed,
       ],
     );
     const { rows: full } = await query(`SELECT ${JOINED} ${FROM} WHERE i.id = $1`, [rows[0].id]);

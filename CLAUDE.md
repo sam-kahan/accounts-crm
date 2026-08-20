@@ -179,6 +179,12 @@ contractor at month end.
 - `contractor_invoices` is one row per invoice received. The commission is
   computed server-side from the snapshot — a hand-typed figure is kept but
   flagged `commission_override`, so a month-end total can always be explained.
+  The snapshot is the WHOLE agreement including the flat fee (migration `015`);
+  `dealFor()` reading a fee that wasn't a column would have zeroed the
+  commission on every fixed-fee invoice amended. **Amend** (`PUT`) re-costs from
+  that snapshot, never from today's deal, and is refused once the line is on a
+  commission invoice — void that first, which releases it back to pending. The
+  contractor can't be changed (the deal is theirs); that's a delete and re-log.
   A partial unique index on `(contractor_id, lower(invoice_number))` stops the
   same invoice being logged (and claimed) twice.
 - `commission_invoices` is what we raise. Raising **locks the pending rows
@@ -261,6 +267,16 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-20 — amending a logged invoice
+- **Amend** on each pending row of `/commission/invoices` opens the details for
+  correction (`PUT /contractor-invoices/:id`, which existed but had no UI). The
+  uploaded document is left as it is — it's the evidence.
+- `GET /contractor-invoices/region?property=` answers "which office is this
+  address, and why" without saving, so a hand-typed or corrected address is
+  explained live in both the log and amend forms.
+- Migration `015` snapshots `commission_fixed` on the invoice row, closing the
+  bug that would have zeroed a flat-fee commission the moment anyone amended it.
 
 ### 2026-08-20 — Manchester and Liverpool invoice separately
 - **Two companies, routed by the site address.** Commission used to be invoiced

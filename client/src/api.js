@@ -183,6 +183,10 @@ export const api = {
     exportUrl: (params = {}) =>
       `/api/contractor-invoices/export.csv?${new URLSearchParams(clean(params)).toString()}`,
     aiConfig: () => request('/contractor-invoices/ai/config'),
+    // Which office a property address belongs to, and why — the same answer the
+    // save path will reach, so the form can show it before anyone presses save.
+    region: (property) =>
+      request(`/contractor-invoices/region?property=${encodeURIComponent(property || '')}`),
     // Read an uploaded invoice and hand back the fields it contains.
     extract: (file, contractorId) => {
       const fd = new FormData();
