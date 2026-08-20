@@ -12,6 +12,7 @@ import {
   REGION_LABEL,
 } from '../api';
 import Modal from '../components/Modal.jsx';
+import MonthSelect from '../components/MonthSelect.jsx';
 
 const STATUS_BADGE = {
   pending: 'amber',
@@ -674,12 +675,7 @@ export default function ContractorInvoices() {
 
       <div className="toolbar flex-between">
         <div className="btn-row">
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setParam('month', e.target.value)}
-            aria-label="Month"
-          />
+          <MonthSelect value={month} onChange={(m) => setParam('month', m)} />
           <select
             value={contractorId}
             onChange={(e) => setParam('contractor_id', e.target.value)}

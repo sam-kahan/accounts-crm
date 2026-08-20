@@ -8,6 +8,7 @@ import {
   monthLabel,
   INVOICE_STATUS_LABEL,
 } from '../api';
+import MonthSelect from '../components/MonthSelect.jsx';
 
 // A row is a contractor's work for ONE office: Manchester and Liverpool are
 // separate companies and cannot share an invoice, so they are raised separately.
@@ -100,12 +101,7 @@ export default function CommissionInvoices() {
     <>
       <div className="toolbar flex-between">
         <div className="btn-row">
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            aria-label="Month"
-          />
+          <MonthSelect value={month} onChange={setMonth} />
           <span className="muted">
             Commission collected by contractors in {monthLabel(month)}, ready to invoice back.
           </span>
