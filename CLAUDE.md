@@ -184,7 +184,13 @@ contractor at month end.
   apply someone else's rate. No match offers to set the contractor up from the
   invoice — name, address, contact, and VAT registration read off the document
   (`contractorSuggestionFrom()`); only the commission rate is asked for, since
-  an invoice can't state the agreement. The document is third-party
+  an invoice can't state the agreement. The **property address is stripped of
+  any person's name** (`stripPersonName`) — invoices print the tenant above the
+  address, and that address is copied onto the commission invoice the
+  contractor receives, so the name would travel to a third party. Only
+  unmistakable name patterns are removed, and never from a segment carrying an
+  address word: mangling "A Block" or "Rose Cottage" would be the worse bug.
+  The document is third-party
   material: the system prompt says so explicitly (a PDF can't be wrapped in
   `<untrusted_content>` markers, plain text is), and every field is clamped by
   `normaliseExtraction` before it reaches the form. Gated on

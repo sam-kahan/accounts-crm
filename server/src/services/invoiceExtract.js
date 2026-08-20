@@ -48,7 +48,11 @@ Read the document and report:
 - the invoice date, as YYYY-MM-DD (if only a date of works is shown, use that and say so in "caution")
 - the amounts, as plain numbers with no currency symbol: the net (before VAT), the VAT, and the
   total payable. If VAT is not shown, the total IS the net and vat is 0.
-- the property or job address the work relates to
+- the property or job address the work relates to — the ADDRESS ONLY. Invoices often
+  print the tenant's or occupier's name above the address ("Mrs J Smith, 14 Sefton Road",
+  "c/o Mr Jones", "FAO: Sarah Davies"). Leave every person's name out: this address goes
+  onto an invoice sent to a third party, and the tenant's name has no business being on it.
+  Keep building names that are part of the address itself, like "Rose Cottage" or "Flat 2".
 - a short description of the work done (one line, max ~120 characters)
 - the contractor's business name as printed, and their address, email, phone and VAT
   registration number if the invoice shows them (these set up a contractor we haven't
@@ -110,6 +114,60 @@ function cleanAmount(v) {
   return Math.round(n * 100) / 100;
 }
 
+// A property address arrives with the tenant's name on the front more often
+// than not. It travels onto the commission invoice the contractor receives, so
+// the name comes off — the model is told to leave it out, and this is the net
+// that catches the times it doesn't.
+//
+// Only patterns that are unmistakably a person are removed. A leading segment
+// with no house number is NOT enough on its own: "Rose Cottage", "The Old
+// Vicarage" and "Flat 2" are all addresses, and mangling a real one would be a
+// worse bug than the one being fixed.
+const PERSON_PATTERNS = [
+  // A title, with or without "and": "Mrs J Smith", "Mr & Mrs Smith", "Dr Patel".
+  /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev)\b[\s.]*(and|&|\+)?\s*(mr|mrs|miss|ms|dr)?\b[\s.]*[a-z][a-z'’-]*(\s+[a-z][a-z'’-]*){0,3}$/i,
+  // Initials then a surname: "J Smith", "A.B. Patel", "J.S. O'Neill".
+  /^([a-z]\.?\s*){1,3}[a-z][a-z'’-]{1,}$/i,
+  // Two or three plain words that are all names — only when flagged as a person
+  // by the marker stripped below (handled by the caller).
+];
+
+const PERSON_MARKER = /^(c\/o|care of|attn|attention|fao|f\.a\.o\.?|for the attention of)\b[:\s-]*/i;
+
+// Words that make a segment part of the address whatever else it looks like.
+// Without this, "A Block" reads as initials-plus-surname and a real block
+// address would lose its first line.
+const ADDRESS_WORDS =
+  /\b(flat|apartment|apt|unit|block|house|cottage|court|lodge|villa|farm|mill|barn|studio|suite|annexe|annex|wing|floor|room|no|number|street|st|road|rd|lane|ln|avenue|ave|close|drive|way|place|park|terrace|grove|gardens?|mews|square|sq|hall|manor|vicarage|rectory)\b/i;
+
+export function stripPersonName(value) {
+  if (!value) return value;
+  // Invoices break the address across lines or commas; treat both as segments.
+  const segments = String(value)
+    .split(/\n|,/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const kept = [];
+  let stillLeading = true;
+  for (const segment of segments) {
+    if (stillLeading) {
+      const marked = PERSON_MARKER.test(segment);
+      const bare = segment.replace(PERSON_MARKER, '').trim();
+      // "c/o Mr Jones" and "FAO Sarah Davies" go whatever the name looks like;
+      // an unmarked segment has to look like a person on its own.
+      const looksLikeAddress = ADDRESS_WORDS.test(bare);
+      if (marked || (!looksLikeAddress && PERSON_PATTERNS.some((re) => re.test(bare)))) continue;
+      stillLeading = false;
+    }
+    kept.push(segment);
+  }
+
+  const cleaned = kept.join(', ').trim();
+  // If the "address" was only ever a name, better nothing than a tenant's name.
+  return cleaned || null;
+}
+
 const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 function cleanEmail(v) {
   const s = cleanStr(v, 320);
@@ -141,7 +199,7 @@ export function normaliseExtraction(raw) {
     net_amount: cleanAmount(r.net_amount),
     vat_amount: cleanAmount(r.vat_amount),
     total_amount: cleanAmount(r.total_amount),
-    property: cleanStr(r.property, 200),
+    property: stripPersonName(cleanStr(r.property, 200)),
     description: cleanStr(r.description, 300),
     contractor_name: cleanStr(r.contractor_name, 200),
     contractor_address: cleanStr(r.contractor_address, 500),

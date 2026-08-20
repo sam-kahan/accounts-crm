@@ -22,6 +22,7 @@ import {
   contractorSuggestionFrom,
 } from '../src/services/commission.js';
 import { buildInvoicePayload, lineFor } from '../src/services/invoicesManager.js';
+import { stripPersonName, normaliseExtraction } from '../src/services/invoiceExtract.js';
 
 // --- money -----------------------------------------------------------------
 
@@ -660,4 +661,58 @@ test('VAT registration is read off the invoice, either way it shows', () => {
   const byVatCharged = contractorSuggestionFrom({ contractor_name: 'X' }, { vat_amount: 39.6 });
   assert.equal(byVatCharged.vat_registered, true);
   assert.equal(contractorSuggestionFrom({}, {}), null);
+});
+
+// --- tenant names must not ride along on the property address ---------------
+// The property goes onto the commission invoice the contractor receives, so a
+// tenant's name printed above the address has to come off.
+
+test('a tenant name above the address is stripped', () => {
+  const cases = [
+    ['Mrs J Smith, 14 Sefton Road, Liverpool L15 2XX', '14 Sefton Road, Liverpool L15 2XX'],
+    ['Mr & Mrs Smith, 14 Sefton Road', '14 Sefton Road'],
+    ['J Smith, 14 Sefton Road', '14 Sefton Road'],
+    ['A.B. Patel, 14 Sefton Road', '14 Sefton Road'],
+    ['c/o Mr Jones, 14 Sefton Road', '14 Sefton Road'],
+    ['FAO: Sarah Davies\n14 Sefton Road', '14 Sefton Road'],
+    ['Attn Mr Smith, 14 Sefton Road', '14 Sefton Road'],
+    ['Dr Patel, Flat 2, 30 Park Road', 'Flat 2, 30 Park Road'],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(stripPersonName(input), expected, input);
+  }
+});
+
+test('a real address is never mangled, whatever it starts with', () => {
+  // Getting this wrong would be worse than the bug it fixes: these are all
+  // addresses, and the first line is the part that identifies the property.
+  const untouched = [
+    '14 Sefton Road, Liverpool L15 2XX',
+    'Rose Cottage, Mill Lane, Wirral',
+    'The Old Vicarage, Church Lane',
+    'Flat 2, 30 Park Road',
+    'Apartment 5, The Quays',
+    'Unit 7, Speke Business Park',
+    // Block management: "A Block" reads like initials + surname, but the
+    // address words give it away.
+    'A Block, 12 Main Street',
+    'Block A, 12 Main Street',
+    'B Court, Sefton Park',
+    'St Marys House, Church Lane',
+  ];
+  for (const address of untouched) {
+    assert.equal(stripPersonName(address), address, address);
+  }
+});
+
+test('an address that is only a name comes back empty, not as the name', () => {
+  assert.equal(stripPersonName('Mrs J Smith'), null);
+  assert.equal(stripPersonName('c/o Mr Jones'), null);
+  assert.equal(stripPersonName(''), '');
+  assert.equal(stripPersonName(null), null);
+});
+
+test('the extractor applies it to the property it returns', () => {
+  const out = normaliseExtraction({ property: 'Mrs J Smith, 14 Sefton Road' });
+  assert.equal(out.property, '14 Sefton Road');
 });
