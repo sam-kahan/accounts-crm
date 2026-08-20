@@ -423,3 +423,76 @@ textarea { resize: vertical; min-height: 70px; }
 @media (hover: none) {
   button, .btn, .sidebar nav a { min-height: 40px; }
 }
+
+/* --- Commission module ---------------------------------------------------- */
+/* Filter controls sit side by side on one line rather than stacking: inputs are
+   full-width by default, which is right in a form and wrong in a toolbar. */
+.toolbar .btn-row > input,
+.toolbar .btn-row > select { width: auto; min-width: 150px; }
+@media (max-width: 900px) {
+  .toolbar .btn-row > input,
+  .toolbar .btn-row > select { flex: 1 1 160px; min-width: 0; }
+}
+
+/* Money reads down a column: tabular figures, right-aligned, so totals line up. */
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.num { text-align: right; }
+.total-row td { border-top: 2px solid var(--navy); font-weight: 700; }
+
+/* Drop zone for an invoice document. */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 22px 18px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover, .dropzone.over { border-color: var(--green); background: var(--green-050); }
+.dropzone.filled { border-style: solid; border-color: var(--green); background: var(--green-050); color: var(--text); }
+.dropzone input[type="file"] { display: none; }
+.dropzone .dz-name { font-weight: 600; color: var(--navy); word-break: break-all; }
+.dropzone .dz-hint { font-size: 12px; margin-top: 4px; }
+
+/* The computed-commission callout on the log-invoice form. */
+.calc-box {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: var(--radius);
+  background: var(--green-050); border: 1px solid #dce8b8; margin: 4px 0 16px;
+}
+.calc-box .calc-label { font-size: 13px; color: var(--green-600); font-weight: 600; }
+.calc-box .calc-value { font-size: 22px; font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; }
+.calc-box.overridden { background: var(--warn-bg); border-color: #fde68a; }
+.calc-box.overridden .calc-label { color: var(--warn); }
+
+/* --- Printable commission invoice ---------------------------------------- */
+.invoice-sheet {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 34px; box-shadow: var(--shadow); max-width: 820px;
+}
+.invoice-sheet .inv-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.invoice-sheet h2 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.01em; }
+.invoice-sheet .inv-meta { text-align: right; font-size: 13px; color: var(--text-muted); }
+.invoice-sheet .inv-meta strong { color: var(--text); }
+.invoice-sheet .inv-parties { display: flex; gap: 40px; flex-wrap: wrap; margin: 26px 0; font-size: 13px; }
+.invoice-sheet .inv-parties .lbl { margin-bottom: 4px; }
+.invoice-sheet .inv-parties address { font-style: normal; white-space: pre-line; }
+.invoice-sheet table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.invoice-sheet th { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--green); font-size: 12px; }
+.invoice-sheet td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.invoice-sheet .pay-box {
+  margin-top: 24px; padding: 14px 16px; border-radius: var(--radius);
+  background: var(--green-050); border: 1px solid #dce8b8; font-size: 13px; white-space: pre-line;
+}
+.invoice-sheet .inv-foot { margin-top: 26px; font-size: 12px; color: var(--text-muted); }
+
+@media print {
+  /* Print just the invoice: no chrome, no shadows, no wasted ink. */
+  .sidebar, .topbar, .toolbar, .page-actions, .no-print, .nav-backdrop { display: none !important; }
+  .app, .main, .content { display: block; padding: 0; margin: 0; max-width: none; }
+  body { background: #fff; }
+  .invoice-sheet { border: none; box-shadow: none; padding: 0; max-width: none; }
+  a { text-decoration: none; }
+}

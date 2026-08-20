@@ -13,6 +13,14 @@ const AREAS = [
     ],
   },
   {
+    heading: 'Commission',
+    items: [
+      { to: '/commission/invoices', label: 'Invoices in', icon: '↓' },
+      { to: '/commission/raised', label: 'Commission invoices', icon: '£' },
+      { to: '/commission/contractors', label: 'Contractors', icon: '⚒' },
+    ],
+  },
+  {
     heading: 'Complaints',
     items: [
       { to: '/complaints', label: 'Complaints', icon: '⚑' },
@@ -27,6 +35,9 @@ const TITLES = {
   '/tasks': 'Tasks',
   '/complaints': 'Complaints',
   '/organisations': 'Organisations',
+  '/commission/invoices': 'Contractor invoices',
+  '/commission/raised': 'Commission invoices',
+  '/commission/contractors': 'Contractors',
 };
 
 export default function App() {
@@ -37,7 +48,8 @@ export default function App() {
   const title =
     TITLES[pathname] ||
     (pathname.startsWith('/companies/') ? 'Company' :
-      pathname.startsWith('/complaints/') ? 'Complaint' : 'Greenco CRM');
+      pathname.startsWith('/complaints/') ? 'Complaint' :
+        pathname.startsWith('/commission/raised/') ? 'Commission invoice' : 'Greenco CRM');
 
   return (
     <div className="app">

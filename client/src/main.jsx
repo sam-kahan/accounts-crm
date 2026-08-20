@@ -13,6 +13,10 @@ import Tasks from './pages/Tasks.jsx';
 import Complaints from './pages/Complaints.jsx';
 import ComplaintDetail from './pages/ComplaintDetail.jsx';
 import Organisations from './pages/Organisations.jsx';
+import Contractors from './pages/Contractors.jsx';
+import ContractorInvoices from './pages/ContractorInvoices.jsx';
+import CommissionInvoices from './pages/CommissionInvoices.jsx';
+import CommissionInvoiceDetail from './pages/CommissionInvoiceDetail.jsx';
 
 function Gate() {
   const { user, loading } = useAuth();
@@ -36,6 +40,10 @@ function Gate() {
         <Route path="complaints" element={<Complaints />} />
         <Route path="complaints/:id" element={<ComplaintDetail />} />
         <Route path="organisations" element={<Organisations />} />
+        <Route path="commission/contractors" element={<Contractors />} />
+        <Route path="commission/invoices" element={<ContractorInvoices />} />
+        <Route path="commission/raised" element={<CommissionInvoices />} />
+        <Route path="commission/raised/:id" element={<CommissionInvoiceDetail />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

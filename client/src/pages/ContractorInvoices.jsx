@@ -1,0 +1,612 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  api,
+  formatDate,
+  formatMoney,
+  todayISO,
+  monthOf,
+  monthLabel,
+  COMMISSION_STATUS_LABEL,
+} from '../api';
+import Modal from '../components/Modal.jsx';
+
+const STATUS_BADGE = {
+  pending: 'amber',
+  invoiced: 'navy',
+  paid: 'ok',
+  waived: 'grey',
+};
+
+function num(v) {
+  return v === '' || v === null || v === undefined ? undefined : Number(v);
+}
+
+// A preview of what the server will charge, shown live as the amounts are
+// typed. The server recomputes from the contractor's agreement when it saves —
+// this figure is only sent if the user deliberately overrides it.
+function previewCommission(contractor, { net, vat, total }) {
+  if (!contractor) return 0;
+  const netN = Number(net || 0);
+  const vatN = Number(vat || 0);
+  const totalN = Number(total || 0) || netN + vatN;
+  if (contractor.commission_type === 'fixed') {
+    return Math.min(Number(contractor.commission_fixed || 0), totalN || Infinity);
+  }
+  const base = contractor.commission_on === 'gross' ? totalN : netN;
+  const raw = Math.round(base * Number(contractor.commission_rate || 0)) / 100;
+  return contractor.commission_basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
+}
+
+function LogInvoiceModal({ contractors, aiEnabled, preselect, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    contractor_id: preselect || '',
+    invoice_number: '',
+    invoice_date: todayISO(),
+    property: '',
+    landlord_ref: '',
+    description: '',
+    net_amount: '',
+    vat_amount: '',
+    total_amount: '',
+    paid_from: 'client',
+    notes: '',
+  });
+  const [file, setFile] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [readNote, setReadNote] = useState(null);
+  const [stated, setStated] = useState(null); // commission the invoice itself named
+  const [commission, setCommission] = useState(''); // '' = use the agreed rate
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const fileInput = useRef(null);
+
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const contractor = contractors.find((c) => c.id === form.contractor_id) || null;
+
+  const computed = useMemo(
+    () =>
+      previewCommission(contractor, {
+        net: form.net_amount,
+        vat: form.vat_amount,
+        total: form.total_amount,
+      }),
+    [contractor, form.net_amount, form.vat_amount, form.total_amount],
+  );
+  const overridden = commission !== '' && Number(commission) !== computed;
+
+  // Hand the file to the server, which reads it and gives back the fields.
+  async function readFile(f, contractorId) {
+    if (!aiEnabled || !f) return;
+    setReading(true);
+    setReadNote(null);
+    setError(null);
+    try {
+      const d = await api.contractorInvoices.extract(f, contractorId || form.contractor_id);
+      setForm((prev) => ({
+        ...prev,
+        invoice_number: d.invoice_number || prev.invoice_number,
+        invoice_date: d.invoice_date || prev.invoice_date,
+        property: d.property || prev.property,
+        description: d.description || prev.description,
+        net_amount: d.net_amount ?? prev.net_amount,
+        vat_amount: d.vat_amount ?? prev.vat_amount,
+        total_amount: d.total_amount ?? prev.total_amount,
+      }));
+      setStated(d.commission_stated ?? null);
+      setReadNote(
+        d.caution
+          ? `Read from the invoice — check these: ${d.caution}`
+          : 'Read from the invoice — check the figures before saving.',
+      );
+    } catch (e) {
+      setReadNote(`Couldn’t read the invoice automatically (${e.message}). Enter the details below.`);
+    } finally {
+      setReading(false);
+    }
+  }
+
+  function takeFile(f) {
+    setFile(f);
+    if (f) readFile(f);
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    if (!form.contractor_id) {
+      setError('Choose the contractor first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.contractorInvoices.create(
+        {
+          ...form,
+          net_amount: num(form.net_amount),
+          vat_amount: num(form.vat_amount),
+          total_amount: num(form.total_amount),
+          // Only sent when deliberately overridden — otherwise the server
+          // applies the contractor's agreed rate.
+          commission_amount: overridden ? Number(commission) : undefined,
+          extracted: !!readNote && !readNote.startsWith('Couldn’t'),
+        },
+        file,
+      );
+      onSaved(saved);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Log a contractor invoice" onClose={onClose}>
+      {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
+      <form onSubmit={save}>
+        <label className="field">
+          <span className="lbl">Contractor *</span>
+          <select
+            required
+            value={form.contractor_id}
+            onChange={(e) => {
+              set('contractor_id', e.target.value);
+              // Re-read with the new contractor so their rate is applied.
+              if (file && aiEnabled) readFile(file, e.target.value);
+            }}
+          >
+            <option value="">Choose…</option>
+            {contractors.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.trade ? ` — ${c.trade}` : ''} ({c.deal_summary})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div
+          className={`dropzone ${dragOver ? 'over' : ''} ${file ? 'filled' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => fileInput.current?.click()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              fileInput.current?.click();
+            }
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            takeFile(e.dataTransfer.files?.[0] || null);
+          }}
+          style={{ marginBottom: 14 }}
+        >
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv"
+            onChange={(e) => takeFile(e.target.files?.[0] || null)}
+          />
+          {reading ? (
+            <div>Reading the invoice…</div>
+          ) : file ? (
+            <>
+              <div className="dz-name">{file.name}</div>
+              <div className="dz-hint">Click to choose a different file</div>
+            </>
+          ) : (
+            <>
+              <div>Drop the invoice here, or click to choose</div>
+              <div className="dz-hint">
+                PDF, photo or text
+                {aiEnabled ? ' — the details are read off it automatically' : ''}
+              </div>
+            </>
+          )}
+        </div>
+
+        {readNote && (
+          <div className="inline-note" style={{ marginBottom: 14 }}>{readNote}</div>
+        )}
+        {!aiEnabled && (
+          <div className="inline-note warn" style={{ marginBottom: 14 }}>
+            Automatic reading is off. Add <code>ANTHROPIC_API_KEY</code> to the server .env to
+            have invoice details filled in for you — the file still uploads and saves either way.
+          </div>
+        )}
+
+        <div className="form-grid">
+          <label className="field">
+            <span className="lbl">Their invoice number</span>
+            <input
+              value={form.invoice_number}
+              onChange={(e) => set('invoice_number', e.target.value)}
+              placeholder="Stops the same invoice being logged twice"
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Invoice date *</span>
+            <input
+              type="date"
+              required
+              value={form.invoice_date}
+              onChange={(e) => set('invoice_date', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Property</span>
+            <input value={form.property} onChange={(e) => set('property', e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">Landlord / statement ref</span>
+            <input value={form.landlord_ref} onChange={(e) => set('landlord_ref', e.target.value)} />
+          </label>
+          <label className="field full">
+            <span className="lbl">Works</span>
+            <input
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              placeholder="e.g. Tap repair"
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Net (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.net_amount}
+              onChange={(e) => set('net_amount', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">VAT (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.vat_amount}
+              onChange={(e) => set('vat_amount', e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Invoice total (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.total_amount}
+              onChange={(e) => set('total_amount', e.target.value)}
+              placeholder="Leave blank to use net + VAT"
+            />
+          </label>
+          <label className="field">
+            <span className="lbl">Paid from</span>
+            <select value={form.paid_from} onChange={(e) => set('paid_from', e.target.value)}>
+              <option value="client">Client account</option>
+              <option value="business">Business account</option>
+            </select>
+          </label>
+        </div>
+
+        <div className={`calc-box ${overridden ? 'overridden' : ''}`}>
+          <div>
+            <div className="calc-label">
+              {overridden ? 'Commission (edited by hand)' : 'Commission to reclaim'}
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {contractor ? contractor.deal_summary : 'Choose a contractor to apply their rate'}
+              {overridden ? ` · agreed rate gives ${formatMoney(computed)}` : ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="calc-value">{formatMoney(overridden ? commission : computed)}</div>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={commission}
+              onChange={(e) => setCommission(e.target.value)}
+              placeholder="Override"
+              style={{ width: 110 }}
+              aria-label="Override the commission amount"
+            />
+          </div>
+        </div>
+
+        {stated !== null && Math.abs(Number(stated) - computed) > 0.005 && (
+          <div className="inline-note warn" style={{ marginBottom: 14 }}>
+            The invoice itself names a commission of <strong>{formatMoney(stated)}</strong>, which
+            doesn’t match the {formatMoney(computed)} their agreed rate gives. Check which is right
+            before saving.
+          </div>
+        )}
+
+        <label className="field">
+          <span className="lbl">Notes</span>
+          <textarea rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+        </label>
+
+        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={busy || reading}>
+            {busy ? 'Saving…' : 'Save invoice'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export default function ContractorInvoices() {
+  const [params, setParams] = useSearchParams();
+  const [rows, setRows] = useState(null);
+  const [contractors, setContractors] = useState([]);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [logging, setLogging] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const contractorId = params.get('contractor_id') || '';
+  const status = params.get('status') || '';
+  const month = params.get('month') || monthOf();
+  const search = params.get('search') || '';
+
+  const setParam = (k, v) => {
+    const next = new URLSearchParams(params);
+    if (v) next.set(k, v);
+    else next.delete(k);
+    setParams(next, { replace: true });
+  };
+
+  const filters = useMemo(() => {
+    const [y, m] = month.split('-').map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return {
+      contractor_id: contractorId,
+      status,
+      search,
+      from: `${month}-01`,
+      to: `${month}-${String(last).padStart(2, '0')}`,
+    };
+  }, [contractorId, status, search, month]);
+
+  const load = () => {
+    setErr(null);
+    return api.contractorInvoices
+      .list(filters)
+      .then(setRows)
+      .catch((e) => setErr(e.message));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractorId, status, search, month]);
+
+  useEffect(() => {
+    api.contractors.list({ active: 'true' }).then(setContractors).catch(() => setContractors([]));
+    api.contractorInvoices
+      .aiConfig()
+      .then((c) => setAiEnabled(c.enabled))
+      .catch(() => setAiEnabled(false));
+  }, []);
+
+  async function waive(row) {
+    const reason = row.waived
+      ? null
+      : prompt('Why is this commission not being reclaimed?', 'Not chargeable');
+    if (!row.waived && reason === null) return;
+    try {
+      await api.contractorInvoices.waive(row.id, !row.waived, reason);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  async function remove(row) {
+    if (!confirm(`Delete the logged invoice ${row.invoice_number || ''}?`)) return;
+    try {
+      await api.contractorInvoices.remove(row.id);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  const totals = (rows || []).reduce(
+    (acc, r) => {
+      acc.invoiced += Number(r.total_amount || 0);
+      acc.commission += Number(r.commission_amount || 0);
+      if (r.status === 'pending') acc.pending += Number(r.commission_amount || 0);
+      return acc;
+    },
+    { invoiced: 0, commission: 0, pending: 0 },
+  );
+
+  return (
+    <>
+      <div className="stat-row">
+        <div className="stat accent">
+          <div className="label">Commission this month</div>
+          <div className="value">{formatMoney(totals.commission)}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Still to invoice</div>
+          <div className="value">{formatMoney(totals.pending)}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Paid out to contractors</div>
+          <div className="value">{formatMoney(totals.invoiced)}</div>
+        </div>
+      </div>
+
+      <div className="toolbar flex-between">
+        <div className="btn-row">
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => setParam('month', e.target.value)}
+            aria-label="Month"
+          />
+          <select
+            value={contractorId}
+            onChange={(e) => setParam('contractor_id', e.target.value)}
+            aria-label="Contractor"
+          >
+            <option value="">All contractors</option>
+            {contractors.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <select
+            value={status}
+            onChange={(e) => setParam('status', e.target.value)}
+            aria-label="Status"
+          >
+            <option value="">Any status</option>
+            <option value="pending">To invoice</option>
+            <option value="invoiced">Invoiced</option>
+            <option value="paid">Paid</option>
+            <option value="waived">Waived</option>
+          </select>
+          <input
+            type="search"
+            placeholder="Search…"
+            defaultValue={search}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setParam('search', e.currentTarget.value);
+            }}
+            onBlur={(e) => setParam('search', e.currentTarget.value)}
+          />
+        </div>
+        <div className="btn-row">
+          <a
+            className="btn"
+            href={api.contractorInvoices.exportUrl({ month, contractor_id: contractorId, status })}
+          >
+            Export CSV
+          </a>
+          <button className="btn-primary" onClick={() => setLogging(true)}>+ Log invoice</button>
+        </div>
+      </div>
+
+      {err && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }}>
+          {err} <button className="linkish" onClick={load}>Retry</button>
+        </div>
+      )}
+
+      <div className="card">
+        {!rows ? (
+          err ? (
+            <div className="empty">Couldn’t load invoices.</div>
+          ) : (
+            <div className="spinner">Loading…</div>
+          )
+        ) : rows.length === 0 ? (
+          <div className="empty">
+            Nothing logged for {monthLabel(month)}. Upload a contractor invoice to get started.
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Contractor</th>
+                <th>Invoice</th>
+                <th>Property / works</th>
+                <th className="num">Invoice total</th>
+                <th className="num">Commission</th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>{formatDate(r.invoice_date)}</td>
+                  <td>{r.contractor_name}</td>
+                  <td>
+                    {r.invoice_number || <span className="muted">—</span>}
+                    {r.has_document && (
+                      <a
+                        href={api.contractorInvoices.documentUrl(r.id)}
+                        className="badge navy"
+                        style={{ marginLeft: 6 }}
+                        title="Download the invoice document"
+                      >
+                        ↓ file
+                      </a>
+                    )}
+                  </td>
+                  <td>
+                    {r.property || <span className="muted">—</span>}
+                    {r.description && (
+                      <div className="muted" style={{ fontSize: 12 }}>{r.description}</div>
+                    )}
+                  </td>
+                  <td className="num">{formatMoney(r.total_amount)}</td>
+                  <td className="num">
+                    <strong>{formatMoney(r.commission_amount)}</strong>
+                    {r.commission_override && (
+                      <div className="muted" style={{ fontSize: 12 }}>edited</div>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`badge ${STATUS_BADGE[r.status] || 'grey'}`}>
+                      {COMMISSION_STATUS_LABEL[r.status] || r.status}
+                    </span>
+                    {r.commission_invoice_number && (
+                      <div className="muted" style={{ fontSize: 12 }}>{r.commission_invoice_number}</div>
+                    )}
+                    {r.waived && r.waived_reason && (
+                      <div className="muted" style={{ fontSize: 12 }}>{r.waived_reason}</div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {r.status !== 'invoiced' && r.status !== 'paid' && (
+                      <>
+                        <button className="btn-ghost btn-sm" onClick={() => waive(r)}>
+                          {r.waived ? 'Un-waive' : 'Waive'}
+                        </button>
+                        <button className="btn-danger btn-sm" onClick={() => remove(r)}>Delete</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              <tr className="total-row">
+                <td colSpan={4}>{monthLabel(month)} total</td>
+                <td className="num">{formatMoney(totals.invoiced)}</td>
+                <td className="num">{formatMoney(totals.commission)}</td>
+                <td colSpan={2} />
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {logging && (
+        <LogInvoiceModal
+          contractors={contractors}
+          aiEnabled={aiEnabled}
+          preselect={contractorId}
+          onClose={() => setLogging(false)}
+          onSaved={() => {
+            setLogging(false);
+            load();
+          }}
+        />
+      )}
+    </>
+  );
+}

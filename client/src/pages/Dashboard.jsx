@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, formatDate, daysUntil } from '../api';
+import { api, formatDate, daysUntil, formatMoney } from '../api';
 
 const CATEGORY_LABEL = {
   year_end: 'Year end',
@@ -161,7 +161,7 @@ export default function Dashboard() {
     return <div className="spinner">Loading dashboard…</div>;
   }
 
-  const { counts, overdue, upcoming, mailer } = data;
+  const { counts, overdue, upcoming, mailer, commission } = data;
 
   return (
     <>
@@ -178,6 +178,18 @@ export default function Dashboard() {
           <div className="label">Overdue</div>
           <div className="value">{counts.overdue}</div>
         </div>
+        {commission && (
+          <Link to="/commission/raised" className="stat" title="Contractor commission still to invoice back">
+            <div className="label">Commission to invoice</div>
+            <div className="value">{formatMoney(commission.pending_commission)}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {commission.pending_count} invoice(s)
+              {commission.awaiting_count > 0
+                ? ` · ${formatMoney(commission.awaiting_payment)} awaiting payment`
+                : ''}
+            </div>
+          </Link>
+        )}
       </div>
 
       <div className="flex-between" style={{ marginBottom: 16 }}>

@@ -25,6 +25,16 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Drop empty filters so a blank search box doesn't become `?search=`.
+function clean(params) {
+  const out = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (v === '' || v === null || v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 export const api = {
   health: () => request('/health'),
 
@@ -121,6 +131,85 @@ export const api = {
     defaults: (type) => request(`/organisations/defaults/${type}`),
   },
 
+  contractors: {
+    list: (params = {}) => {
+      const qs = new URLSearchParams(params).toString();
+      return request(`/contractors${qs ? `?${qs}` : ''}`);
+    },
+    get: (id) => request(`/contractors/${id}`),
+    defaults: () => request('/contractors/defaults'),
+    create: (data) => request('/contractors', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id, data) =>
+      request(`/contractors/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (id) => request(`/contractors/${id}`, { method: 'DELETE' }),
+  },
+
+  // Invoices received FROM contractors, each carrying commission for us.
+  contractorInvoices: {
+    list: (params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/contractor-invoices${qs ? `?${qs}` : ''}`);
+    },
+    get: (id) => request(`/contractor-invoices/${id}`),
+    // Multipart: the invoice document rides along with the fields.
+    create: (fields, file) => {
+      const fd = new FormData();
+      for (const [k, v] of Object.entries(clean(fields))) fd.append(k, v);
+      if (file) fd.append('file', file);
+      return request('/contractor-invoices', { method: 'POST', body: fd });
+    },
+    update: (id, data) =>
+      request(`/contractor-invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    waive: (id, waived, reason) =>
+      request(`/contractor-invoices/${id}/waive`, {
+        method: 'POST',
+        body: JSON.stringify({ waived, reason }),
+      }),
+    remove: (id) => request(`/contractor-invoices/${id}`, { method: 'DELETE' }),
+    documentUrl: (id) => `/api/contractor-invoices/${id}/document`,
+    summary: (params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/contractor-invoices/summary${qs ? `?${qs}` : ''}`);
+    },
+    exportUrl: (params = {}) =>
+      `/api/contractor-invoices/export.csv?${new URLSearchParams(clean(params)).toString()}`,
+    aiConfig: () => request('/contractor-invoices/ai/config'),
+    // Read an uploaded invoice and hand back the fields it contains.
+    extract: (file, contractorId) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (contractorId) fd.append('contractor_id', contractorId);
+      return request('/contractor-invoices/extract', { method: 'POST', body: fd });
+    },
+  },
+
+  // The invoices WE raise to contractors for the commission they collected.
+  commissionInvoices: {
+    list: (params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/commission-invoices${qs ? `?${qs}` : ''}`);
+    },
+    get: (id) => request(`/commission-invoices/${id}`),
+    settings: () => request('/commission-invoices/settings'),
+    preview: (contractorId, params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/commission-invoices/preview/${contractorId}${qs ? `?${qs}` : ''}`);
+    },
+    raise: (data) => request('/commission-invoices', { method: 'POST', body: JSON.stringify(data) }),
+    send: (id, data = {}) =>
+      request(`/commission-invoices/${id}/send`, { method: 'POST', body: JSON.stringify(data) }),
+    // Send it to Greenco Invoicing, where it gets emailed and chased.
+    push: (id) => request(`/commission-invoices/${id}/push`, { method: 'POST' }),
+    // Read its state back from there (payment is recorded on that side).
+    refresh: (id) => request(`/commission-invoices/${id}/refresh`, { method: 'POST' }),
+    setStatus: (id, status, paidOn) =>
+      request(`/commission-invoices/${id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status, paid_on: paidOn }),
+      }),
+    remove: (id) => request(`/commission-invoices/${id}`, { method: 'DELETE' }),
+  },
+
   complaints: {
     dashboard: () => request('/complaints/dashboard'),
     list: (state = '') =>
@@ -176,6 +265,48 @@ export function todayISO() {
     new Date(),
   );
 }
+
+// £1,234.50 — money is always shown to the penny so a total can be checked
+// against a bank statement at a glance.
+export function formatMoney(value, { blankZero = false } = {}) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return '—';
+  if (blankZero && n === 0) return '—';
+  return n.toLocaleString('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+// The YYYY-MM month a date falls in; defaults to this month (UK local).
+export function monthOf(dateStr) {
+  return (dateStr || todayISO()).slice(0, 7);
+}
+
+// '2026-08' -> 'August 2026'
+export function monthLabel(month) {
+  if (!/^\d{4}-\d{2}$/.test(month || '')) return month || '';
+  return new Date(`${month}-01T00:00:00`).toLocaleDateString('en-GB', {
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+export const COMMISSION_STATUS_LABEL = {
+  pending: 'To invoice',
+  invoiced: 'Invoiced',
+  paid: 'Paid',
+  waived: 'Waived',
+};
+
+export const INVOICE_STATUS_LABEL = {
+  draft: 'Draft',
+  sent: 'Sent',
+  paid: 'Paid',
+  void: 'Void',
+};
 
 export function formatDate(d) {
   if (!d) return '—';
