@@ -57,6 +57,9 @@ Read the document and report:
   "c/o Mr Jones", "FAO: Sarah Davies"). Leave every person's name out: this address goes
   onto an invoice sent to a third party, and the tenant's name has no business being on it.
   Keep building names that are part of the address itself, like "Rose Cottage" or "Flat 2".
+  Leave the date of the works out of it too — invoices write the two together
+  ("Work completed at 11 River View, Birkenhead CH41 on 15/06/26"), and the trailing
+  "on <date>" is not part of the address or of the postcode.
 - a short description of the work done (one line, max ~120 characters)
 - the contractor's business name as printed, and their address, email, phone and VAT
   registration number if the invoice shows them (these set up a contractor we haven't
@@ -160,6 +163,40 @@ export function spaceAfterNumber(value) {
   return String(value).replace(/(\d)([A-Z][a-z]{2,})/g, '$1 $2');
 }
 
+// Invoices say WHEN as well as WHERE, and the works date rides along on the
+// address: "Work completed at 11 River View, Birkenhead CH41 ON 15/06/26".
+// Left on, the date is copied onto the commission invoice the contractor
+// receives, and the stray "ON" reads as the second half of the postcode.
+//
+// Only a date at the END of the address is removed. The bare "on" left behind
+// goes with it: an address never ends in the word, and it cannot be the end of
+// a postcode either — the last two letters of a UK postcode never include
+// C, I, K, M, O or V.
+const MONTHS = 'jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec';
+// 15/06/26, 15.06.2026, 15-06-26 — unambiguous, so "on" is optional.
+const TRAILING_NUMERIC_DATE = /[\s,]+(?:on\s+)?\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\s*$/i;
+// "on 15 June 2026" / "on June 15th" — only ever stripped when the invoice
+// actually said "on", so a road or building named after a month survives.
+const TRAILING_WORDED_DATE = new RegExp(
+  `[\\s,]+on\\s+(?:` +
+    `\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS})[a-z]*\\.?(?:\\s+\\d{2,4})?` +
+    `|(?:${MONTHS})[a-z]*\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{2,4})?` +
+  `)\\s*$`,
+  'i',
+);
+const TRAILING_ON = /[\s,]+on\s*$/i;
+
+export function stripWorksDate(value) {
+  if (!value) return value;
+  const cleaned = String(value)
+    .replace(TRAILING_NUMERIC_DATE, '')
+    .replace(TRAILING_WORDED_DATE, '')
+    .replace(TRAILING_ON, '')
+    .replace(/[\s,]+$/, '')
+    .trim();
+  return cleaned || null;
+}
+
 export function stripPersonName(value) {
   if (!value) return value;
   // Invoices break the address across lines or commas; treat both as segments.
@@ -219,7 +256,7 @@ export function normaliseExtraction(raw) {
     net_amount: cleanAmount(r.net_amount),
     vat_amount: cleanAmount(r.vat_amount),
     total_amount: cleanAmount(r.total_amount),
-    property: stripPersonName(spaceAfterNumber(cleanStr(r.property, 200))),
+    property: stripPersonName(stripWorksDate(spaceAfterNumber(cleanStr(r.property, 200)))),
     description: cleanStr(r.description, 300),
     contractor_name: cleanStr(r.contractor_name, 200),
     contractor_address: spaceAfterNumber(cleanStr(r.contractor_address, 500)),

@@ -65,6 +65,27 @@ export function findOutwardCode(address) {
   return null;
 }
 
+// An outward code on its own: M20, WA9, CH41, L1.
+const OUTWARD_TOKEN = /^[A-Z]{1,2}\d{1,2}[A-Z]?$/;
+// How far back from the end of the address to look for one. Invoices print the
+// works date after the site address ("... CH41 ON 15/06/26"), which hides the
+// postcode from findOutwardCode; three words of slack covers that without
+// reaching back into the street.
+const TRAILING_WORDS = 3;
+
+// Look past whatever an invoice printed after the postcode. Only a code that
+// lands in one of the two offices is accepted, so this can add an answer where
+// there wasn't one but can never change one that was already found.
+function trailingKnownOutward(text) {
+  const tokens = String(text).toUpperCase().split(/[\s,\n]+/).filter(Boolean);
+  for (let i = tokens.length - 1; i >= Math.max(0, tokens.length - 1 - TRAILING_WORDS); i -= 1) {
+    if (!OUTWARD_TOKEN.test(tokens[i])) continue;
+    const hit = regionForPostcode(tokens[i]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function splitOutward(outward) {
   const m = String(outward || '')
     .toUpperCase()
@@ -213,6 +234,19 @@ export function regionForAddress(address) {
       reason: `${outward} is not in either office's area.`,
       source: null,
       postcode: outward,
+    };
+  }
+
+  // No postcode where one would be, but there may be one with the works date
+  // printed after it. A town name is the weaker signal, so this is tried first.
+  const trailing = trailingKnownOutward(text);
+  if (trailing) {
+    const code = `${trailing.outward}`;
+    return {
+      region: trailing.region,
+      reason: `${code} is ${trailing.place || REGION_LABEL[trailing.region]}.`,
+      source: 'postcode',
+      postcode: code,
     };
   }
 

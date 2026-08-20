@@ -120,3 +120,27 @@ test('only the two offices are regions', () => {
   assert.equal(isRegion('leeds'), false);
   assert.equal(isRegion(null), false);
 });
+
+test('a works date printed after the postcode does not hide it', () => {
+  // Real invoice (Locksafe Locksmiths INV4628): "Work completed at 11 River
+  // View, Birkenhead CH41 ON 15/06/26" — the ON is the word "on" before the
+  // date, and it leaves the postcode looking like it has an inward half.
+  const out = regionForAddress('11 River View, Birkenhead CH41 ON 15/06/26');
+  assert.equal(out.region, 'liverpool');
+  assert.equal(out.source, 'postcode');
+  assert.match(out.reason, /CH41 is Birkenhead/);
+
+  // The same address once the date has been cleaned off.
+  assert.equal(regionOf('11 River View, Birkenhead CH41'), 'liverpool');
+  // ...and with the stray "on" still attached.
+  assert.equal(regionOf('11 River View, Birkenhead CH41 ON'), 'liverpool');
+});
+
+test('looking past the postcode never invents one deeper in the address', () => {
+  // A postcode-shaped fragment that is part of the address, not the end of it.
+  assert.equal(regionOf('Unit A4, Mill Lane, Southport PR8 1RH'), 'liverpool');
+  // Neither office's ground: still nothing, rather than the nearest guess.
+  assert.equal(regionOf('Unit B2, Mill Lane, Sheffield'), null);
+  // A town still places an address with no postcode at all.
+  assert.equal(regionForAddress('8 Rodney Street, Liverpool').source, 'town');
+});

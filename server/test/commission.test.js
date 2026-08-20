@@ -30,9 +30,11 @@ import {
   invoicingStatus,
 } from '../src/services/invoicesManager.js';
 import { config } from '../src/config.js';
+import { regionForAddress } from '../src/services/regions.js';
 import {
   stripPersonName,
   spaceAfterNumber,
+  stripWorksDate,
   normaliseExtraction,
 } from '../src/services/invoiceExtract.js';
 
@@ -888,4 +890,60 @@ test('every office reports whether it is linked', () => {
   } finally {
     Object.assign(config.invoicing.companies, saved);
   }
+});
+
+// --- the works date on the end of a property address ------------------------
+
+test('the date the work was done comes off the property address', () => {
+  // Real invoice (Locksafe Locksmiths INV4628): "Work completed at 11 River
+  // View, Birkenhead CH41 ON 15/06/26". The address is copied onto the
+  // commission invoice the contractor receives, and "ON" reads as the second
+  // half of the postcode — which it cannot be: the last two letters of a UK
+  // postcode never include C, I, K, M, O or V.
+  assert.equal(
+    stripWorksDate('11 River View, Birkenhead CH41 ON 15/06/26'),
+    '11 River View, Birkenhead CH41',
+  );
+  // Whatever survived of it.
+  assert.equal(stripWorksDate('11 River View, Birkenhead CH41 ON'), '11 River View, Birkenhead CH41');
+  assert.equal(stripWorksDate('11 River View, Birkenhead CH41 15/06/26'), '11 River View, Birkenhead CH41');
+  assert.equal(stripWorksDate('14 Sefton Road, L20 9JT, on 15 June 2026'), '14 Sefton Road, L20 9JT');
+  assert.equal(stripWorksDate('14 Sefton Road on June 15th'), '14 Sefton Road');
+  assert.equal(stripWorksDate('14 Sefton Road on 3.7.2026'), '14 Sefton Road');
+});
+
+test('stripping the works date leaves real addresses alone', () => {
+  for (const address of [
+    '11 River View, Birkenhead CH41 1AA',
+    '15 New Cross St, Manchester M4 5AB',
+    'Flat 2, 8 Sefton Road, Liverpool, L20 9JT',
+    // A month is a perfectly good name for a road or a building.
+    '4 June Court, Salford M5 4WT',
+    '12 May Street, Liverpool',
+    'Unit 3, March Way, Bolton',
+    // "on" inside the address, rather than dangling off the end of it.
+    '2 Preston on the Hill, Warrington',
+    'Newton-le-Willows WA12 8DD',
+  ]) {
+    assert.equal(stripWorksDate(address), address, address);
+  }
+  assert.equal(stripWorksDate(null), null);
+  assert.equal(stripWorksDate(''), '');
+});
+
+test('an invoice reading gets the address and the office, without the date', () => {
+  const out = normaliseExtraction({
+    invoice_number: 'INV4628',
+    invoice_date: '2026-06-18',
+    net_amount: 109.45,
+    vat_amount: 21.89,
+    total_amount: 131.34,
+    property: '11 River View, Birkenhead CH41 ON 15/06/26',
+    description: 'Changed the lock on the front door.',
+    contractor_name: 'Locksafe Locksmiths (NW) Ltd',
+  });
+  assert.equal(out.property, '11 River View, Birkenhead CH41');
+  assert.equal(regionForAddress(out.property).region, 'liverpool');
+  // "on the front door" is part of what was done and stays where it is.
+  assert.equal(out.description, 'Changed the lock on the front door.');
 });
