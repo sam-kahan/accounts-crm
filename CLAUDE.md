@@ -220,7 +220,8 @@ contractor at month end.
   is how Greenco Invoicing adds an invoice up, and a penny of daylight between
   the two systems is a query nobody wants to answer.
 - **Reading invoices** (`services/invoiceExtract.js`) sends the uploaded PDF /
-  photo / text to Claude and fills the form in — including *who it is from*:
+  Word document / photo / text to Claude and fills the form in — including *who
+  it is from*:
   `matchContractorByName()` traces the printed name back to a contractor on
   file through the usual noise (Ltd/Limited, `&` vs `and`, apostrophes), and
   only a confident match (≥ 0.8) selects one, because a half-right guess would
@@ -238,6 +239,15 @@ contractor at month end.
   `<untrusted_content>` markers, plain text is), and every field is clamped by
   `normaliseExtraction` before it reaches the form. Gated on
   `ANTHROPIC_API_KEY`; without it the upload still works, you just type.
+- **Word documents are read here, not by the model** (`lib/docx.js`). There is
+  no document block for a `.docx`, so the words are pulled out of it and sent as
+  text — which means it gets the `<untrusted_content>` markers a PDF can't have.
+  A `.docx` is a zip of XML: the reader is `node:zlib` plus the zip offsets, no
+  dependency, and it reads the header and footer parts too because that is where
+  a contractor's letterhead (name, address, VAT number) lives. The pre-2007
+  binary `.doc` is *detected*, not parsed — it is a Word file, it just isn't one
+  we can read, so the user is told to save it as `.docx` or PDF instead of
+  watching it fail.
 - **The push** (`services/invoicesManager.js`) is best-effort on the raise path:
   the commission is already claimed and the lines already linked, so a failed
   push is recorded in `external_error` for a visible retry and never rolls back
@@ -259,7 +269,8 @@ contractor at month end.
 
 - `npm test` (unit tests in `server/test/`, Node's built-in `node:test` — no
   framework, no DB. Covers the deadline engine, email matching, AI-output
-  sanitisation, the `buildUpdateSet` helper, and dates).
+  sanitisation, reading `.docx` uploads, the `buildUpdateSet` helper, and
+  dates).
 - `npm run build -w client` (client compiles)
 - `npm run migrate` then exercise the API / UI against a local Postgres.
 - CI (`.github/workflows/ci.yml`) re-runs the tests + client build on every push
@@ -267,6 +278,15 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-24 — invoices sent as Word documents
+- **`.docx` uploads are read like any other invoice.** Dropping a Word file on
+  the log form now fills the form in the same way a PDF or a photo does, and
+  Word evidence on a complaint is read into the AI assistant. New `lib/docx.js`
+  does the reading (see "Contractor commission" above for why it lives here
+  rather than being handed to the model, and what happens to a legacy `.doc`).
+- Storage and download were never type-specific, so a Word file was always
+  *kept* correctly — only the reading and the file picker had to change.
 
 ### 2026-08-20 — amending a logged invoice
 - **Amend** on each pending row of `/commission/invoices` opens the details for

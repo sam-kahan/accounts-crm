@@ -602,8 +602,8 @@ export default function ComplaintDetail() {
           </table>
         ) : (
           <div className="empty">
-            No evidence yet. Upload letters, PDFs, photos or portal screenshots — text files are read
-            into the AI assistant automatically.
+            No evidence yet. Upload letters, PDFs, photos or portal screenshots — Word documents
+            and text files are read into the AI assistant automatically.
           </div>
         )}
       </div>

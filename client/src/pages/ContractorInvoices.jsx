@@ -327,7 +327,7 @@ function LogInvoiceModal({
           <input
             ref={fileInput}
             type="file"
-            accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv"
+            accept=".pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv"
             onChange={(e) => takeFile(e.target.files?.[0] || null)}
           />
           {reading ? (
@@ -341,7 +341,7 @@ function LogInvoiceModal({
             <>
               <div>Drop the invoice here, or click to choose</div>
               <div className="dz-hint">
-                PDF, photo or text
+                PDF, Word, photo or text
                 {aiEnabled ? ' — the details are read off it automatically' : ''}
               </div>
             </>

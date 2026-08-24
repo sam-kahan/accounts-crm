@@ -4,6 +4,7 @@ import path from 'node:path';
 import multer from 'multer';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
+import { docxToText, isDocx } from '../lib/docx.js';
 
 // ---------------------------------------------------------------------------
 // Evidence attachments for complaints. Files are streamed to disk under
@@ -45,10 +46,14 @@ export const attachmentUpload = multer({
   limits: { fileSize: MAX_BYTES, files: 10 },
 });
 
-// Best-effort text extraction for the AI. Text-like files are read directly;
-// PDFs/images are left as null (their filename still goes to the assistant).
+// Best-effort text extraction for the AI. Text-like files are read directly and
+// the words are pulled out of Word documents; PDFs/images are left as null
+// (their filename still goes to the assistant).
 async function extractText(filePath, mimetype) {
   try {
+    if (isDocx(mimetype, filePath)) {
+      return docxToText(await fs.readFile(filePath)).slice(0, 20000);
+    }
     if (
       (mimetype && (mimetype.startsWith('text/') || mimetype === 'application/json')) ||
       /\.(txt|md|csv|eml|log)$/i.test(filePath)

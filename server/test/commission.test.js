@@ -33,6 +33,7 @@ import {
 import { config } from '../src/config.js';
 import { regionForAddress } from '../src/services/regions.js';
 import {
+  canRead,
   stripPersonName,
   spaceAfterNumber,
   stripWorksDate,
@@ -971,4 +972,19 @@ test('a flat-fee invoice keeps its fee when it is amended', () => {
     commissionFor({ ...renegotiated, ...snapshot }, { net_amount: 200, total_amount: 240 }),
     15,
   );
+});
+
+test('canRead takes the file types an invoice actually arrives as', () => {
+  assert.equal(canRead('application/pdf', 'invoice.pdf'), true);
+  assert.equal(
+    canRead('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'inv.docx'),
+    true,
+  );
+  assert.equal(canRead('application/octet-stream', 'inv.docx'), true);
+  assert.equal(canRead('image/jpeg', 'photo.jpg'), true);
+  assert.equal(canRead('text/plain', 'invoice.txt'), true);
+  // The old binary .doc can't be read — the caller says so in as many words
+  // rather than sending Word's internal soup to the model.
+  assert.equal(canRead('application/msword', 'invoice.doc'), false);
+  assert.equal(canRead('application/zip', 'invoices.zip'), false);
 });
