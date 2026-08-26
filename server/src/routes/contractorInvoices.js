@@ -29,7 +29,7 @@ const router = Router();
 
 const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_fixed', 'commission_amount', 'commissionable_amount'];
 
-const COLS = `i.id, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
+const COLS = `i.id, i.ref, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
   i.commission_on, i.commission_basis, i.commission_fixed, i.commission_amount, i.commission_override,
   i.commission_vat_inclusive, i.commissionable_amount, i.commissionable_note, i.region, i.paid_from,
@@ -48,6 +48,25 @@ const JOINED = `${COLS}, c.name AS contractor_name, c.email AS contractor_email,
 // stays the canonical definition (it decorates every row on the way out); these
 // are its SQL twins, used only to narrow a list query. Keys are validated
 // against this map, so the fragments are never user input.
+// Sorting the list. The keys are the column headings on screen; the values are
+// the only SQL that can ever reach ORDER BY, so a sort key is looked up here
+// rather than interpolated. Status is derived rather than stored, so it sorts
+// by the cycle it describes: to invoice, invoiced, paid, waived.
+const SORT_SQL = {
+  ref: 'i.ref',
+  invoice_date: 'i.invoice_date',
+  contractor: 'c.name',
+  region: 'i.region',
+  invoice_number: 'i.invoice_number',
+  property: 'i.property',
+  total_amount: 'i.total_amount',
+  commission_amount: 'i.commission_amount',
+  status: `CASE WHEN i.waived THEN 3
+                WHEN ci.status = 'paid' THEN 2
+                WHEN i.commission_invoice_id IS NOT NULL THEN 1
+                ELSE 0 END`,
+};
+
 const STATUS_SQL = {
   pending: 'i.commission_invoice_id IS NULL AND NOT i.waived',
   invoiced: "i.commission_invoice_id IS NOT NULL AND COALESCE(ci.status, '') <> 'paid'",
@@ -496,6 +515,7 @@ router.get(
     const lines = rows.map(decorate).filter((r) => !statusKey || r.status === statusKey);
     const csv = toCsv(
       [
+        { key: 'ref', label: 'Reference' },
         { key: 'contractor_name', label: 'Contractor' },
         { key: 'region_label', label: 'Office' },
         { key: 'invoice_date', label: 'Invoice date' },
@@ -532,18 +552,28 @@ router.get(
   asyncHandler(async (req, res) => {
     const statusKey = STATUS_SQL[req.query.status] ? req.query.status : null;
     const limit = Math.min(Number(req.query.limit) || 200, 500);
+    // Sorted in SQL, not in the browser: the list is capped, so sorting the
+    // rows that happened to come back would put the wrong ones on screen.
+    const sortKey = SORT_SQL[req.query.sort] ? req.query.sort : null;
+    const dir = String(req.query.dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    // NULLS LAST in both directions: an invoice with no number or no property
+    // is the least interesting row either way round.
+    const order = sortKey
+      ? `${SORT_SQL[sortKey]} ${dir} NULLS LAST, i.invoice_date DESC, i.created_at DESC`
+      : 'i.invoice_date DESC, i.created_at DESC';
     const { rows } = await query(
       `SELECT ${JOINED} ${FROM}
         WHERE ($1::uuid IS NULL OR i.contractor_id = $1::uuid)
           AND ($2::date IS NULL OR i.invoice_date >= $2::date)
           AND ($3::date IS NULL OR i.invoice_date <= $3::date)
           AND ($4 = '' OR i.invoice_number ILIKE '%' || $4 || '%'
+                       OR COALESCE(i.ref, '') ILIKE '%' || $4 || '%'
                        OR COALESCE(i.property, '') ILIKE '%' || $4 || '%'
                        OR COALESCE(i.description, '') ILIKE '%' || $4 || '%'
                        OR c.name ILIKE '%' || $4 || '%')
           AND ($6 = '' OR i.region = $6)
           ${statusKey ? `AND ${STATUS_SQL[statusKey]}` : ''}
-        ORDER BY i.invoice_date DESC, i.created_at DESC
+        ORDER BY ${order}
         LIMIT $5`,
       [
         req.query.contractor_id || null,

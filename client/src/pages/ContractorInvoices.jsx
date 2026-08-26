@@ -236,6 +236,7 @@ function useDuplicates({
 // without leaving the form.
 function describeLogged(inv, { number = true } = {}) {
   return [
+    inv.ref || null,
     number ? (inv.invoice_number ? `no. ${inv.invoice_number}` : 'no number') : null,
     formatDate(inv.invoice_date),
     formatMoney(inv.total_amount),
@@ -955,10 +956,11 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={`Amend ${invoice.invoice_number || 'invoice'}`} onClose={onClose}>
+    <Modal title={`Amend ${invoice.ref || invoice.invoice_number || 'invoice'}`} onClose={onClose}>
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <div className="inline-note" style={{ marginBottom: 14 }}>
+          {invoice.ref ? <><span className="ref-code">{invoice.ref}</span> · </> : null}
           From <strong>{invoice.contractor_name}</strong>, logged at{' '}
           {invoice.commission_type === 'fixed'
             ? `${formatMoney(invoice.commission_fixed)} a job`
@@ -1107,6 +1109,45 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   );
 }
 
+// The columns of the logged-invoice table, in order: what each is called, the
+// sort key the API knows it by, and which way round it should read the first
+// time it is clicked. A date or an amount is asked about biggest-first; a name
+// or a reference reads A-Z.
+const COLUMNS = [
+  { key: 'ref', label: 'Ref' },
+  { key: 'invoice_date', label: 'Date', desc: true },
+  { key: 'contractor', label: 'Contractor' },
+  { key: 'region', label: 'Office' },
+  { key: 'invoice_number', label: 'Invoice' },
+  { key: 'property', label: 'Property / works' },
+  { key: 'total_amount', label: 'Invoice total', desc: true, num: true },
+  { key: 'commission_amount', label: 'Commission', desc: true, num: true },
+  { key: 'status', label: 'Status' },
+];
+
+// A column heading you can sort by. The arrow only appears on the column doing
+// the sorting — a row of arrows on every heading reads as decoration and stops
+// saying anything.
+function SortHeader({ col, sort, dir, onSort }) {
+  const active = sort === col.key;
+  return (
+    <th
+      className={col.num ? 'num' : undefined}
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        className={`th-sort ${active ? 'active' : ''}`}
+        onClick={() => onSort(col)}
+        title={`Sort by ${col.label.toLowerCase()}`}
+      >
+        {col.label}
+        <span aria-hidden="true" className="th-arrow">{active ? (dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </button>
+    </th>
+  );
+}
+
 // Dropping invoices straight onto the page. Opening the log form first for
 // every single invoice is the slow part of a month end, so the whole page
 // takes a drop — and a drop of several files logs them one after another.
@@ -1174,10 +1215,13 @@ function noticeForSaved(saved, month) {
   const strays = saved.filter((s) => s.mismatch);
   if (saved.length === 1) {
     const only = saved[0];
-    if (!only.mismatch) return null;
+    // The reference is the thing worth quoting afterwards, so the confirmation
+    // says it rather than just "saved".
+    const logged = only.ref ? `Logged as ${only.ref}.` : 'Logged.';
+    if (!only.mismatch) return { text: logged };
     return {
       month: only.month,
-      text: `Saved — but it's dated ${formatDate(only.date)}, so it's in ${monthLabel(only.month)}, not the month you're viewing.`,
+      text: `${logged} It's dated ${formatDate(only.date)}, so it's in ${monthLabel(only.month)}, not the month you're viewing.`,
     };
   }
   if (!saved.length) return null;
@@ -1209,6 +1253,10 @@ export default function ContractorInvoices() {
   const month = params.get('month') || monthOf();
   const region = params.get('region') || '';
   const search = params.get('search') || '';
+  // Sorting lives in the URL like every other filter, so a sorted list is a
+  // link somebody can send.
+  const sort = params.get('sort') || '';
+  const dir = params.get('dir') === 'asc' ? 'asc' : 'desc';
 
   const setParam = (k, v) => {
     const next = new URLSearchParams(params);
@@ -1225,10 +1273,12 @@ export default function ContractorInvoices() {
       status,
       region,
       search,
+      sort,
+      dir,
       from: `${month}-01`,
       to: `${month}-${String(last).padStart(2, '0')}`,
     };
-  }, [contractorId, status, region, search, month]);
+  }, [contractorId, status, region, search, month, sort, dir]);
 
   const load = () => {
     setErr(null);
@@ -1247,7 +1297,17 @@ export default function ContractorInvoices() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contractorId, status, region, search, month]);
+  }, [contractorId, status, region, search, month, sort, dir]);
+
+  // Click a heading to sort by it; click the one already sorting to turn it
+  // round.
+  function sortBy(col) {
+    const next = new URLSearchParams(params);
+    const flipped = sort === col.key && dir === (col.desc ? 'desc' : 'asc');
+    next.set('sort', col.key);
+    next.set('dir', flipped ? (col.desc ? 'asc' : 'desc') : col.desc ? 'desc' : 'asc');
+    setParams(next, { replace: true });
+  }
 
   useEffect(() => {
     api.contractors.list({ active: 'true' }).then(setContractors).catch(() => setContractors([]));
@@ -1429,24 +1489,22 @@ export default function ContractorInvoices() {
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Contractor</th>
-                <th>Office</th>
-                <th>Invoice</th>
-                <th>Property / works</th>
-                <th className="num">Invoice total</th>
-                <th className="num">Commission</th>
-                <th>Status</th>
+                {COLUMNS.map((col) => (
+                  <SortHeader key={col.key} col={col} sort={sort} dir={dir} onSort={sortBy} />
+                ))}
                 <th />
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <span className="ref-code">{r.ref || '—'}</span>
+                  </td>
                   <td className="muted" style={{ whiteSpace: 'nowrap' }}>{formatDate(r.invoice_date)}</td>
                   <td>{r.contractor_name}</td>
                   <td className="muted" style={{ whiteSpace: 'nowrap' }}>{r.region_label || '—'}</td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     {r.invoice_number || <span className="muted">—</span>}
                     {r.has_document && (
                       <a
@@ -1519,7 +1577,7 @@ export default function ContractorInvoices() {
                 </tr>
               ))}
               <tr className="total-row">
-                <td colSpan={5}>{monthLabel(month)} total</td>
+                <td colSpan={6}>{monthLabel(month)} total</td>
                 <td className="num">{formatMoney(totals.invoiced)}</td>
                 <td className="num">{formatMoney(totals.commission)}</td>
                 <td colSpan={2} />
@@ -1587,6 +1645,7 @@ export default function ContractorInvoices() {
             // date was read off the document) would otherwise just not appear.
             const savedMonth = (saved?.invoice_date || '').slice(0, 7);
             advance({
+              ref: saved?.ref || null,
               date: saved?.invoice_date,
               month: savedMonth,
               mismatch: !!savedMonth && savedMonth !== month,
