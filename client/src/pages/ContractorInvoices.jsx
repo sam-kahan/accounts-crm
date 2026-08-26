@@ -1417,18 +1417,22 @@ export default function ContractorInvoices() {
                       <div className="muted" style={{ fontSize: 12 }}>edited</div>
                     )}
                     {/* What the figure IS depends on the contractor's VAT
-                        status, so the unusual half says so: a contractor who
-                        isn't VAT registered only ever collected this much, so
-                        it is VAT-inclusive and we invoice it netted down. */}
-                    {r.commission_vat_inclusive && (
-                      <div
-                        className="muted"
-                        style={{ fontSize: 12 }}
-                        title="They aren't VAT registered, so this is all they collected. We invoice it netted down — VAT comes out of it, not on top."
-                      >
-                        incl. VAT
-                      </div>
-                    )}
+                        status, and the two look identical without this: for a
+                        VAT-registered contractor it is a net that VAT is added
+                        to, for anyone else it is everything they collected and
+                        the VAT comes out of it. Said on every row, because "no
+                        label" is not something anyone reads as a meaning. */}
+                    <div
+                      className="muted"
+                      style={{ fontSize: 12 }}
+                      title={
+                        r.commission_vat_inclusive
+                          ? 'They aren’t VAT registered, so this is all they collected — we invoice it netted down and VAT comes out of it, not on top.'
+                          : 'They are VAT registered, so this is the net — VAT is added on top when we invoice it back.'
+                      }
+                    >
+                      {r.commission_vat_inclusive ? 'incl. VAT' : '+ VAT'}
+                    </div>
                     {r.commissionable_amount !== null && r.commissionable_amount !== undefined && (
                       <div
                         className="muted"
