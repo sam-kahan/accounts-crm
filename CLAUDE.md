@@ -290,6 +290,20 @@ contractor at month end.
 
 ## Recent changes
 
+### 2026-08-26 — drop invoices onto the page to log them
+- **The page itself takes the drop.** `/commission/invoices` listens for a file
+  drag anywhere on it and opens the log form with the invoice already read, so
+  a month's post is logged by dragging rather than by clicking "+ Log invoice"
+  each time. Drop several and they're worked through one at a time ("2 of 4",
+  with **Skip this one**); the form is remounted per file so nothing carries
+  over, and the finished batch reports how many landed and which fell outside
+  the month on screen.
+- The listeners sit on the window **whatever is open**, because a file dropped
+  on a page not expecting one makes the browser navigate to it — which would
+  throw away a half-filled form. The log form's own dropzone still wins: it
+  calls `preventDefault` first, and the page handler stands down on
+  `defaultPrevented`.
+
 ### 2026-08-26 — warning when an invoice has already been logged
 - **The duplicate is caught while the form is being filled in**, not by the save
   being refused after the document has been re-attached. `GET

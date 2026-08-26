@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   api,
@@ -226,7 +226,14 @@ function LogInvoiceModal({
   aiEnabled,
   preselect,
   month,
+  // A file dropped on the page, already chosen — it is read as soon as the
+  // form opens, so a drop is the whole action rather than the start of one.
+  initialFile,
+  // Where this invoice sits in a dropped batch: { index, total }, or null for
+  // a single one.
+  queue,
   onContractorAdded,
+  onSkip,
   onClose,
   onSaved,
 }) {
@@ -244,7 +251,7 @@ function LogInvoiceModal({
     region: '',
     notes: '',
   });
-  const [file, setFile] = useState(null);
+  const [file, setFile] = useState(initialFile || null);
   const [dragOver, setDragOver] = useState(false);
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState(null);
@@ -378,6 +385,14 @@ function LogInvoiceModal({
     if (f) readFile(f);
   }
 
+  // A file dropped on the page arrives already chosen, so read it straight
+  // away. Mount-only: the form is remounted for each file in a batch, so this
+  // runs once per invoice.
+  useEffect(() => {
+    if (initialFile) readFile(initialFile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function save(e) {
     e.preventDefault();
     if (!form.contractor_id) {
@@ -416,7 +431,14 @@ function LogInvoiceModal({
   }
 
   return (
-    <Modal title="Log a contractor invoice" onClose={onClose}>
+    <Modal
+      title={
+        queue
+          ? `Log a contractor invoice — ${queue.index + 1} of ${queue.total}`
+          : 'Log a contractor invoice'
+      }
+      onClose={onClose}
+    >
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <div
@@ -704,9 +726,22 @@ function LogInvoiceModal({
         </label>
 
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn" onClick={onClose}>
+            {queue ? 'Cancel the rest' : 'Cancel'}
+          </button>
+          {queue && (
+            <button type="button" className="btn" onClick={onSkip} disabled={busy}>
+              Skip this one
+            </button>
+          )}
           <button className="btn-primary" disabled={busy || reading || !!duplicates?.exact}>
-            {busy ? 'Saving…' : duplicates?.exact ? 'Already logged' : 'Save invoice'}
+            {busy
+              ? 'Saving…'
+              : duplicates?.exact
+                ? 'Already logged'
+                : queue && queue.index + 1 < queue.total
+                  ? 'Save and next'
+                  : 'Save invoice'}
           </button>
         </div>
       </form>
@@ -935,12 +970,97 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   );
 }
 
+// Dropping invoices straight onto the page. Opening the log form first for
+// every single invoice is the slow part of a month end, so the whole page
+// takes a drop — and a drop of several files logs them one after another.
+//
+// The listeners are on the window whatever is open, because a file dropped on
+// a page that isn't expecting one makes the browser navigate to it, which
+// would throw away a half-filled form. When the log form is open it has its
+// own dropzone: that handler runs first and calls preventDefault, so
+// `defaultPrevented` tells us the drop has already been dealt with.
+function usePageDrop(onFiles, accepting) {
+  const [over, setOver] = useState(false);
+
+  useEffect(() => {
+    // dragenter/dragleave fire for every element the pointer crosses, so the
+    // nesting is counted rather than toggled — otherwise the prompt flickers
+    // as the file passes over the table.
+    let depth = 0;
+    const isFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+
+    const enter = (e) => {
+      if (!isFiles(e)) return;
+      depth += 1;
+      if (accepting) setOver(true);
+    };
+    const over_ = (e) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    const leave = (e) => {
+      if (!isFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setOver(false);
+    };
+    const drop = (e) => {
+      if (!isFiles(e)) return;
+      const handled = e.defaultPrevented; // the form's own dropzone took it
+      e.preventDefault();
+      depth = 0;
+      setOver(false);
+      if (handled || !accepting) return;
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) onFiles(files);
+    };
+
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragover', over_);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragover', over_);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
+    };
+  }, [onFiles, accepting]);
+
+  return over && accepting;
+}
+
+// What to say once a batch is finished. A single invoice keeps the wording it
+// always had; a batch says how many landed, and still offers the month link
+// when any of them were dated outside the one on screen.
+function noticeForSaved(saved, month) {
+  const strays = saved.filter((s) => s.mismatch);
+  if (saved.length === 1) {
+    const only = saved[0];
+    if (!only.mismatch) return null;
+    return {
+      month: only.month,
+      text: `Saved — but it's dated ${formatDate(only.date)}, so it's in ${monthLabel(only.month)}, not the month you're viewing.`,
+    };
+  }
+  if (!saved.length) return null;
+  if (strays.length) {
+    return {
+      month: strays[0].month,
+      text: `Logged ${saved.length} invoices — ${strays.length} of them dated outside ${monthLabel(month)}, so they aren't in this list.`,
+    };
+  }
+  return { text: `Logged ${saved.length} invoices.` };
+}
+
 export default function ContractorInvoices() {
   const [params, setParams] = useSearchParams();
   const [rows, setRows] = useState(null);
   const [contractors, setContractors] = useState([]);
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [logging, setLogging] = useState(false);
+  // What is being logged: null, or a batch of files with the one being filled
+  // in. Clicking "+ Log invoice" is the same thing with no file in it.
+  const [logging, setLogging] = useState(null);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState(null);
   const [err, setErr] = useState(null);
@@ -1015,6 +1135,28 @@ export default function ContractorInvoices() {
     }
   }
 
+  // A batch is worked through one invoice at a time: finish (or skip) one and
+  // the next opens with its file already read.
+  function advance(saved) {
+    const q = logging;
+    const list = saved ? [...(q?.saved || []), saved] : q?.saved || [];
+    if (q && q.index + 1 < q.files.length) {
+      setLogging({ ...q, index: q.index + 1, saved: list });
+      return;
+    }
+    setLogging(null);
+    setNotice(noticeForSaved(list, month));
+  }
+
+  const startLogging = useCallback((files) => {
+    setNotice(null);
+    setLogging({ files, index: 0, saved: [] });
+  }, []);
+
+  // Files dropped on the page open the log form; while it is open its own
+  // dropzone takes over, so the page stops offering to.
+  const dragging = usePageDrop(startLogging, !logging && !editing);
+
   const totals = (rows || []).reduce(
     (acc, r) => {
       acc.invoiced += Number(r.total_amount || 0);
@@ -1045,9 +1187,11 @@ export default function ContractorInvoices() {
       {notice && (
         <div className="inline-note" style={{ marginBottom: 12 }}>
           {notice.text}{' '}
-          <button className="linkish" onClick={() => { setParam('month', notice.month); setNotice(null); }}>
-            Show {monthLabel(notice.month)}
-          </button>
+          {notice.month && (
+            <button className="linkish" onClick={() => { setParam('month', notice.month); setNotice(null); }}>
+              Show {monthLabel(notice.month)}
+            </button>
+          )}
         </div>
       )}
 
@@ -1107,8 +1251,13 @@ export default function ContractorInvoices() {
           >
             Export CSV
           </a>
-          <button className="btn-primary" onClick={() => setLogging(true)}>+ Log invoice</button>
+          <button className="btn-primary" onClick={() => startLogging([])}>+ Log invoice</button>
         </div>
+      </div>
+
+      <div className="muted drop-hint">
+        Or drag invoices straight onto this page — several at once and they're logged one after
+        another.
       </div>
 
       {err && (
@@ -1126,7 +1275,8 @@ export default function ContractorInvoices() {
           )
         ) : rows.length === 0 ? (
           <div className="empty">
-            Nothing logged for {monthLabel(month)}. Upload a contractor invoice to get started.
+            Nothing logged for {monthLabel(month)}. Drop contractor invoices anywhere on this page
+            — several at once is fine — and the details are read off them.
           </div>
         ) : (
           <table>
@@ -1223,6 +1373,18 @@ export default function ContractorInvoices() {
         )}
       </div>
 
+      {dragging && (
+        <div className="page-drop">
+          <div className="page-drop-card">
+            <div className="page-drop-title">Drop to log the invoice</div>
+            <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              PDF, Word, photo or text. Drop several and they're logged one after another
+              {aiEnabled ? ' — the details are read off each one' : ''}.
+            </div>
+          </div>
+        </div>
+      )}
+
       {editing && (
         <EditInvoiceModal
           invoice={editing}
@@ -1245,25 +1407,34 @@ export default function ContractorInvoices() {
 
       {logging && (
         <LogInvoiceModal
+          // A fresh form per file in the batch — the previous one's fields
+          // must not carry over into the next invoice.
+          key={`${logging.index}-${logging.files[logging.index]?.name || 'blank'}`}
           contractors={contractors}
           aiEnabled={aiEnabled}
           preselect={contractorId}
           month={month}
+          initialFile={logging.files[logging.index] || null}
+          queue={
+            logging.files.length > 1
+              ? { index: logging.index, total: logging.files.length }
+              : null
+          }
           onContractorAdded={(c) => setContractors((list) => [...list, c])}
-          onClose={() => setLogging(false)}
+          onSkip={() => advance(null)}
+          onClose={() => {
+            setLogging(null);
+            setNotice(noticeForSaved(logging.saved, month));
+          }}
           onSaved={(saved) => {
-            setLogging(false);
             // An invoice dated outside the month on screen (often because the
             // date was read off the document) would otherwise just not appear.
             const savedMonth = (saved?.invoice_date || '').slice(0, 7);
-            setNotice(
-              savedMonth && savedMonth !== month
-                ? {
-                    month: savedMonth,
-                    text: `Saved — but it's dated ${formatDate(saved.invoice_date)}, so it's in ${monthLabel(savedMonth)}, not the month you're viewing.`,
-                  }
-                : null,
-            );
+            advance({
+              date: saved?.invoice_date,
+              month: savedMonth,
+              mismatch: !!savedMonth && savedMonth !== month,
+            });
             load();
           }}
         />
