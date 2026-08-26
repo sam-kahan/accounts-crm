@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export default function Modal({ title, onClose, children, footer }) {
+export default function Modal({ title, onClose, children, footer, wide = false }) {
   const dialogRef = useRef(null);
   // Whether the press that started this click landed on the backdrop. Selecting
   // text in a field and releasing the button outside the dialog otherwise
@@ -63,7 +63,7 @@ export default function Modal({ title, onClose, children, footer }) {
       }}
     >
       <div
-        className="modal"
+        className={`modal ${wide ? 'wide' : ''}`}
         ref={dialogRef}
         role="dialog"
         aria-modal="true"

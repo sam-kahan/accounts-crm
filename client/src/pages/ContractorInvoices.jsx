@@ -11,7 +11,9 @@ import {
   REGIONS,
   REGION_LABEL,
 } from '../api';
+import { previewCommission, describePart, ceilingFor } from '../commission';
 import Modal from '../components/Modal.jsx';
+import BulkLogModal from '../components/BulkLogModal.jsx';
 import MonthSelect from '../components/MonthSelect.jsx';
 import OutstandingMonths from '../components/OutstandingMonths.jsx';
 
@@ -37,59 +39,6 @@ function defaultDateFor(month) {
   if (!y || !m) return today;
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return `${month}-${String(last).padStart(2, '0')}`;
-}
-
-// A preview of what the server will charge, shown live as the amounts are
-// typed. The server recomputes from the contractor's agreement when it saves —
-// this figure is only sent if the user deliberately overrides it.
-function previewCommission(contractor, { net, vat, total, commissionable }) {
-  if (!contractor) return 0;
-  const netN = Number(net || 0);
-  const vatN = Number(vat || 0);
-  const totalN = Number(total || 0) || netN + vatN;
-  const whole = Math.max(0, contractor.commission_on === 'gross' ? totalN : netN);
-  // The part of the invoice carrying commission, when it isn't all of it.
-  const part =
-    commissionable === '' || commissionable === null || commissionable === undefined
-      ? null
-      : Math.max(0, Math.min(Number(commissionable) || 0, whole));
-  const base = part === null ? whole : part;
-  const pot = part === null ? Math.max(0, totalN || whole) : part;
-  const rate = Number(contractor.commission_rate || 0);
-  const basis = contractor.commission_basis || 'markup';
-
-  if (contractor.commission_type === 'fixed') {
-    const fixed = Number(contractor.commission_fixed || 0);
-    return basis === 'on_top' ? fixed : Math.min(fixed, pot || fixed);
-  }
-  // markup: the rate was added to the contractor's own price, so the
-  // commission inside the invoice is net x rate / (100 + rate) — £9 on a £99
-  // invoice at 10%, not £9.90.
-  if (basis === 'markup') {
-    return rate > 0 ? Math.round((base * rate * 100) / (100 + rate)) / 100 : 0;
-  }
-  const raw = Math.round(base * rate) / 100;
-  return basis === 'inclusive' ? Math.min(raw, pot || raw) : raw;
-}
-
-// What the commissionable part is measured against: the net or the gross,
-// whichever the contractor's deal takes the rate on. Matches
-// commissionableCeiling() on the server.
-function ceilingFor(contractor, { net, vat, total }) {
-  const netN = Number(net || 0);
-  const totalN = Number(total || 0) || netN + Number(vat || 0);
-  return contractor?.commission_on === 'gross' ? totalN : netN;
-}
-
-// One line saying what the rate was applied to, for the commission callout —
-// so the figure can be read back and understood without opening the invoice.
-function describePart(value, note, owner, amounts) {
-  if (value === '' || value === null || value === undefined) return '';
-  const ceiling = ceilingFor(owner, amounts);
-  const measure = owner?.commission_on === 'gross' ? 'total' : 'net';
-  return ` · on ${formatMoney(Number(value) || 0)} of the ${formatMoney(ceiling)} ${measure}${
-    note ? ` (${note})` : ''
-  }`;
 }
 
 // "Commission is only on part of this invoice." Some contractors pass materials
@@ -315,12 +264,10 @@ function LogInvoiceModal({
   month,
   // A file dropped on the page, already chosen — it is read as soon as the
   // form opens, so a drop is the whole action rather than the start of one.
+  // More than one file goes to the batch screen instead; this form is for one
+  // invoice, with room for all of it.
   initialFile,
-  // Where this invoice sits in a dropped batch: { index, total }, or null for
-  // a single one.
-  queue,
   onContractorAdded,
-  onSkip,
   onClose,
   onSaved,
 }) {
@@ -528,14 +475,7 @@ function LogInvoiceModal({
   }
 
   return (
-    <Modal
-      title={
-        queue
-          ? `Log a contractor invoice — ${queue.index + 1} of ${queue.total}`
-          : 'Log a contractor invoice'
-      }
-      onClose={onClose}
-    >
+    <Modal title="Log a contractor invoice" onClose={onClose}>
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <div
@@ -837,22 +777,9 @@ function LogInvoiceModal({
         </label>
 
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-          <button type="button" className="btn" onClick={onClose}>
-            {queue ? 'Cancel the rest' : 'Cancel'}
-          </button>
-          {queue && (
-            <button type="button" className="btn" onClick={onSkip} disabled={busy}>
-              Skip this one
-            </button>
-          )}
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy || reading || !!duplicates?.exact}>
-            {busy
-              ? 'Saving…'
-              : duplicates?.exact
-                ? 'Already logged'
-                : queue && queue.index + 1 < queue.total
-                  ? 'Save and next'
-                  : 'Save invoice'}
+            {busy ? 'Saving…' : duplicates?.exact ? 'Already logged' : 'Save invoice'}
           </button>
         </div>
       </form>
@@ -1239,9 +1166,12 @@ export default function ContractorInvoices() {
   const [rows, setRows] = useState(null);
   const [contractors, setContractors] = useState([]);
   const [aiEnabled, setAiEnabled] = useState(false);
-  // What is being logged: null, or a batch of files with the one being filled
-  // in. Clicking "+ Log invoice" is the same thing with no file in it.
+  // The one invoice being logged: { file } (or a file of null, from the
+  // button). A batch goes to `bulk` below instead.
   const [logging, setLogging] = useState(null);
+  // A batch: every file read at once, checked side by side, submitted in one
+  // go. One file is still the full form — it has room for the whole invoice.
+  const [bulk, setBulk] = useState(null);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState(null);
   // Earlier months whose commission was never raised.
@@ -1340,27 +1270,32 @@ export default function ContractorInvoices() {
     }
   }
 
-  // A batch is worked through one invoice at a time: finish (or skip) one and
-  // the next opens with its file already read.
-  function advance(saved) {
-    const q = logging;
-    const list = saved ? [...(q?.saved || []), saved] : q?.saved || [];
-    if (q && q.index + 1 < q.files.length) {
-      setLogging({ ...q, index: q.index + 1, saved: list });
-      return;
-    }
-    setLogging(null);
-    setNotice(noticeForSaved(list, month));
-  }
-
+  // One file opens the full form; more than one goes to the batch screen,
+  // where they are all read at once and checked together.
   const startLogging = useCallback((files) => {
     setNotice(null);
-    setLogging({ files, index: 0, saved: [] });
+    if (files.length > 1) {
+      setBulk(files);
+      return;
+    }
+    setLogging({ file: files[0] || null });
   }, []);
+
+  // What to say after invoices were logged — one, or a batch of them.
+  const savedNotice = (list) => setNotice(noticeForSaved(list, month));
+  const savedEntry = (inv) => {
+    const savedMonth = (inv?.invoice_date || '').slice(0, 7);
+    return {
+      ref: inv?.ref || null,
+      date: inv?.invoice_date,
+      month: savedMonth,
+      mismatch: !!savedMonth && savedMonth !== month,
+    };
+  };
 
   // Files dropped on the page open the log form; while it is open its own
   // dropzone takes over, so the page stops offering to.
-  const dragging = usePageDrop(startLogging, !logging && !editing);
+  const dragging = usePageDrop(startLogging, !logging && !editing && !bulk);
 
   const totals = (rows || []).reduce(
     (acc, r) => {
@@ -1456,13 +1391,14 @@ export default function ContractorInvoices() {
           >
             Export CSV
           </a>
+          <button className="btn" onClick={() => setBulk([])}>Upload a batch</button>
           <button className="btn-primary" onClick={() => startLogging([])}>+ Log invoice</button>
         </div>
       </div>
 
       <div className="muted drop-hint">
-        Or drag invoices straight onto this page — several at once and they're logged one after
-        another.
+        Or drag invoices straight onto this page — drop a whole batch and they're read together,
+        then checked and logged in one go.
       </div>
 
       <OutstandingMonths data={outstanding} month={month} onPick={(m) => setParam('month', m)} />
@@ -1592,8 +1528,8 @@ export default function ContractorInvoices() {
           <div className="page-drop-card">
             <div className="page-drop-title">Drop to log the invoice</div>
             <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-              PDF, Word, photo or text. Drop several and they're logged one after another
-              {aiEnabled ? ' — the details are read off each one' : ''}.
+              PDF, Word, photo or text. Drop several and they're all read at once, then
+              checked together{aiEnabled ? '' : ' (automatic reading is off — the details are typed in)'}.
             </div>
           </div>
         </div>
@@ -1619,37 +1555,40 @@ export default function ContractorInvoices() {
         />
       )}
 
+      {bulk && (
+        <BulkLogModal
+          files={bulk}
+          contractors={contractors}
+          aiEnabled={aiEnabled}
+          month={month}
+          onClose={() => {
+            setBulk(null);
+            load();
+          }}
+          onLogged={(saved) => {
+            savedNotice(saved.map(savedEntry));
+            load();
+          }}
+        />
+      )}
+
       {logging && (
         <LogInvoiceModal
           // A fresh form per file in the batch — the previous one's fields
           // must not carry over into the next invoice.
-          key={`${logging.index}-${logging.files[logging.index]?.name || 'blank'}`}
+          key={logging.file?.name || 'blank'}
           contractors={contractors}
           aiEnabled={aiEnabled}
           preselect={contractorId}
           month={month}
-          initialFile={logging.files[logging.index] || null}
-          queue={
-            logging.files.length > 1
-              ? { index: logging.index, total: logging.files.length }
-              : null
-          }
+          initialFile={logging.file}
           onContractorAdded={(c) => setContractors((list) => [...list, c])}
-          onSkip={() => advance(null)}
-          onClose={() => {
-            setLogging(null);
-            setNotice(noticeForSaved(logging.saved, month));
-          }}
+          onClose={() => setLogging(null)}
           onSaved={(saved) => {
+            setLogging(null);
             // An invoice dated outside the month on screen (often because the
             // date was read off the document) would otherwise just not appear.
-            const savedMonth = (saved?.invoice_date || '').slice(0, 7);
-            advance({
-              ref: saved?.ref || null,
-              date: saved?.invoice_date,
-              month: savedMonth,
-              mismatch: !!savedMonth && savedMonth !== month,
-            });
+            savedNotice([savedEntry(saved)]);
             load();
           }}
         />

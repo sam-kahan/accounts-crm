@@ -311,6 +311,32 @@ contractor at month end.
 
 ## Recent changes
 
+### 2026-08-26 — a batch is read together and submitted in one go
+- **Drop a pile of invoices, check them side by side, log them all.** More than
+  one file — dropped on the page, dropped on the dialog, or picked with
+  **Upload a batch** — opens `components/BulkLogModal.jsx`: one card per
+  document, each read in the background (three at a time, since reading is a
+  round trip to the model), then all of them on screen to correct before a
+  single **Log N invoices**. More files can be dropped in while the first are
+  still being read; they join the queue.
+- **Each card says what it still needs.** The empty fields that would be
+  refused are collapsed into one line ("Needs a contractor and the amounts") —
+  ten cards with three warnings each is a wall of amber nobody reads — while an
+  invoice already on file, or a name that doesn't match the contractor
+  selected, gets a sentence of its own. A card that needs something is left out
+  of the submit and says so on the button ("Log the 3 that are ready").
+- **Submitting is sequential and per row.** Two invoices with the same number
+  must meet the unique index one after the other rather than race it, and a row
+  that fails (a duplicate, a validation error) keeps the server's message and
+  stays editable while the rest of the batch goes through.
+- **One file is still the full form**, which has room for the whole invoice —
+  the contractor set-up, commission on part of it, an override, notes. The
+  batch screen carries the fields a month's post actually needs and says so:
+  the rest is a click away on **Amend**.
+- The commission preview both screens show now lives in `client/src/commission.js`
+  rather than inside the page, so the batch and the single form can't work a
+  figure out differently.
+
 ### 2026-08-26 — a reference on every logged invoice, and sortable columns
 - **`GC-CI-00001` on each record** (migration `017`) — see "Contractor
   commission" above for why it is sequential and DB-generated. Shown as the
@@ -363,10 +389,8 @@ contractor at month end.
 - **The page itself takes the drop.** `/commission/invoices` listens for a file
   drag anywhere on it and opens the log form with the invoice already read, so
   a month's post is logged by dragging rather than by clicking "+ Log invoice"
-  each time. Drop several and they're worked through one at a time ("2 of 4",
-  with **Skip this one**); the form is remounted per file so nothing carries
-  over, and the finished batch reports how many landed and which fell outside
-  the month on screen.
+  each time. (Dropping several opened them one at a time to begin with; that
+  was replaced the same day by the batch screen below.)
 - The listeners sit on the window **whatever is open**, because a file dropped
   on a page not expecting one makes the browser navigate to it — which would
   throw away a half-filled form. The log form's own dropzone still wins: it
