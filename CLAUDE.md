@@ -186,7 +186,18 @@ contractor at month end.
   commission invoice — void that first, which releases it back to pending. The
   contractor can't be changed (the deal is theirs); that's a delete and re-log.
   A partial unique index on `(contractor_id, lower(invoice_number))` stops the
-  same invoice being logged (and claimed) twice.
+  same invoice being logged (and claimed) twice — and the form **says so before
+  you fill it in** rather than only refusing the save: `findDuplicates()` in
+  `services/commission.js` classifies a candidate against what is already on
+  file, `GET /contractor-invoices/duplicates` asks it live, and the upload path
+  answers it with the extracted fields. Two tiers, and the difference is the
+  point: an `exact` number match is what the index will refuse, so the form says
+  it can't be saved; anything softer (the same number punctuated differently, or
+  the same day and the same money with a number missing from one side) only
+  prompts a look — a contractor really can bill the same amount twice in a day,
+  and a warning that cries wolf is one everybody learns to click past. The
+  invoice number is trimmed on save so " INV-1" and "INV-1" are one invoice to
+  the index as well as to the reader.
 - `commission_invoices` is what we raise. Raising **locks the pending rows
   `FOR UPDATE`** inside the transaction — two people raising the same month at
   once would otherwise each claim the same commission. Voiding releases the
@@ -278,6 +289,24 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-26 — warning when an invoice has already been logged
+- **The duplicate is caught while the form is being filled in**, not by the save
+  being refused after the document has been re-attached. `GET
+  /contractor-invoices/duplicates` answers "have we had this one before?"
+  without saving; the log and amend forms ask as the number and amounts are
+  typed, and `POST /contractor-invoices/extract` answers it with the fields it
+  read off the upload. An exact number match disables Save — the index is going
+  to refuse it — and says which invoice, when, for how much, and whether its
+  commission has already been billed.
+- **An invoice with no number is checked too.** The unique index is partial
+  (`WHERE invoice_number IS NOT NULL`), so a numberless invoice could be logged
+  repeatedly and its commission claimed each time. Same contractor, same day,
+  same total, with a number missing from one side now prompts a look.
+- **Amending says the same thing.** `PUT /contractor-invoices/:id` had no
+  `23505` catch, so renumbering an invoice onto one already on file surfaced as
+  a bare "Internal server error"; it now gives the same 409 the log path does.
+- `findDuplicates()` is pure and unit-tested — the route queries, it decides.
 
 ### 2026-08-24 — invoices sent as Word documents
 - **`.docx` uploads are read like any other invoice.** Dropping a Word file on

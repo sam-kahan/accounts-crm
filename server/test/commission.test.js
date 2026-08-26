@@ -23,6 +23,7 @@ import {
   normaliseName,
   contractorSuggestionFrom,
   resolveContractor,
+  findDuplicates,
 } from '../src/services/commission.js';
 import {
   buildInvoicePayload,
@@ -853,6 +854,76 @@ test('"ADS Maintenance" on an invoice finds "ADS Maintenance Ltd" on file', () =
   const m = matchContractorByName('ADS Maintenance', [ADS, BOB]);
   assert.equal(m?.contractor.id, 'ads');
   assert.equal(m.confident, true);
+});
+
+// --- "have we had this invoice before?" -------------------------------------
+
+const LOGGED = [
+  { id: 'a', invoice_number: 'INV-1042', invoice_date: '2026-08-03', total_amount: '120.00' },
+  { id: 'b', invoice_number: null, invoice_date: '2026-08-11', total_amount: '99.00' },
+  { id: 'c', invoice_number: '77', invoice_date: '2026-08-11', total_amount: '99.00' },
+];
+
+test('the same number is an exact duplicate, compared the way the index compares it', () => {
+  const r = findDuplicates({ invoice_number: 'inv-1042' }, LOGGED);
+  assert.equal(r.exact?.id, 'a');
+  assert.equal(r.similar.length, 0);
+});
+
+test('the same number punctuated differently warns but never blocks', () => {
+  const r = findDuplicates({ invoice_number: 'INV 1042' }, LOGGED);
+  // The index would let this save, so claiming it can't would be a lie.
+  assert.equal(r.exact, null);
+  assert.deepEqual(r.similar.map((s) => [s.invoice.id, s.reason]), [['a', 'number']]);
+});
+
+test('an invoice with no number is matched on the day and the money', () => {
+  const r = findDuplicates({ invoice_date: '2026-08-11', total_amount: 99 }, LOGGED);
+  assert.equal(r.exact, null);
+  // Both of them: with no number to compare, an earlier logging of the same
+  // invoice looks exactly like this whether it carried a number or not.
+  assert.deepEqual(r.similar.map((s) => s.invoice.id), ['b', 'c']);
+});
+
+test('a numbered invoice is still matched against a numberless one on file', () => {
+  const r = findDuplicates(
+    { invoice_number: 'BOB-9', invoice_date: '2026-08-11', total_amount: '99.00' },
+    LOGGED,
+  );
+  assert.deepEqual(r.similar.map((s) => [s.invoice.id, s.reason]), [['b', 'details']]);
+});
+
+test('two invoices that both carry a number are two invoices, alike or not', () => {
+  // Same day, same money, different numbers ('c' vs 'BOB-9') — a contractor
+  // really can bill the same price twice in a day, and nagging about it would
+  // train everyone to click past the warning that matters.
+  const r = findDuplicates(
+    { invoice_number: 'BOB-9', invoice_date: '2026-08-11', total_amount: '99.00' },
+    [LOGGED[2]],
+  );
+  assert.equal(r.exact, null);
+  assert.equal(r.similar.length, 0);
+});
+
+test('a different amount on the same day is not a duplicate', () => {
+  const r = findDuplicates({ invoice_date: '2026-08-11', total_amount: 99.5 }, LOGGED);
+  assert.equal(r.similar.length, 0);
+});
+
+test('an invoice being amended is never its own duplicate', () => {
+  const r = findDuplicates({ invoice_number: 'INV-1042', exclude_id: 'a' }, LOGGED);
+  assert.equal(r.exact, null);
+});
+
+test('with nothing to go on, nothing is claimed', () => {
+  assert.deepEqual(findDuplicates({}, LOGGED), { exact: null, similar: [] });
+  // No amounts typed yet must not match a £0 invoice on file.
+  assert.equal(
+    findDuplicates({ invoice_date: '2026-08-11' }, [
+      { id: 'z', invoice_number: null, invoice_date: '2026-08-11', total_amount: '0.00' },
+    ]).similar.length,
+    0,
+  );
 });
 
 // --- which company raises the invoice ---------------------------------------

@@ -515,3 +515,77 @@ export function resolveContractor({ given = null, match = null }) {
   }
   return { contractor: null, selected_by: null, mismatch: false };
 }
+
+// ---------------------------------------------------------------------------
+// "Have we had this invoice before?"
+//
+// The unique index on (contractor_id, lower(invoice_number)) is the guarantee —
+// the same numbered invoice cannot be logged, and its commission claimed,
+// twice. But it only fires on save, and only when a number was typed, so on its
+// own it catches a duplicate at the worst moment (after the form is filled in
+// and the document re-attached) and misses one entirely when the invoice has no
+// number on it. This classifies a candidate against what is already on file so
+// the form can say so first.
+//
+// Two tiers, and the difference matters:
+//   - `exact`   — the same number, compared exactly as the index compares it.
+//                 Saving is going to be refused; say so before anyone tries.
+//   - `similar` — worth a look, but might be legitimate: the same number give or
+//                 take punctuation, or the same day and the same money with a
+//                 number missing from one side. Never blocks.
+// Pure: the caller does the querying, this decides what the rows mean.
+
+// The index compares lower(invoice_number) and nothing else, so exact matching
+// must too — promising a save that the index then refuses would be worse than
+// no warning at all.
+function indexKey(number) {
+  const s = String(number ?? '');
+  return s ? s.toLowerCase() : '';
+}
+
+// "INV-1042", "inv 1042" and "INV1042" are one invoice to everybody except the
+// index. Not exact, so it warns rather than blocks.
+function looseKey(number) {
+  return indexKey(number).replace(/[^a-z0-9]/g, '');
+}
+
+function sameMoney(a, b) {
+  const x = toPence(a);
+  const y = toPence(b);
+  return x !== null && x !== undefined && y !== null && y !== undefined && x === y;
+}
+
+export function findDuplicates(candidate = {}, rows = []) {
+  const exclude = candidate.exclude_id ? String(candidate.exclude_id) : null;
+  const key = indexKey(candidate.invoice_number);
+  const loose = looseKey(candidate.invoice_number);
+  const date = candidate.invoice_date || null;
+  const total = candidate.total_amount;
+
+  let exact = null;
+  const similar = [];
+
+  for (const row of rows) {
+    if (exclude && String(row.id) === exclude) continue;
+    const rowKey = indexKey(row.invoice_number);
+    const rowLoose = looseKey(row.invoice_number);
+
+    if (key && rowKey && key === rowKey) {
+      exact = exact || row;
+      continue;
+    }
+    if (loose && rowLoose && loose === rowLoose) {
+      similar.push({ invoice: row, reason: 'number' });
+      continue;
+    }
+    // Only when one side has no number to compare: two invoices that both
+    // carry a number and don't match are two invoices, however alike the
+    // money looks — a contractor can bill the same day for the same price
+    // twice, and nagging about it would train everyone to click past this.
+    if ((!key || !rowKey) && date && row.invoice_date === date && sameMoney(total, row.total_amount)) {
+      similar.push({ invoice: row, reason: 'details' });
+    }
+  }
+
+  return { exact, similar };
+}

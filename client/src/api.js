@@ -183,6 +183,12 @@ export const api = {
     exportUrl: (params = {}) =>
       `/api/contractor-invoices/export.csv?${new URLSearchParams(clean(params)).toString()}`,
     aiConfig: () => request('/contractor-invoices/ai/config'),
+    // Has this invoice been logged before? Asked while the form is being
+    // filled in, so a duplicate is caught before the save is refused.
+    duplicates: (params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/contractor-invoices/duplicates${qs ? `?${qs}` : ''}`);
+    },
     // Which office a property address belongs to, and why — the same answer the
     // save path will reach, so the form can show it before anyone presses save.
     region: (property) =>

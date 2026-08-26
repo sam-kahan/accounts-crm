@@ -90,6 +90,113 @@ function useDetectedRegion(property) {
   return detected;
 }
 
+// Ask the server whether this invoice is already on file, while it is still
+// being typed. The unique index would refuse a duplicate on save anyway, but
+// only after the whole form has been filled in and the document re-attached —
+// and it can't see a duplicate that has no number on it at all.
+//
+// Debounced like the region lookup, and quiet until there is something worth
+// asking about: a contractor, and either their invoice number or a date with
+// some money against it. Returns [found, setFound] so the upload path can seed
+// the answer it already got back with the extracted fields.
+function useDuplicates({
+  contractorId,
+  invoiceNumber,
+  invoiceDate,
+  netAmount,
+  vatAmount,
+  totalAmount,
+  excludeId,
+}) {
+  const [found, setFound] = useState(null);
+  const number = (invoiceNumber || '').trim();
+  const stated = [netAmount, vatAmount, totalAmount].some(
+    (v) => v !== '' && v !== null && v !== undefined,
+  );
+  const ask = Boolean(contractorId) && Boolean(number || (invoiceDate && stated));
+
+  useEffect(() => {
+    if (!ask) {
+      setFound(null);
+      return undefined;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      api.contractorInvoices
+        .duplicates({
+          contractor_id: contractorId,
+          invoice_number: number,
+          invoice_date: invoiceDate,
+          net_amount: netAmount,
+          vat_amount: vatAmount,
+          total_amount: totalAmount,
+          exclude_id: excludeId,
+        })
+        .then((d) => live && setFound(d))
+        // A failed check must never stop anyone logging an invoice — the index
+        // is still there, so the worst case is the old behaviour.
+        .catch(() => live && setFound(null));
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [ask, contractorId, number, invoiceDate, netAmount, vatAmount, totalAmount, excludeId]);
+
+  return [found, setFound];
+}
+
+// One line describing an invoice already on file, so the warning can be judged
+// without leaving the form.
+function describeLogged(inv, { number = true } = {}) {
+  return [
+    number ? (inv.invoice_number ? `no. ${inv.invoice_number}` : 'no number') : null,
+    formatDate(inv.invoice_date),
+    formatMoney(inv.total_amount),
+    inv.property,
+    inv.commission_invoice_number
+      ? `on ${inv.commission_invoice_number}`
+      : COMMISSION_STATUS_LABEL[inv.status] || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+// What the check found. An exact number match is going to be refused on save,
+// so it says so plainly; anything else is a prompt to look, never a block —
+// a contractor really can bill the same amount on the same day twice.
+function DuplicateNote({ found, verb = 'Logging it again' }) {
+  const exact = found?.exact || null;
+  const similar = found?.similar || [];
+  if (!exact && !similar.length) return null;
+
+  return (
+    <div className="inline-note warn" style={{ marginBottom: 14 }}>
+      {exact ? (
+        <>
+          <strong>Already logged.</strong> Invoice{' '}
+          <strong>{exact.invoice_number}</strong> is on file for this contractor —{' '}
+          {describeLogged(exact, { number: false })}. {verb} would claim its commission twice, so
+          this can’t be saved. If it really is a different invoice, give it its own number.
+        </>
+      ) : (
+        <>
+          <strong>This looks like one already logged.</strong> Check before saving:
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {similar.slice(0, 4).map((s) => (
+              <li key={s.invoice.id}>
+                {describeLogged(s.invoice)}
+                {s.reason === 'number' ? ' — the same number, punctuated differently' : ''}
+                {s.reason === 'details' ? ' — the same day and the same amount' : ''}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 // The office field, with whatever the address says about it underneath. Shared
 // by logging an invoice and amending one, so the two can never explain the
 // same address differently.
@@ -156,6 +263,15 @@ function LogInvoiceModal({
   // Why the office ended up where it did — read live off the address, so a
   // property typed by hand is explained the same way an uploaded one is.
   const detectedRegion = useDetectedRegion(form.property);
+  // Whether this invoice is already on file, asked as it is typed.
+  const [duplicates, setDuplicates] = useDuplicates({
+    contractorId: form.contractor_id,
+    invoiceNumber: form.invoice_number,
+    invoiceDate: form.invoice_date,
+    netAmount: form.net_amount,
+    vatAmount: form.vat_amount,
+    totalAmount: form.total_amount,
+  });
 
   const computed = useMemo(
     () =>
@@ -192,6 +308,8 @@ function LogInvoiceModal({
         region: prev.region || d.region || '',
       }));
       setStated(d.commission_stated ?? null);
+      // The read already checked — show it now rather than 400ms later.
+      if (d.duplicates) setDuplicates(d.duplicates);
       setSuggestion(d.contractor_id ? null : d.contractor_suggestion || null);
       setMatch(
         d.contractor_name
@@ -371,6 +489,7 @@ function LogInvoiceModal({
         {readNote && (
           <div className="inline-note" style={{ marginBottom: 14 }}>{readNote}</div>
         )}
+        <DuplicateNote found={duplicates} />
         {detectedRegion && !detectedRegion.region && !form.region && (
           <div className="inline-note warn" style={{ marginBottom: 14 }}>
             Which office is this job — {REGION_LABEL.manchester} or {REGION_LABEL.liverpool}?{' '}
@@ -586,8 +705,8 @@ function LogInvoiceModal({
 
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={busy || reading}>
-            {busy ? 'Saving…' : 'Save invoice'}
+          <button className="btn-primary" disabled={busy || reading || !!duplicates?.exact}>
+            {busy ? 'Saving…' : duplicates?.exact ? 'Already logged' : 'Save invoice'}
           </button>
         </div>
       </form>
@@ -627,6 +746,18 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const detectedRegion = useDetectedRegion(form.property);
+  // The same check the log form runs — a correction can renumber an invoice
+  // onto one already on file, which the index would refuse. The invoice being
+  // amended is excluded, or it would always find itself.
+  const [duplicates] = useDuplicates({
+    contractorId: invoice.contractor_id,
+    invoiceNumber: form.invoice_number,
+    invoiceDate: form.invoice_date,
+    netAmount: form.net_amount,
+    vatAmount: form.vat_amount,
+    totalAmount: form.total_amount,
+    excludeId: invoice.id,
+  });
 
   // The deal as it stood when this invoice was logged, not the contractor's
   // deal today — the same snapshot the server recomputes from.
@@ -676,6 +807,7 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
             : `${Number(invoice.commission_rate)}%`}
           {invoice.has_document ? ' · the uploaded document stays as it is' : ''}.
         </div>
+        <DuplicateNote found={duplicates} verb="Renumbering this one onto it" />
 
         <div className="form-grid">
           <label className="field">
@@ -794,8 +926,8 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
 
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={busy}>
-            {busy ? 'Saving…' : 'Save changes'}
+          <button className="btn-primary" disabled={busy || !!duplicates?.exact}>
+            {busy ? 'Saving…' : duplicates?.exact ? 'Number already used' : 'Save changes'}
           </button>
         </div>
       </form>

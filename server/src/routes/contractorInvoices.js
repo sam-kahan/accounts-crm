@@ -18,6 +18,7 @@ import {
   matchContractorByName,
   contractorSuggestionFrom,
   resolveContractor,
+  findDuplicates,
 } from '../services/commission.js';
 import { REGION_KEYS, REGION_LABEL, isRegion, regionForAddress } from '../services/regions.js';
 import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } from '../services/contractorDocs.js';
@@ -85,7 +86,10 @@ const boolish = z.preprocess(
 
 const input = z.object({
   contractor_id: z.string().uuid(),
-  invoice_number: z.string().max(60).optional().nullable(),
+  // Trimmed, because the unique index compares lower(invoice_number) and
+  // nothing else: " INV-1" and "INV-1" would otherwise be two invoices to the
+  // index and one invoice to everybody else.
+  invoice_number: z.string().trim().max(60).optional().nullable(),
   invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   property: z.string().max(300).optional().nullable(),
   landlord_ref: z.string().max(120).optional().nullable(),
@@ -154,6 +158,38 @@ function resolveRegion(supplied, property) {
   return { region: detected.region, detected };
 }
 
+// Has this invoice been logged before? The unique index stops a numbered one
+// being logged twice, but only when it is saved, and only when it has a number;
+// this asks the question up front, and asks it of numberless invoices too.
+//
+// The rows to compare against: everything numbered for that contractor (a
+// duplicate number is a duplicate whenever it was raised), plus everything
+// around the same date (which is what catches an invoice with no number on it).
+// findDuplicates decides what they mean — see services/commission.js.
+async function duplicatesFor({ contractor_id, invoice_number, invoice_date, total_amount, exclude_id }) {
+  const number = String(invoice_number ?? '').trim();
+  if (!contractor_id || (!number && !invoice_date)) return { exact: null, similar: [] };
+
+  const { rows } = await query(
+    `SELECT ${JOINED} ${FROM}
+      WHERE i.contractor_id = $1
+        AND (($2 <> '' AND i.invoice_number IS NOT NULL)
+             OR ($3::date IS NOT NULL AND i.invoice_date BETWEEN $3::date - 45 AND $3::date + 45))
+      ORDER BY i.invoice_date DESC
+      LIMIT 500`,
+    [contractor_id, number, invoice_date || null],
+  );
+
+  const found = findDuplicates(
+    { invoice_number: number, invoice_date: invoice_date || null, total_amount, exclude_id },
+    rows,
+  );
+  return {
+    exact: found.exact ? decorate(found.exact) : null,
+    similar: found.similar.map((s) => ({ reason: s.reason, invoice: decorate(s.invoice) })),
+  };
+}
+
 // --- AI extraction ----------------------------------------------------------
 
 router.get(
@@ -192,6 +228,24 @@ router.post(
 
     const commission = contractor ? resolveCommission(contractor, {}, amounts) : null;
 
+    // Already logged? Once we know whose invoice it is, the number it carries
+    // can be checked against what is on file — so an invoice that arrived
+    // twice is caught on the way in, not by the save being refused after the
+    // whole form has been filled in. The money only counts as something to
+    // match on when the document stated some: reconciling nothing gives zero,
+    // which would match any £0 invoice on file.
+    const statedMoney = [extracted.net_amount, extracted.vat_amount, extracted.total_amount].some(
+      (v) => v !== null && v !== undefined,
+    );
+    const duplicates = contractor
+      ? await duplicatesFor({
+          contractor_id: contractor.id,
+          invoice_number: extracted.invoice_number,
+          invoice_date: extracted.invoice_date,
+          total_amount: statedMoney ? amounts.total_amount : undefined,
+        })
+      : { exact: null, similar: [] };
+
     // Which office the job belongs to, read off the site address the same way
     // the save path reads it. Null means the address didn't settle it — the
     // form then asks, and says why it couldn't tell.
@@ -203,6 +257,7 @@ router.post(
       region: region.region,
       region_reason: region.reason,
       region_source: region.source,
+      duplicates,
       contractor_id: contractor ? contractor.id : null,
       // How we got there: 'given' (already chosen), 'matched' (traced from the
       // invoice), or null (nobody could be identified).
@@ -243,6 +298,32 @@ router.get(
       reason: detected.reason,
       source: detected.source || null,
     });
+  }),
+);
+
+// "Have we had this one before?", asked while the form is being filled in and
+// without saving anything — so a duplicate is caught before the details are
+// re-typed and the document re-attached, rather than by the save being refused.
+const duplicateQuery = z.object({
+  contractor_id: z.string().uuid(),
+  invoice_number: z.string().trim().max(60).optional(),
+  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  net_amount: money.optional(),
+  vat_amount: money.optional(),
+  total_amount: money.optional(),
+  // The invoice being amended never counts as its own duplicate.
+  exclude_id: z.string().uuid().optional(),
+});
+
+router.get(
+  '/duplicates',
+  asyncHandler(async (req, res) => {
+    const q = parse(duplicateQuery, stripEmpty(req.query));
+    // Only reconcile when some money was actually given: an empty form would
+    // otherwise reconcile to zero and match against any £0 invoice on file.
+    const stated = q.net_amount ?? q.vat_amount ?? q.total_amount;
+    const total = stated === undefined ? undefined : reconcileAmounts(q).total_amount;
+    res.json(await duplicatesFor({ ...q, total_amount: total }));
   }),
 );
 
@@ -511,32 +592,46 @@ router.put(
       amounts,
     );
 
-    const { rows } = await query(
-      `UPDATE contractor_invoices SET
-         invoice_number = COALESCE($2, invoice_number),
-         invoice_date   = COALESCE($3, invoice_date),
-         property       = $4, landlord_ref = $5, description = $6,
-         net_amount = $7, vat_amount = $8, total_amount = $9,
-         commission_type = $10, commission_rate = $11, commission_on = $12,
-         commission_basis = $13, commission_amount = $14, commission_override = $15,
-         paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
-         region = COALESCE($19, region), commission_fixed = $20
-       WHERE id = $1 RETURNING id`,
-      [
-        req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
-        d.property ?? current.property, d.landlord_ref ?? current.landlord_ref,
-        d.description ?? current.description,
-        amounts.net_amount, amounts.vat_amount, amounts.total_amount,
-        commission.commission_type, commission.commission_rate, commission.commission_on,
-        commission.commission_basis, commission.commission_amount, commission.commission_override,
-        d.paid_from ?? null, d.paid_on ?? current.paid_on, d.notes ?? current.notes,
-        // Only ever moved deliberately. Re-reading the address on every edit
-        // would let a tidied-up property line move an invoice between two
-        // companies without anyone asking for it.
-        isRegion(d.region) ? d.region : null,
-        commission.commission_fixed,
-      ],
-    );
+    let rows;
+    try {
+      ({ rows } = await query(
+        `UPDATE contractor_invoices SET
+           invoice_number = COALESCE($2, invoice_number),
+           invoice_date   = COALESCE($3, invoice_date),
+           property       = $4, landlord_ref = $5, description = $6,
+           net_amount = $7, vat_amount = $8, total_amount = $9,
+           commission_type = $10, commission_rate = $11, commission_on = $12,
+           commission_basis = $13, commission_amount = $14, commission_override = $15,
+           paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
+           region = COALESCE($19, region), commission_fixed = $20
+         WHERE id = $1 RETURNING id`,
+        [
+          req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
+          d.property ?? current.property, d.landlord_ref ?? current.landlord_ref,
+          d.description ?? current.description,
+          amounts.net_amount, amounts.vat_amount, amounts.total_amount,
+          commission.commission_type, commission.commission_rate, commission.commission_on,
+          commission.commission_basis, commission.commission_amount, commission.commission_override,
+          d.paid_from ?? null, d.paid_on ?? current.paid_on, d.notes ?? current.notes,
+          // Only ever moved deliberately. Re-reading the address on every edit
+          // would let a tidied-up property line move an invoice between two
+          // companies without anyone asking for it.
+          isRegion(d.region) ? d.region : null,
+          commission.commission_fixed,
+        ],
+      ));
+    } catch (err) {
+      // The same unique index the log path trips over: renumbering an invoice
+      // onto one already logged against this contractor would claim its
+      // commission twice. Say which invoice, rather than a bare 500.
+      if (err?.code === '23505') {
+        throw new HttpError(
+          409,
+          `Invoice ${d.invoice_number} is already logged against this contractor — its commission would be claimed twice.`,
+        );
+      }
+      throw err;
+    }
     const { rows: full } = await query(`SELECT ${JOINED} ${FROM} WHERE i.id = $1`, [rows[0].id]);
     res.json(decorate(full[0]));
   }),
