@@ -4,6 +4,7 @@ import {
   findOutwardCode,
   regionForPostcode,
   regionForAddress,
+  regionForJob,
   isRegion,
   REGION_KEYS,
 } from '../src/services/regions.js';
@@ -143,4 +144,35 @@ test('looking past the postcode never invents one deeper in the address', () => 
   assert.equal(regionOf('Unit B2, Mill Lane, Sheffield'), null);
   // A town still places an address with no postcode at all.
   assert.equal(regionForAddress('8 Rodney Street, Liverpool').source, 'town');
+});
+
+test("a contractor's usual office catches an address that can't be placed", () => {
+  // The whole point: what the address says still wins. A Liverpool contractor's
+  // Manchester job is Manchester.
+  const manchesterJob = regionForJob('12 Oak Road, M20 2AB', 'liverpool', 'Acme');
+  assert.equal(manchesterJob.region, 'manchester');
+  assert.equal(manchesterJob.source, 'postcode');
+
+  // No postcode and no town: this is what the fallback is for — the invoice
+  // that says "the flat above the shop".
+  const vague = regionForJob('The flat above the shop', 'liverpool', 'Acme');
+  assert.equal(vague.region, 'liverpool');
+  assert.equal(vague.source, 'contractor_default');
+  assert.match(vague.reason, /Acme is set to Liverpool by default/);
+
+  // A postcode in neither office's area is still not placed by the address, so
+  // the fallback takes it rather than the form asking a question whose answer
+  // never changes.
+  const away = regionForJob('9 High Street, Sheffield S1 2HE', 'manchester', 'Acme');
+  assert.equal(away.region, 'manchester');
+  assert.equal(away.source, 'contractor_default');
+});
+
+test('no default set leaves the answer exactly as the address gave it', () => {
+  const vague = regionForJob('The flat above the shop', null, 'Acme');
+  assert.equal(vague.region, null);
+  assert.equal(vague.source, null);
+  assert.deepEqual(vague.reason, regionForAddress('The flat above the shop').reason);
+  // A junk default is not a default.
+  assert.equal(regionForJob('The flat above the shop', 'birmingham').region, null);
 });

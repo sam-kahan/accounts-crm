@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, formatMoney } from '../api';
+import { api, formatMoney, REGIONS, REGION_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 // The commission agreement is the whole point of a contractor record: set it
@@ -9,7 +9,8 @@ const EMPTY = {
   name: '', trade: '', contact_name: '', email: '', phone: '', address: '',
   commission_type: 'percentage', commission_rate: '', commission_fixed: '',
   commission_on: 'net', commission_basis: 'markup',
-  payment_terms_days: '', vat_registered: true, agreement_notes: '', active: true, notes: '',
+  payment_terms_days: '', vat_registered: true, default_region: '',
+  agreement_notes: '', active: true, notes: '',
 };
 
 function num(v) {
@@ -34,6 +35,8 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
       commission_rate: num(form.commission_rate) ?? 0,
       commission_fixed: num(form.commission_fixed) ?? 0,
       payment_terms_days: num(form.payment_terms_days) ?? 30,
+      // Explicitly null when cleared: back to asking, which "omitted" can't say.
+      default_region: form.default_region || null,
     };
     try {
       const saved = initial?.id
@@ -186,6 +189,27 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
                 : 'They can’t charge VAT, so the commission they collect is treated as VAT-inclusive — we bill it netted down, and they pay back exactly what they took.'}
             </span>
           </label>
+          <label className="field full">
+            <span className="lbl">Which office do they usually work for?</span>
+            <select
+              value={form.default_region || ''}
+              onChange={(e) => set('default_region', e.target.value)}
+            >
+              <option value="">Always ask when the address doesn’t say</option>
+              {REGIONS.map((r) => (
+                <option key={r.key} value={r.key}>{r.label}</option>
+              ))}
+            </select>
+            <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {form.default_region
+                ? `An invoice from them with no postcode — or one outside both areas — is raised by ${
+                    REGION_LABEL[form.default_region]
+                  }. A postcode on the invoice still decides: their ${
+                    form.default_region === 'manchester' ? 'Liverpool' : 'Manchester'
+                  } jobs still go to ${form.default_region === 'manchester' ? 'Liverpool' : 'Manchester'}.`
+                : 'Their invoices are placed by the property postcode, and the form asks when it can’t tell. Set an office here if they only ever work one city.'}
+            </span>
+          </label>
           <div className="field full">
             <span className="lbl">VAT on our commission invoice</span>
             <div className="inline-note" style={{ marginTop: 2 }}>
@@ -328,7 +352,16 @@ export default function Contractors() {
                     <strong>{c.name}</strong>
                     {!c.active && <span className="badge grey" style={{ marginLeft: 8 }}>Inactive</span>}
                     <div className="muted" style={{ fontSize: 12 }}>
-                      {[c.trade, c.email].filter(Boolean).join(' · ') || '—'}
+                      {[
+                        c.trade,
+                        c.email,
+                        // Only worth saying when it is set: no default is the
+                        // normal case, and "asks each time" on every row is
+                        // noise.
+                        c.default_region ? `usually ${REGION_LABEL[c.default_region]}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') || '—'}
                     </div>
                   </td>
                   <td>

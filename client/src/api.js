@@ -197,8 +197,15 @@ export const api = {
     },
     // Which office a property address belongs to, and why — the same answer the
     // save path will reach, so the form can show it before anyone presses save.
-    region: (property) =>
-      request(`/contractor-invoices/region?property=${encodeURIComponent(property || '')}`),
+    // Which office an address belongs to, and why. The contractor matters: an
+    // address that can't be placed falls back to their usual office, so the
+    // preview has to ask the same question the save will.
+    region: (property, contractorId) =>
+      request(
+        `/contractor-invoices/region?property=${encodeURIComponent(property || '')}${
+          contractorId ? `&contractor_id=${encodeURIComponent(contractorId)}` : ''
+        }`,
+      ),
     // Read an uploaded invoice and hand back the fields it contains.
     extract: (file, contractorId) => {
       const fd = new FormData();

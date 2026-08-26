@@ -102,8 +102,10 @@ function CommissionPartFields({ value, note, onChange, onNote, contractor, amoun
 
 
 // Ask the server which office an address belongs to, the same way the save path
-// will. Debounced, because it runs while the address is being typed.
-function useDetectedRegion(property) {
+// will — including the contractor's usual office, which is what catches an
+// address that can't be placed. Debounced, because it runs while the address is
+// being typed.
+function useDetectedRegion(property, contractorId) {
   const [detected, setDetected] = useState(null);
   useEffect(() => {
     const address = (property || '').trim();
@@ -114,7 +116,7 @@ function useDetectedRegion(property) {
     let live = true;
     const t = setTimeout(() => {
       api.contractorInvoices
-        .region(address)
+        .region(address, contractorId)
         .then((d) => live && setDetected(d))
         .catch(() => live && setDetected(null));
     }, 350);
@@ -122,7 +124,7 @@ function useDetectedRegion(property) {
       live = false;
       clearTimeout(t);
     };
-  }, [property]);
+  }, [property, contractorId]);
   return detected;
 }
 
@@ -309,7 +311,7 @@ function LogInvoiceModal({
   const contractor = contractors.find((c) => c.id === form.contractor_id) || null;
   // Why the office ended up where it did — read live off the address, so a
   // property typed by hand is explained the same way an uploaded one is.
-  const detectedRegion = useDetectedRegion(form.property);
+  const detectedRegion = useDetectedRegion(form.property, form.contractor_id);
   // Whether this invoice is already on file, asked as it is typed.
   const [duplicates, setDuplicates] = useDuplicates({
     contractorId: form.contractor_id,
@@ -829,7 +831,7 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   const [error, setError] = useState(null);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const detectedRegion = useDetectedRegion(form.property);
+  const detectedRegion = useDetectedRegion(form.property, invoice.contractor_id);
   // The same check the log form runs — a correction can renumber an invoice
   // onto one already on file, which the index would refuse. The invoice being
   // amended is excluded, or it would always find itself.

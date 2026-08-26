@@ -158,9 +158,14 @@ contractor at month end.
   WA13-16 to Manchester, WA7-12 to Liverpool, the Wirral half of CH and Southport
   to Liverpool. An address with no postcode falls back to a town name, but never
   one used as a street ("Liverpool Road" runs through Eccles). Anything it can't
-  place returns **null with a reason**, and the form asks — the two are separate
-  legal entities, so a wrong guess is a real accounting problem rather than a
-  typo. The region is stored per logged invoice (migration `014`), so month end
+  place returns **null with a reason**, and then `contractors.default_region`
+  (migration `018`) is tried — a contractor who only ever works one city, set
+  once, so the form stops asking a question whose answer never changes. It is a
+  **fallback, never an override**: `regionForJob()` takes what the address says
+  first, so a Liverpool contractor's Manchester job is still Manchester, and a
+  stated office still beats both. With no default set the form asks exactly as
+  before — the two are separate legal entities, so a wrong guess is a real
+  accounting problem rather than a typo. The region is stored per logged invoice (migration `014`), so month end
   raises **one commission invoice per contractor per office**; `commission_invoices.region`
   decides which company id the push goes to and whose name and VAT number appear
   on the paperwork.
@@ -336,6 +341,15 @@ contractor at month end.
 - The commission preview both screens show now lives in `client/src/commission.js`
   rather than inside the page, so the batch and the single form can't work a
   figure out differently.
+
+### 2026-08-26 — a contractor's usual office
+- **`contractors.default_region`** (migration `018`): set on the contractor form
+  ("Which office do they usually work for?"), shown in the contractor list, and
+  applied by `regionForJob()` in `services/regions.js` everywhere the office is
+  worked out — logging, amending, the live "Invoiced by" hint, and reading an
+  uploaded invoice. Only ever a fallback for an address that couldn't be placed;
+  the reasoning is in "Contractor commission" above. `NULL` keeps today's
+  behaviour of asking, which is what every existing contractor has.
 
 ### 2026-08-26 — dropping a file works anywhere on the window
 - The batch screen and the log form only took a drop **on** their dashed box,

@@ -21,7 +21,7 @@ import {
   resolveContractor,
   findDuplicates,
 } from '../services/commission.js';
-import { REGION_KEYS, REGION_LABEL, isRegion, regionForAddress } from '../services/regions.js';
+import { REGION_KEYS, REGION_LABEL, isRegion, regionForJob } from '../services/regions.js';
 import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } from '../services/contractorDocs.js';
 import { extractInvoice } from '../services/invoiceExtract.js';
 
@@ -184,9 +184,11 @@ function resolveCommission(contractor, d, amounts, commissionable = null) {
 // the invoice knows things the postcode doesn't. When neither settles it we
 // stop and ask rather than picking one: the two are separate companies, and an
 // invoice raised by the wrong one is a real accounting problem, not a typo.
-function resolveRegion(supplied, property) {
+function resolveRegion(supplied, property, contractor = null) {
   if (isRegion(supplied)) return { region: supplied, detected: null };
-  const detected = regionForAddress(property);
+  // The address decides; the contractor's usual office only catches an address
+  // that couldn't be placed.
+  const detected = regionForJob(property, contractor?.default_region, contractor?.name);
   if (!detected.region) {
     throw new HttpError(
       400,
@@ -285,9 +287,10 @@ router.post(
       : { exact: null, similar: [] };
 
     // Which office the job belongs to, read off the site address the same way
-    // the save path reads it. Null means the address didn't settle it — the
-    // form then asks, and says why it couldn't tell.
-    const region = regionForAddress(extracted.property);
+    // the save path reads it — including the contractor's usual office, once we
+    // know whose invoice this is. Null means nothing settled it: the form then
+    // asks, and says why it couldn't tell.
+    const region = regionForJob(extracted.property, contractor?.default_region, contractor?.name);
 
     res.json({
       ...extracted,
@@ -329,7 +332,14 @@ router.get(
   '/region',
   asyncHandler(async (req, res) => {
     const property = String(req.query.property || '').slice(0, 300);
-    const detected = regionForAddress(property);
+    // With a contractor in hand the answer includes their usual office, so the
+    // form says what the save is actually going to do.
+    const contractor = req.query.contractor_id
+      ? (await query('SELECT name, default_region FROM contractors WHERE id = $1', [
+          req.query.contractor_id,
+        ])).rows[0]
+      : null;
+    const detected = regionForJob(property, contractor?.default_region, contractor?.name);
     res.json({
       region: detected.region,
       region_label: REGION_LABEL[detected.region] || null,
@@ -608,7 +618,7 @@ router.post(
       const contractor = await getContractor(d.contractor_id);
       const amounts = reconcileAmounts(d);
       const commission = resolveCommission(contractor, d, amounts, d.commissionable_amount ?? null);
-      const { region } = resolveRegion(d.region, d.property);
+      const { region } = resolveRegion(d.region, d.property, contractor);
       const file = req.file;
 
       const { rows } = await query(

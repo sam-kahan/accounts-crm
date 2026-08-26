@@ -209,6 +209,25 @@ export function regionForPostcode(postcode) {
 //
 // Always returns a shape, never throws: `region` is null when the address
 // can't be placed, and `reason` is a sentence a person can act on either way.
+// The office for a job, with the contractor's usual one to fall back on.
+//
+// Order matters and is the whole point: what the address says wins, always. A
+// contractor who normally works Liverpool still bills a Manchester postcode to
+// Manchester — the fallback is for the invoice that doesn't say, not for the
+// one that says something inconvenient. With no fallback set this is exactly
+// regionForAddress(), so nothing changes for a contractor nobody has set one
+// for.
+export function regionForJob(address, fallback = null, who = 'This contractor') {
+  const detected = regionForAddress(address);
+  if (detected.region || !isRegion(fallback)) return detected;
+  return {
+    region: fallback,
+    reason: `${detected.reason} ${who} is set to ${REGION_LABEL[fallback]} by default.`,
+    source: 'contractor_default',
+    postcode: detected.postcode,
+  };
+}
+
 export function regionForAddress(address) {
   const text = String(address || '').trim();
   if (!text) {

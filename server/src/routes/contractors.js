@@ -6,6 +6,7 @@ import { buildUpdateSet } from '../lib/sql.js';
 import { withNumbers } from '../lib/money.js';
 import { config } from '../config.js';
 import { COMMISSION_TYPES, COMMISSION_ON, COMMISSION_BASES, describeDeal } from '../services/commission.js';
+import { REGION_KEYS } from '../services/regions.js';
 
 const router = Router();
 
@@ -13,7 +14,7 @@ const NUMERIC_COLS = ['commission_rate', 'commission_fixed'];
 
 const COLS = `id, name, trade, contact_name, email, phone, address,
   commission_type, commission_rate, commission_fixed, commission_on, commission_basis,
-  payment_terms_days, vat_registered, agreement_notes, active, notes,
+  payment_terms_days, vat_registered, default_region, agreement_notes, active, notes,
   created_at, updated_at`;
 
 const input = z.object({
@@ -30,6 +31,9 @@ const input = z.object({
   commission_basis: z.enum(COMMISSION_BASES).optional(),
   payment_terms_days: z.number().int().min(0).max(365).optional(),
   vat_registered: z.boolean().optional(),
+  // The office to fall back on when the property address doesn't settle it.
+  // Null clears it back to asking.
+  default_region: z.enum(REGION_KEYS).optional().nullable(),
   agreement_notes: z.string().max(4000).optional().nullable(),
   active: z.boolean().optional(),
   notes: z.string().max(4000).optional().nullable(),
@@ -108,8 +112,8 @@ router.post(
       `INSERT INTO contractors
         (name, trade, contact_name, email, phone, address, commission_type, commission_rate,
          commission_fixed, commission_on, commission_basis,
-         payment_terms_days, vat_registered, agreement_notes, active, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+         payment_terms_days, vat_registered, agreement_notes, active, notes, default_region)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING ${COLS}`,
       [
         d.name, d.trade || null, d.contact_name || null, d.email || null, d.phone || null,
@@ -124,6 +128,7 @@ router.post(
         d.agreement_notes || null,
         d.active ?? true,
         d.notes || null,
+        d.default_region || null,
       ],
     );
     res.status(201).json(decorate(rows[0]));
@@ -150,6 +155,7 @@ router.put(
       commission_basis: d.commission_basis,
       payment_terms_days: d.payment_terms_days,
       vat_registered: d.vat_registered,
+      default_region: d.default_region,
       agreement_notes: d.agreement_notes,
       active: d.active,
       notes: d.notes,
