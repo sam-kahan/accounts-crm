@@ -14,6 +14,7 @@ import {
 import { previewCommission, describePart, ceilingFor } from '../commission';
 import Modal from '../components/Modal.jsx';
 import BulkLogModal from '../components/BulkLogModal.jsx';
+import { useWindowFileDrop, FileDropPrompt } from '../components/FileDrop.jsx';
 import MonthSelect from '../components/MonthSelect.jsx';
 import OutstandingMonths from '../components/OutstandingMonths.jsx';
 
@@ -288,7 +289,10 @@ function LogInvoiceModal({
     notes: '',
   });
   const [file, setFile] = useState(initialFile || null);
-  const [dragOver, setDragOver] = useState(false);
+  // Kept in a ref so the window-drop listener below has something stable to
+  // call: re-registering it mid-drag would lose count of the dragenters and
+  // make the prompt flicker.
+  const takeFileRef = useRef(null);
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState(null);
   const [stated, setStated] = useState(null); // commission the invoice itself named
@@ -427,6 +431,14 @@ function LogInvoiceModal({
     setFile(f);
     if (f) readFile(f);
   }
+  takeFileRef.current = takeFile;
+
+  // A drop anywhere on this dialog, not only on the dashed box: the box is a
+  // small thing to aim at, and the form is often scrolled past it.
+  const dragging = useWindowFileDrop(
+    useCallback((files) => takeFileRef.current?.(files[0] || null), []),
+    true,
+  );
 
   // A file dropped on the page arrives already chosen, so read it straight
   // away. Mount-only: the form is remounted for each file in a batch, so this
@@ -476,10 +488,17 @@ function LogInvoiceModal({
 
   return (
     <Modal title="Log a contractor invoice" onClose={onClose}>
+      {dragging && (
+        <FileDropPrompt
+          overDialog
+          title={file ? 'Drop to read a different file' : 'Drop the invoice'}
+          hint="PDF, Word, photo or text."
+        />
+      )}
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <div
-          className={`dropzone ${dragOver ? 'over' : ''} ${file ? 'filled' : ''}`}
+          className={`dropzone ${dragging ? 'over' : ''} ${file ? 'filled' : ''}`}
           role="button"
           tabIndex={0}
           onClick={() => fileInput.current?.click()}
@@ -488,16 +507,6 @@ function LogInvoiceModal({
               e.preventDefault();
               fileInput.current?.click();
             }
-          }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            takeFile(e.dataTransfer.files?.[0] || null);
           }}
           style={{ marginBottom: 14 }}
         >
@@ -516,7 +525,7 @@ function LogInvoiceModal({
             </>
           ) : (
             <>
-              <div>Drop the invoice here, or click to choose</div>
+              <div>Drop the invoice anywhere on this window, or click to choose</div>
               <div className="dz-hint">
                 PDF, Word, photo or text
                 {aiEnabled ? ' — the details are read off it automatically' : ''}
@@ -1075,66 +1084,6 @@ function SortHeader({ col, sort, dir, onSort }) {
   );
 }
 
-// Dropping invoices straight onto the page. Opening the log form first for
-// every single invoice is the slow part of a month end, so the whole page
-// takes a drop — and a drop of several files logs them one after another.
-//
-// The listeners are on the window whatever is open, because a file dropped on
-// a page that isn't expecting one makes the browser navigate to it, which
-// would throw away a half-filled form. When the log form is open it has its
-// own dropzone: that handler runs first and calls preventDefault, so
-// `defaultPrevented` tells us the drop has already been dealt with.
-function usePageDrop(onFiles, accepting) {
-  const [over, setOver] = useState(false);
-
-  useEffect(() => {
-    // dragenter/dragleave fire for every element the pointer crosses, so the
-    // nesting is counted rather than toggled — otherwise the prompt flickers
-    // as the file passes over the table.
-    let depth = 0;
-    const isFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
-
-    const enter = (e) => {
-      if (!isFiles(e)) return;
-      depth += 1;
-      if (accepting) setOver(true);
-    };
-    const over_ = (e) => {
-      if (!isFiles(e)) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    };
-    const leave = (e) => {
-      if (!isFiles(e)) return;
-      depth = Math.max(0, depth - 1);
-      if (!depth) setOver(false);
-    };
-    const drop = (e) => {
-      if (!isFiles(e)) return;
-      const handled = e.defaultPrevented; // the form's own dropzone took it
-      e.preventDefault();
-      depth = 0;
-      setOver(false);
-      if (handled || !accepting) return;
-      const files = Array.from(e.dataTransfer?.files || []);
-      if (files.length) onFiles(files);
-    };
-
-    window.addEventListener('dragenter', enter);
-    window.addEventListener('dragover', over_);
-    window.addEventListener('dragleave', leave);
-    window.addEventListener('drop', drop);
-    return () => {
-      window.removeEventListener('dragenter', enter);
-      window.removeEventListener('dragover', over_);
-      window.removeEventListener('dragleave', leave);
-      window.removeEventListener('drop', drop);
-    };
-  }, [onFiles, accepting]);
-
-  return over && accepting;
-}
-
 // What to say once a batch is finished. A single invoice keeps the wording it
 // always had; a batch says how many landed, and still offers the month link
 // when any of them were dated outside the one on screen.
@@ -1293,9 +1242,9 @@ export default function ContractorInvoices() {
     };
   };
 
-  // Files dropped on the page open the log form; while it is open its own
-  // dropzone takes over, so the page stops offering to.
-  const dragging = usePageDrop(startLogging, !logging && !editing && !bulk);
+  // Files dropped on the page open the log form — or the batch screen. While
+  // either is open it takes the drop instead, so the page stands down.
+  const dragging = useWindowFileDrop(startLogging, !logging && !editing && !bulk);
 
   const totals = (rows || []).reduce(
     (acc, r) => {
@@ -1524,15 +1473,12 @@ export default function ContractorInvoices() {
       </div>
 
       {dragging && (
-        <div className="page-drop">
-          <div className="page-drop-card">
-            <div className="page-drop-title">Drop to log the invoice</div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-              PDF, Word, photo or text. Drop several and they're all read at once, then
-              checked together{aiEnabled ? '' : ' (automatic reading is off — the details are typed in)'}.
-            </div>
-          </div>
-        </div>
+        <FileDropPrompt
+          title="Drop to log the invoice"
+          hint={`PDF, Word, photo or text. Drop several and they're all read at once, then checked together${
+            aiEnabled ? '' : ' (automatic reading is off — the details are typed in)'
+          }.`}
+        />
       )}
 
       {editing && (

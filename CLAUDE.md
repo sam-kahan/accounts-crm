@@ -337,6 +337,13 @@ contractor at month end.
   rather than inside the page, so the batch and the single form can't work a
   figure out differently.
 
+### 2026-08-26 — dropping a file works anywhere on the window
+- The batch screen and the log form only took a drop **on** their dashed box,
+  which is a small thing to aim at and is often scrolled out of sight. Both now
+  take it anywhere on the window — footer, backdrop, a form field, the table
+  behind — with the prompt shown over the dialog. See the note in the entry
+  below for how the page and the dialogs share one drop between them.
+
 ### 2026-08-26 — a reference on every logged invoice, and sortable columns
 - **`GC-CI-00001` on each record** (migration `017`) — see "Contractor
   commission" above for why it is sequential and DB-generated. Shown as the
@@ -391,11 +398,14 @@ contractor at month end.
   a month's post is logged by dragging rather than by clicking "+ Log invoice"
   each time. (Dropping several opened them one at a time to begin with; that
   was replaced the same day by the batch screen below.)
-- The listeners sit on the window **whatever is open**, because a file dropped
-  on a page not expecting one makes the browser navigate to it — which would
-  throw away a half-filled form. The log form's own dropzone still wins: it
-  calls `preventDefault` first, and the page handler stands down on
-  `defaultPrevented`.
+- **A drop lands anywhere on the window, not just on the dashed box** —
+  `components/FileDrop.jsx` (`useWindowFileDrop` + the prompt it shows). The
+  listeners sit on the window whatever is open, because a file dropped on a
+  page not expecting one makes the browser navigate to it and throw away a
+  half-filled form; only the one caller that is `active` takes the files, so
+  the batch screen and the log form take the drop over from the page while they
+  are open and exactly one thing ever answers. The boxes are still there for
+  click-to-choose.
 
 ### 2026-08-26 — warning when an invoice has already been logged
 - **The duplicate is caught while the form is being filled in**, not by the save

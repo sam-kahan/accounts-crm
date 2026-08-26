@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, formatMoney, formatDate, todayISO, REGIONS } from '../api';
 import { previewCommission } from '../commission';
 import Modal from './Modal.jsx';
+import { useWindowFileDrop, FileDropPrompt } from './FileDrop.jsx';
 
 // Logging a month's post one invoice at a time means waiting for each document
 // to be read before the next one can be started. Here the whole batch is read
@@ -313,7 +314,6 @@ function BulkRow({ row, contractors, onChange, onRemove, onRetry }) {
 export default function BulkLogModal({ files, contractors, aiEnabled, month, onClose, onLogged }) {
   const [rows, setRows] = useState(() => files.map((f) => rowFor(f, month)));
   const [submitting, setSubmitting] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
   const [finished, setFinished] = useState(null);
   const fileInput = useRef(null);
   // Which rows are being read right now. A ref, not state: it must be true the
@@ -388,10 +388,18 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
     queued.slice(0, Math.max(0, slots)).forEach(read);
   }, [rows, read, aiEnabled]);
 
-  const addFiles = (list) => {
-    const added = Array.from(list || []).filter(Boolean);
-    if (added.length) setRows((prev) => [...prev, ...added.map((f) => rowFor(f, month))]);
-  };
+  const addFiles = useCallback(
+    (list) => {
+      const added = Array.from(list || []).filter(Boolean);
+      if (added.length) setRows((prev) => [...prev, ...added.map((f) => rowFor(f, month))]);
+    },
+    [month],
+  );
+
+  // The whole dialog takes a drop, not just the dashed box in it: with a batch
+  // on screen the box is often scrolled out of sight, and aiming at it is the
+  // fiddly part of dragging a document in.
+  const dragging = useWindowFileDrop(addFiles, true);
 
   const pending = rows.filter((r) => r.state !== 'saved');
   const busyReading = rows.some((r) => r.state === 'queued' || r.state === 'reading');
@@ -438,12 +446,18 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
   return (
     <Modal
       wide
-      title={`Log ${rows.length} contractor invoice${rows.length === 1 ? '' : 's'}`}
+      title={
+        rows.length
+          ? `Log ${rows.length} contractor invoice${rows.length === 1 ? '' : 's'}`
+          : 'Log a batch of invoices'
+      }
       onClose={onClose}
       footer={
         <>
           <div className="bulk-summary muted">
-            {busyReading
+            {!rows.length
+              ? 'Drop the invoices in — anywhere on this window.'
+              : busyReading
               ? `Reading ${rows.filter((r) => r.state === 'reading').length} of ${
                   rows.filter((r) => r.state === 'queued' || r.state === 'reading').length
                 } still to read…`
@@ -473,8 +487,10 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
         </>
       }
     >
+      {/* The drop itself is handled for the whole window (above); this is the
+          click-to-choose half, and shows the same highlight. */}
       <div
-        className={`dropzone ${dragOver ? 'over' : ''}`}
+        className={`dropzone ${dragging ? 'over' : ''}`}
         role="button"
         tabIndex={0}
         onClick={() => fileInput.current?.click()}
@@ -483,18 +499,6 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
             e.preventDefault();
             fileInput.current?.click();
           }
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          // First, so the page behind this dialog stands down and the browser
-          // doesn't navigate to the file.
-          e.preventDefault();
-          setDragOver(false);
-          addFiles(e.dataTransfer.files);
         }}
         style={{ marginBottom: 16 }}
       >
@@ -508,12 +512,20 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
             e.target.value = '';
           }}
         />
-        <div>Drop more invoices here, or click to choose</div>
+        <div>Drop more invoices anywhere on this window, or click to choose</div>
         <div className="dz-hint">
           They join the batch and are read while you check the rest
           {aiEnabled ? '' : ' — automatic reading is off, so these are typed in'}
         </div>
       </div>
+
+      {dragging && (
+        <FileDropPrompt
+          overDialog
+          title="Drop to add to the batch"
+          hint="They're read while you check the ones already here."
+        />
+      )}
 
       {rows.map((row) => (
         <BulkRow
