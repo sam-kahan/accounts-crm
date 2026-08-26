@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react';
 
 export default function Modal({ title, onClose, children, footer }) {
   const dialogRef = useRef(null);
+  // Whether the press that started this click landed on the backdrop. Selecting
+  // text in a field and releasing the button outside the dialog otherwise
+  // counts as a click on the backdrop — the click event fires on the common
+  // ancestor of press and release — and threw away a half-filled form.
+  const pressedBackdrop = useRef(false);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2, 9)}`).current;
 
   useEffect(() => {
@@ -46,7 +51,17 @@ export default function Modal({ title, onClose, children, footer }) {
   }, [onClose]);
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div
+      className="overlay"
+      onMouseDown={(e) => {
+        pressedBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        const backdrop = e.target === e.currentTarget && pressedBackdrop.current;
+        pressedBackdrop.current = false;
+        if (backdrop) onClose();
+      }}
+    >
       <div
         className="modal"
         ref={dialogRef}

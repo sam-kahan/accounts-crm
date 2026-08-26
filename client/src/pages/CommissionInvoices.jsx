@@ -9,6 +9,7 @@ import {
   INVOICE_STATUS_LABEL,
 } from '../api';
 import MonthSelect from '../components/MonthSelect.jsx';
+import OutstandingMonths from '../components/OutstandingMonths.jsx';
 
 // A row is a contractor's work for ONE office: Manchester and Liverpool are
 // separate companies and cannot share an invoice, so they are raised separately.
@@ -23,6 +24,9 @@ export default function CommissionInvoices() {
   const [summary, setSummary] = useState(null);
   const [invoices, setInvoices] = useState(null);
   const [settings, setSettings] = useState(null);
+  // Earlier months that still owe something — the check against a month end
+  // quietly never being done.
+  const [outstanding, setOutstanding] = useState(null);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -35,6 +39,12 @@ export default function CommissionInvoices() {
 
   const load = () => {
     setErr(null);
+    // The missed-month check is a nicety: it must never be the reason the page
+    // can't be read, so it fails quietly on its own.
+    api.contractorInvoices
+      .outstanding({ before: month })
+      .then(setOutstanding)
+      .catch(() => setOutstanding(null));
     return Promise.all([
       api.contractorInvoices.summary({ month }).then(setSummary),
       api.commissionInvoices.list().then(setInvoices),
@@ -115,6 +125,8 @@ export default function CommissionInvoices() {
         </div>
       )}
       {msg && <div className="inline-note" style={{ marginBottom: 12 }}>{msg}</div>}
+
+      <OutstandingMonths data={outstanding} month={month} onPick={setMonth} />
 
       {unlinked.length > 0 && (
         <div className="inline-note warn" style={{ marginBottom: 12 }}>

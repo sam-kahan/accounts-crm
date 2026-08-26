@@ -13,6 +13,7 @@ import {
 } from '../api';
 import Modal from '../components/Modal.jsx';
 import MonthSelect from '../components/MonthSelect.jsx';
+import OutstandingMonths from '../components/OutstandingMonths.jsx';
 
 const STATUS_BADGE = {
   pending: 'amber',
@@ -1063,6 +1064,8 @@ export default function ContractorInvoices() {
   const [logging, setLogging] = useState(null);
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState(null);
+  // Earlier months whose commission was never raised.
+  const [outstanding, setOutstanding] = useState(null);
   const [err, setErr] = useState(null);
 
   const contractorId = params.get('contractor_id') || '';
@@ -1093,6 +1096,12 @@ export default function ContractorInvoices() {
 
   const load = () => {
     setErr(null);
+    // Quietly, and on its own: a failed missed-month check must not stop the
+    // list being read.
+    api.contractorInvoices
+      .outstanding({ before: month })
+      .then(setOutstanding)
+      .catch(() => setOutstanding(null));
     return api.contractorInvoices
       .list(filters)
       .then(setRows)
@@ -1259,6 +1268,8 @@ export default function ContractorInvoices() {
         Or drag invoices straight onto this page — several at once and they're logged one after
         another.
       </div>
+
+      <OutstandingMonths data={outstanding} month={month} onPick={(m) => setParam('month', m)} />
 
       {err && (
         <div className="inline-note warn" style={{ marginBottom: 12 }}>

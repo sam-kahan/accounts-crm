@@ -404,6 +404,56 @@ router.get(
   }),
 );
 
+// Earlier months that still have commission waiting to be invoiced. Month end
+// is looked at a month at a time, so a month that was never raised — a holiday,
+// an invoice logged late, a contractor set up after the fact — simply stops
+// being looked at, and nobody is chased for it. This is what the pages warn
+// with: the months BEFORE the one being viewed that still owe something.
+//
+// Only months with commission actually left to claim are returned: a pending
+// line worth nothing has nothing to raise, and a warning that can't be cleared
+// is one people learn to ignore.
+router.get(
+  '/outstanding',
+  asyncHandler(async (req, res) => {
+    // A well-formed but impossible month ("2026-13") passes the shape test, so
+    // the range is what decides — falling back to the current month.
+    const asked = /^\d{4}-\d{2}$/.test(req.query.before || '') ? req.query.before : monthOf();
+    const before = monthRange(asked) ? asked : monthOf();
+    const { rows } = await query(
+      `SELECT to_char(i.invoice_date, 'YYYY-MM')        AS month,
+              count(*)::int                             AS pending_count,
+              count(DISTINCT i.contractor_id)::int      AS contractor_count,
+              COALESCE(sum(i.commission_amount), 0)     AS pending_commission
+         FROM contractor_invoices i
+        WHERE i.commission_invoice_id IS NULL
+          AND NOT i.waived
+          AND i.invoice_date < $1::date
+        GROUP BY 1
+       HAVING sum(i.commission_amount) > 0
+        ORDER BY 1 ASC
+        LIMIT 24`,
+      [monthRange(before).from],
+    );
+
+    const months = rows.map((r) => ({
+      ...withNumbers(r, ['pending_commission']),
+      label: monthLabel(r.month),
+    }));
+    res.json({
+      before,
+      months,
+      totals: {
+        month_count: months.length,
+        pending_count: months.reduce((a, r) => a + r.pending_count, 0),
+        pending_commission: fromPence(
+          months.reduce((acc, r) => acc + (toPence(r.pending_commission) ?? 0), 0),
+        ),
+      },
+    });
+  }),
+);
+
 // The same period as a spreadsheet, line by line.
 router.get(
   '/export.csv',

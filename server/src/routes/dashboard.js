@@ -145,6 +145,15 @@ router.get(
              WHERE commission_invoice_id IS NULL AND NOT waived)      AS pending_commission,
           (SELECT count(*) FROM contractor_invoices
              WHERE commission_invoice_id IS NULL AND NOT waived)      AS pending_count,
+          -- Commission still to invoice from BEFORE this month: month end is
+          -- worked a month at a time, so one that was never raised would
+          -- otherwise just stop being looked at.
+          (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
+             WHERE commission_invoice_id IS NULL AND NOT waived
+               AND invoice_date < date_trunc('month', CURRENT_DATE)) AS earlier_commission,
+          (SELECT count(DISTINCT to_char(invoice_date, 'YYYY-MM')) FROM contractor_invoices
+             WHERE commission_invoice_id IS NULL AND NOT waived
+               AND invoice_date < date_trunc('month', CURRENT_DATE)) AS earlier_months,
           (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
              WHERE invoice_date >= date_trunc('month', CURRENT_DATE)) AS month_commission,
           (SELECT COALESCE(sum(total_amount), 0) FROM commission_invoices
@@ -169,8 +178,10 @@ router.get(
               'pending_commission',
               'month_commission',
               'awaiting_payment',
+              'earlier_commission',
             ]),
             pending_count: Number(commission.pending_count),
+            earlier_months: Number(commission.earlier_months),
             awaiting_count: Number(commission.awaiting_count),
           }
         : null,

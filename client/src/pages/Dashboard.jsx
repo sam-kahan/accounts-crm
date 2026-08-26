@@ -179,7 +179,17 @@ export default function Dashboard() {
           <div className="value">{counts.overdue}</div>
         </div>
         {commission && (
-          <Link to="/commission/raised" className="stat" title="Contractor commission still to invoice back">
+          <Link
+            // Commission left over from a month already gone is the one worth
+            // alerting on — this month's is simply not raised yet.
+            to="/commission/raised"
+            className={`stat ${commission.earlier_months > 0 ? 'warn' : ''}`}
+            title={
+              commission.earlier_months > 0
+                ? `${formatMoney(commission.earlier_commission)} of it is from earlier months — check it wasn't missed`
+                : 'Contractor commission still to invoice back'
+            }
+          >
             <div className="label">Commission to invoice</div>
             <div className="value">{formatMoney(commission.pending_commission)}</div>
             <div className="muted" style={{ fontSize: 12 }}>
@@ -188,6 +198,14 @@ export default function Dashboard() {
                 ? ` · ${formatMoney(commission.awaiting_payment)} awaiting payment`
                 : ''}
             </div>
+            {commission.earlier_months > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--warn)', marginTop: 2 }}>
+                {formatMoney(commission.earlier_commission)} from{' '}
+                {commission.earlier_months === 1
+                  ? 'an earlier month'
+                  : `${commission.earlier_months} earlier months`}
+              </div>
+            )}
           </Link>
         )}
       </div>

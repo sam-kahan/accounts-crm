@@ -290,6 +290,22 @@ contractor at month end.
 
 ## Recent changes
 
+### 2026-08-26 — a month end that was never raised says so
+- **Earlier months with commission still to invoice are warned about.** Month
+  end is worked a month at a time, so a month nobody raised — a holiday, an
+  invoice logged late, a contractor set up after the fact — simply stopped being
+  looked at. `GET /contractor-invoices/outstanding?before=YYYY-MM` returns the
+  months before the one on screen that still have pending, un-waived commission
+  (and only where there is money to claim — a warning that can't be cleared is
+  one people learn to ignore). Both commission pages show it above the month,
+  each month a click away, and the dashboard tile carries the same figure so a
+  missed month is visible without opening the section.
+- **Selecting text in a form no longer closes it.** A click event fires on the
+  common ancestor of press and release, so dragging to highlight words in a
+  field and letting go outside the dialog counted as a click on the backdrop and
+  threw the half-filled form away. `Modal` now closes on a backdrop click only
+  when the press that started it also landed on the backdrop.
+
 ### 2026-08-26 — drop invoices onto the page to log them
 - **The page itself takes the drop.** `/commission/invoices` listens for a file
   drag anywhere on it and opens the log form with the invoice already read, so

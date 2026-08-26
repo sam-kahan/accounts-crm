@@ -280,6 +280,9 @@ a { color: inherit; text-decoration: none; }
 .stat .value { font-size: 30px; font-weight: 700; margin-top: 6px; }
 .stat.accent { border-top: 3px solid var(--green); }
 .stat.alert { border-top: 3px solid var(--danger); }
+/* Something to look at rather than something wrong: the tile is flagged, but
+   the figure stays black — only part of it is the thing being warned about. */
+.stat.warn { border-top: 3px solid var(--warn); }
 .stat.alert .value { color: var(--danger); }
 
 /* --- Tables --------------------------------------------------------------- */

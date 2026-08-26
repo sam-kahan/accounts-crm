@@ -182,6 +182,12 @@ export const api = {
     },
     exportUrl: (params = {}) =>
       `/api/contractor-invoices/export.csv?${new URLSearchParams(clean(params)).toString()}`,
+    // Earlier months that still have commission to invoice — the "did we miss
+    // one?" check.
+    outstanding: (params = {}) => {
+      const qs = new URLSearchParams(clean(params)).toString();
+      return request(`/contractor-invoices/outstanding${qs ? `?${qs}` : ''}`);
+    },
     aiConfig: () => request('/contractor-invoices/ai/config'),
     // Has this invoice been logged before? Asked while the form is being
     // filled in, so a duplicate is caught before the save is refused.
