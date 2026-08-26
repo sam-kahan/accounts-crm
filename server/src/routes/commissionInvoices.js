@@ -84,6 +84,12 @@ router.get(
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    // ?month=YYYY-MM narrows to the invoices raised FOR that month — the period
+    // they cover, not the day they were raised, because a month end done late
+    // still belongs to its month. Without it, every raised invoice comes back:
+    // the page under a month selector must ask, or it shows June's invoice
+    // while August is on screen.
+    const range = /^\d{4}-\d{2}$/.test(req.query.month || '') ? monthRange(req.query.month) : null;
     const { rows } = await query(
       `SELECT ${COLS}, c.name AS contractor_name, c.email AS contractor_email,
               (SELECT count(*)::int FROM contractor_invoices i WHERE i.commission_invoice_id = ci.id) AS line_count
@@ -92,11 +98,16 @@ router.get(
         WHERE ($1::uuid IS NULL OR ci.contractor_id = $1::uuid)
           AND ($2 = '' OR ci.status = $2)
           AND ($3 = '' OR ci.region = $3)
+          -- Overlap, not containment: a period raised across a fortnight or a
+          -- quarter still belongs to every month it covers.
+          AND ($4::date IS NULL OR (ci.period_start <= $5::date AND ci.period_end >= $4::date))
         ORDER BY ci.issue_date DESC, ci.invoice_number DESC`,
       [
         req.query.contractor_id || null,
         req.query.status || '',
         isRegion(req.query.region) ? req.query.region : '',
+        range?.from || null,
+        range?.to || null,
       ],
     );
     res.json(rows.map(decorate));

@@ -42,18 +42,25 @@ function defaultDateFor(month) {
 // A preview of what the server will charge, shown live as the amounts are
 // typed. The server recomputes from the contractor's agreement when it saves —
 // this figure is only sent if the user deliberately overrides it.
-function previewCommission(contractor, { net, vat, total }) {
+function previewCommission(contractor, { net, vat, total, commissionable }) {
   if (!contractor) return 0;
   const netN = Number(net || 0);
   const vatN = Number(vat || 0);
   const totalN = Number(total || 0) || netN + vatN;
-  const base = Math.max(0, contractor.commission_on === 'gross' ? totalN : netN);
+  const whole = Math.max(0, contractor.commission_on === 'gross' ? totalN : netN);
+  // The part of the invoice carrying commission, when it isn't all of it.
+  const part =
+    commissionable === '' || commissionable === null || commissionable === undefined
+      ? null
+      : Math.max(0, Math.min(Number(commissionable) || 0, whole));
+  const base = part === null ? whole : part;
+  const pot = part === null ? Math.max(0, totalN || whole) : part;
   const rate = Number(contractor.commission_rate || 0);
   const basis = contractor.commission_basis || 'markup';
 
   if (contractor.commission_type === 'fixed') {
     const fixed = Number(contractor.commission_fixed || 0);
-    return basis === 'on_top' ? fixed : Math.min(fixed, totalN || fixed);
+    return basis === 'on_top' ? fixed : Math.min(fixed, pot || fixed);
   }
   // markup: the rate was added to the contractor's own price, so the
   // commission inside the invoice is net x rate / (100 + rate) — £9 on a £99
@@ -62,7 +69,85 @@ function previewCommission(contractor, { net, vat, total }) {
     return rate > 0 ? Math.round((base * rate * 100) / (100 + rate)) / 100 : 0;
   }
   const raw = Math.round(base * rate) / 100;
-  return basis === 'inclusive' ? Math.min(raw, totalN || raw) : raw;
+  return basis === 'inclusive' ? Math.min(raw, pot || raw) : raw;
+}
+
+// What the commissionable part is measured against: the net or the gross,
+// whichever the contractor's deal takes the rate on. Matches
+// commissionableCeiling() on the server.
+function ceilingFor(contractor, { net, vat, total }) {
+  const netN = Number(net || 0);
+  const totalN = Number(total || 0) || netN + Number(vat || 0);
+  return contractor?.commission_on === 'gross' ? totalN : netN;
+}
+
+// One line saying what the rate was applied to, for the commission callout —
+// so the figure can be read back and understood without opening the invoice.
+function describePart(value, note, owner, amounts) {
+  if (value === '' || value === null || value === undefined) return '';
+  const ceiling = ceilingFor(owner, amounts);
+  const measure = owner?.commission_on === 'gross' ? 'total' : 'net';
+  return ` · on ${formatMoney(Number(value) || 0)} of the ${formatMoney(ceiling)} ${measure}${
+    note ? ` (${note})` : ''
+  }`;
+}
+
+// "Commission is only on part of this invoice." Some contractors pass materials
+// on at cost, or pay a permit on our behalf, and only mark up the rest. Typing
+// the resulting commission in by hand would work once and then lose the reason:
+// the figure would be flagged as an override, the month end couldn't be
+// explained, and amending anything would re-cost it from the whole invoice.
+// Stating the PART keeps the arithmetic — and the reason — on the invoice.
+function CommissionPartFields({ value, note, onChange, onNote, contractor, amounts }) {
+  const [on, setOn] = useState(value !== '' && value !== null && value !== undefined);
+  const ceiling = ceilingFor(contractor, amounts);
+  const measure = contractor?.commission_on === 'gross' ? 'invoice total' : 'net';
+
+  return (
+    <div style={{ margin: '-4px 0 14px' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            if (!e.target.checked) {
+              onChange('');
+              onNote('');
+            }
+          }}
+        />
+        Commission is only on part of this invoice
+      </label>
+      {on && (
+        <div className="form-grid" style={{ marginTop: 8 }}>
+          <label className="field">
+            <span className="lbl">Part carrying commission (£)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={ceiling ? String(ceiling) : ''}
+            />
+            <span className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Their rate is applied to this instead of the {measure}
+              {ceiling ? ` of ${formatMoney(ceiling)}` : ''}.
+            </span>
+          </label>
+          <label className="field">
+            <span className="lbl">Why part only</span>
+            <input
+              value={note}
+              onChange={(e) => onNote(e.target.value)}
+              placeholder="e.g. materials passed on at cost"
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
 }
 
 
@@ -248,6 +333,8 @@ function LogInvoiceModal({
     net_amount: '',
     vat_amount: '',
     total_amount: '',
+    commissionable_amount: '',
+    commissionable_note: '',
     paid_from: 'client',
     region: '',
     notes: '',
@@ -287,8 +374,15 @@ function LogInvoiceModal({
         net: form.net_amount,
         vat: form.vat_amount,
         total: form.total_amount,
+        commissionable: form.commissionable_amount,
       }),
-    [contractor, form.net_amount, form.vat_amount, form.total_amount],
+    [
+      contractor,
+      form.net_amount,
+      form.vat_amount,
+      form.total_amount,
+      form.commissionable_amount,
+    ],
   );
   const overridden = commission !== '' && Number(commission) !== computed;
 
@@ -417,6 +511,7 @@ function LogInvoiceModal({
           net_amount: num(form.net_amount),
           vat_amount: num(form.vat_amount),
           total_amount: num(form.total_amount),
+          commissionable_amount: num(form.commissionable_amount),
           // Only sent when deliberately overridden — otherwise the server
           // applies the contractor's agreed rate.
           commission_amount: overridden ? Number(commission) : undefined,
@@ -688,6 +783,15 @@ function LogInvoiceModal({
           </label>
         </div>
 
+        <CommissionPartFields
+          value={form.commissionable_amount}
+          note={form.commissionable_note}
+          onChange={(v) => set('commissionable_amount', v)}
+          onNote={(v) => set('commissionable_note', v)}
+          contractor={contractor}
+          amounts={{ net: form.net_amount, vat: form.vat_amount, total: form.total_amount }}
+        />
+
         <div className={`calc-box ${overridden ? 'overridden' : ''}`}>
           <div>
             <div className="calc-label">
@@ -695,6 +799,11 @@ function LogInvoiceModal({
             </div>
             <div className="muted" style={{ fontSize: 12 }}>
               {contractor ? contractor.deal_summary : 'Choose a contractor to apply their rate'}
+              {describePart(form.commissionable_amount, form.commissionable_note, contractor, {
+                net: form.net_amount,
+                vat: form.vat_amount,
+                total: form.total_amount,
+              })}
               {overridden ? ` · agreed rate gives ${formatMoney(computed)}` : ''}
             </div>
           </div>
@@ -768,6 +877,8 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
     net_amount: invoice.net_amount ?? '',
     vat_amount: invoice.vat_amount ?? '',
     total_amount: invoice.total_amount ?? '',
+    commissionable_amount: invoice.commissionable_amount ?? '',
+    commissionable_note: invoice.commissionable_note || '',
     paid_from: invoice.paid_from || 'client',
     paid_on: invoice.paid_on || '',
     notes: invoice.notes || '',
@@ -803,8 +914,15 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
         net: form.net_amount,
         vat: form.vat_amount,
         total: form.total_amount,
+        commissionable: form.commissionable_amount,
       }),
-    [invoice, form.net_amount, form.vat_amount, form.total_amount],
+    [
+      invoice,
+      form.net_amount,
+      form.vat_amount,
+      form.total_amount,
+      form.commissionable_amount,
+    ],
   );
   const overridden = commission !== '' && Number(commission) !== computed;
 
@@ -818,6 +936,10 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
         net_amount: num(form.net_amount),
         vat_amount: num(form.vat_amount),
         total_amount: num(form.total_amount),
+        // Explicitly null when the box is cleared: the commission goes back to
+        // being costed on the whole invoice, which "omitted" could not say.
+        commissionable_amount: form.commissionable_amount === '' ? null : num(form.commissionable_amount),
+        commissionable_note: form.commissionable_note || null,
         paid_on: form.paid_on || null,
         // Blank means "whatever the office works out to"; the server keeps the
         // one already stored rather than re-reading a corrected address behind
@@ -930,6 +1052,15 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
           </label>
         </div>
 
+        <CommissionPartFields
+          value={form.commissionable_amount}
+          note={form.commissionable_note}
+          onChange={(v) => set('commissionable_amount', v)}
+          onNote={(v) => set('commissionable_note', v)}
+          contractor={invoice}
+          amounts={{ net: form.net_amount, vat: form.vat_amount, total: form.total_amount }}
+        />
+
         <div className={`calc-box ${overridden ? 'overridden' : ''}`}>
           <div>
             <div className="calc-label">
@@ -937,6 +1068,11 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
             </div>
             <div className="muted" style={{ fontSize: 12 }}>
               Worked out from the rate this invoice was logged under
+              {describePart(form.commissionable_amount, form.commissionable_note, invoice, {
+                net: form.net_amount,
+                vat: form.vat_amount,
+                total: form.total_amount,
+              })}
               {overridden ? ` · that rate gives ${formatMoney(computed)}` : ''}
             </div>
           </div>
@@ -1334,6 +1470,15 @@ export default function ContractorInvoices() {
                     <strong>{formatMoney(r.commission_amount)}</strong>
                     {r.commission_override && (
                       <div className="muted" style={{ fontSize: 12 }}>edited</div>
+                    )}
+                    {r.commissionable_amount !== null && r.commissionable_amount !== undefined && (
+                      <div
+                        className="muted"
+                        style={{ fontSize: 12 }}
+                        title={r.commissionable_note || 'Commission is on part of this invoice only'}
+                      >
+                        on {formatMoney(r.commissionable_amount)} of it
+                      </div>
                     )}
                   </td>
                   <td>

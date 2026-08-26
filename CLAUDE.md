@@ -176,6 +176,19 @@ contractor at month end.
     over-claims every single job — that was the original bug.
   - `inclusive` — the rate really is a slice of the invoice they send us.
   - `on_top` — we bill the rate in addition to their invoice.
+- **Commission on part of an invoice only** (`commissionable_amount` +
+  `commissionable_note`, migration `016`). Some invoices carry the deal on part
+  of what they bill — materials passed on at cost, a permit paid on our behalf,
+  a job where only the labour was marked up. The rate is then applied to that
+  part instead of the invoice, and both the **base** and the **cap** become the
+  part (an inclusive or fixed commission comes out of the part, not out of the
+  whole invoice). `NULL` means the whole invoice, which is every row logged
+  before it. The part is measured in whatever the deal is taken on
+  (`commissionableCeiling()` — net or gross), and a part bigger than that is
+  **refused as a typo** rather than clamped. This exists so the answer isn't a
+  hand-typed figure: an override loses the arithmetic, flags the row as edited,
+  and gets re-costed from the whole invoice the next time anyone amends it —
+  stating the part keeps the sum, the reason, and the re-costing all correct.
 - `contractor_invoices` is one row per invoice received. The commission is
   computed server-side from the snapshot — a hand-typed figure is kept but
   flagged `commission_override`, so a month-end total can always be explained.
@@ -289,6 +302,21 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-08-26 — commission on part of an invoice
+- **An invoice where only part of the work carries commission is stated, not
+  typed round.** Migration `016` adds `commissionable_amount` (+ a note saying
+  why); the log and amend forms have a "Commission is only on part of this
+  invoice" tick that reveals the part and the reason, and the callout says what
+  the rate was applied to ("on £220 of the £500 net (materials at cost)"). The
+  reasoning is in "Contractor commission" above — in short, an override would
+  have lost it.
+- **The raised list follows the month selector.** `GET /commission-invoices`
+  takes `?month=`, matched on the period the invoice covers rather than the day
+  it was raised (overlap, so an odd period still shows in every month it
+  touches). The page asked for every invoice ever raised, so June's invoice sat
+  under an August heading; there's a "Show every month" toggle for chasing an
+  older one.
 
 ### 2026-08-26 — a month end that was never raised says so
 - **Earlier months with commission still to invoice are warned about.** Month

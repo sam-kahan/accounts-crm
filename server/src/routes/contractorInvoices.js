@@ -15,6 +15,7 @@ import {
   commissionFor,
   reconcileAmounts,
   commissionStatus,
+  commissionableCeiling,
   matchContractorByName,
   contractorSuggestionFrom,
   resolveContractor,
@@ -26,12 +27,12 @@ import { extractInvoice } from '../services/invoiceExtract.js';
 
 const router = Router();
 
-const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_fixed', 'commission_amount'];
+const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_fixed', 'commission_amount', 'commissionable_amount'];
 
 const COLS = `i.id, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
   i.commission_on, i.commission_basis, i.commission_fixed, i.commission_amount, i.commission_override,
-  i.commission_vat_inclusive, i.region, i.paid_from,
+  i.commission_vat_inclusive, i.commissionable_amount, i.commissionable_note, i.region, i.paid_from,
   i.paid_on, i.waived, i.waived_reason, i.commission_invoice_id, i.filename, i.mimetype,
   i.size_bytes, i.extracted, i.notes, i.created_at, i.updated_at`;
 
@@ -102,6 +103,10 @@ const input = z.object({
   commission_on: z.enum(COMMISSION_ON).optional(),
   commission_basis: z.enum(COMMISSION_BASES).optional(),
   commission_amount: money.optional(),
+  // Commission on part of the invoice only — materials at cost, a permit paid
+  // on our behalf. Null clears it back to the whole invoice.
+  commissionable_amount: money.optional().nullable(),
+  commissionable_note: z.string().max(300).optional().nullable(),
   paid_from: z.enum(PAID_FROM).optional(),
   // Which Greenco office bills this job. Worked out from the property address
   // when it isn't stated; see resolveRegion below.
@@ -121,7 +126,7 @@ async function getContractor(id) {
 // unless this invoice overrides part of it, and the amount is computed rather
 // than taken on trust. A hand-typed figure that differs from the computed one
 // is kept, but flagged, so a month-end total can always be explained.
-function resolveCommission(contractor, d, amounts) {
+function resolveCommission(contractor, d, amounts, commissionable = null) {
   const deal = {
     ...dealFor(contractor),
     ...(d.commission_type ? { commission_type: d.commission_type } : {}),
@@ -129,7 +134,20 @@ function resolveCommission(contractor, d, amounts) {
     ...(d.commission_on ? { commission_on: d.commission_on } : {}),
     ...(d.commission_basis ? { commission_basis: d.commission_basis } : {}),
   };
-  const computed = commissionFor(deal, amounts);
+  // A commissionable part bigger than what it is a part OF is a typo, and
+  // silently clamping it would cost the wrong commission without saying so.
+  if (commissionable !== null && commissionable !== undefined) {
+    const ceiling = commissionableCeiling(deal, amounts);
+    if (toPence(commissionable) > toPence(ceiling)) {
+      throw new HttpError(
+        400,
+        `The part carrying commission (${commissionable}) is more than the invoice ${
+          deal.commission_on === 'gross' ? 'total' : 'net'
+        } of ${ceiling}.`,
+      );
+    }
+  }
+  const computed = commissionFor(deal, { ...amounts, commissionable_amount: commissionable });
   const supplied = d.commission_amount;
   const override = supplied !== undefined && toPence(supplied) !== toPence(computed);
   return {
@@ -137,6 +155,7 @@ function resolveCommission(contractor, d, amounts) {
     commission_amount: override ? supplied : computed,
     commission_override: override,
     computed_commission: computed,
+    commissionable_amount: commissionable ?? null,
   };
 }
 
@@ -488,6 +507,8 @@ router.get(
         { key: 'vat_amount', label: 'VAT' },
         { key: 'total_amount', label: 'Invoice total' },
         { key: 'commission_rate', label: 'Rate %' },
+        { key: 'commissionable_amount', label: 'Commission applies to' },
+        { key: 'commissionable_note', label: 'Why part only' },
         { key: 'commission_amount', label: 'Commission' },
         { key: 'paid_from', label: 'Paid from' },
         { key: 'status', label: 'Status' },
@@ -556,7 +577,7 @@ router.post(
       d = parse(input, stripEmpty(req.body));
       const contractor = await getContractor(d.contractor_id);
       const amounts = reconcileAmounts(d);
-      const commission = resolveCommission(contractor, d, amounts);
+      const commission = resolveCommission(contractor, d, amounts, d.commissionable_amount ?? null);
       const { region } = resolveRegion(d.region, d.property);
       const file = req.file;
 
@@ -566,9 +587,10 @@ router.post(
            net_amount, vat_amount, total_amount, commission_type, commission_rate, commission_on,
            commission_basis, commission_amount, commission_override, commission_vat_inclusive,
            paid_from, paid_on, notes,
-           filename, mimetype, size_bytes, storage_path, extracted, region, commission_fixed)
+           filename, mimetype, size_bytes, storage_path, extracted, region, commission_fixed,
+           commissionable_amount, commissionable_note)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$24,
-                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25,$26)
+                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25,$26,$27,$28)
          RETURNING id`,
         [
           d.contractor_id, d.invoice_number || null, d.invoice_date, d.property || null,
@@ -586,6 +608,10 @@ router.post(
           // The flat fee is part of the agreement, so it is snapshotted with
           // the rest of it — a renegotiated fee must not re-cost this invoice.
           commission.commission_fixed,
+          // The part of the invoice that carries commission, and why — null
+          // when the rate applies to the whole thing, which is the usual case.
+          commission.commissionable_amount,
+          d.commissionable_note || null,
         ],
       );
 
@@ -636,10 +662,17 @@ router.put(
     // re-saving an old invoice must not silently re-rate it. The row carries
     // every part of the deal including the flat fee (migration 015), so the
     // contractor underneath only supplies what isn't costing anything.
+    // Left out of the amend form entirely (undefined) keeps whatever the row
+    // says; an explicit null clears it back to the whole invoice.
+    const commissionable =
+      d.commissionable_amount === undefined
+        ? current.commissionable_amount
+        : d.commissionable_amount;
     const commission = resolveCommission(
       { ...contractor, ...dealFor(current) },
       d,
       amounts,
+      commissionable ?? null,
     );
 
     let rows;
@@ -653,7 +686,8 @@ router.put(
            commission_type = $10, commission_rate = $11, commission_on = $12,
            commission_basis = $13, commission_amount = $14, commission_override = $15,
            paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
-           region = COALESCE($19, region), commission_fixed = $20
+           region = COALESCE($19, region), commission_fixed = $20,
+           commissionable_amount = $21, commissionable_note = $22
          WHERE id = $1 RETURNING id`,
         [
           req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
@@ -668,6 +702,10 @@ router.put(
           // companies without anyone asking for it.
           isRegion(d.region) ? d.region : null,
           commission.commission_fixed,
+          commission.commissionable_amount,
+          d.commissionable_note === undefined
+            ? current.commissionable_note
+            : d.commissionable_note || null,
         ],
       ));
     } catch (err) {

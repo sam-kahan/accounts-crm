@@ -27,6 +27,10 @@ export default function CommissionInvoices() {
   // Earlier months that still owe something — the check against a month end
   // quietly never being done.
   const [outstanding, setOutstanding] = useState(null);
+  // The raised list follows the month selector like everything else here —
+  // showing every invoice ever raised under a heading that says August is how
+  // June's invoice ends up on screen. Chasing an older one is a click away.
+  const [allMonths, setAllMonths] = useState(false);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -47,7 +51,7 @@ export default function CommissionInvoices() {
       .catch(() => setOutstanding(null));
     return Promise.all([
       api.contractorInvoices.summary({ month }).then(setSummary),
-      api.commissionInvoices.list().then(setInvoices),
+      api.commissionInvoices.list(allMonths ? {} : { month }).then(setInvoices),
     ]).catch((e) => setErr(e.message));
   };
 
@@ -66,7 +70,7 @@ export default function CommissionInvoices() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, allMonths]);
 
   // Raise the month's invoice for one contractor: every pending commission in
   // the period becomes a line on it.
@@ -238,12 +242,23 @@ export default function CommissionInvoices() {
         )}
       </div>
 
-      <div className="section-title">Commission invoices raised</div>
+      <div className="section-title flex-between">
+        <span>
+          Commission invoices raised{allMonths ? '' : ` for ${monthLabel(month)}`}
+        </span>
+        <button className="linkish" onClick={() => setAllMonths((v) => !v)}>
+          {allMonths ? `Show ${monthLabel(month)} only` : 'Show every month'}
+        </button>
+      </div>
       <div className="card">
         {!invoices ? (
           <div className="spinner">Loading…</div>
         ) : invoices.length === 0 ? (
-          <div className="empty">None yet — raise one from the table above.</div>
+          <div className="empty">
+            {allMonths
+              ? 'None raised yet — raise one from the table above.'
+              : `Nothing raised for ${monthLabel(month)} yet — raise one from the table above.`}
+          </div>
         ) : (
           <table>
             <thead>

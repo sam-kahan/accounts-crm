@@ -7,6 +7,7 @@ import {
   commissionFor,
   dealFor,
   commissionPence,
+  commissionableCeiling,
   reconcileAmounts,
   invoiceTotals,
   invoiceTotalsFromLines,
@@ -120,6 +121,52 @@ test('a mark-up commission can never swallow the whole invoice', () => {
   const deal = { commission_type: 'percentage', commission_rate: 500, commission_basis: 'markup' };
   // Even at an absurd rate it stays below the invoice: 100 * 500/600 = 83.33.
   assert.equal(commissionFor(deal, { net_amount: 100, total_amount: 100 }), 83.33);
+});
+
+test('commission on part of an invoice only', () => {
+  // £500 net, but only £220 of it was marked up — the rest is materials passed
+  // on at cost. The commission is the £20 inside that £220, not the £45.45
+  // inside the whole invoice.
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'markup' };
+  const amounts = { net_amount: 500, vat_amount: 100, total_amount: 600 };
+  assert.equal(commissionFor(deal, amounts), 45.45);
+  assert.equal(commissionFor(deal, { ...amounts, commissionable_amount: 220 }), 20);
+  // Nothing marked up at all is no commission, not the whole invoice's worth.
+  assert.equal(commissionFor(deal, { ...amounts, commissionable_amount: 0 }), 0);
+  // Null means the whole invoice — the usual case, and every row logged so far.
+  assert.equal(commissionFor(deal, { ...amounts, commissionable_amount: null }), 45.45);
+});
+
+test('a part bigger than the invoice can only cost the invoice', () => {
+  const deal = { commission_type: 'percentage', commission_rate: 10, commission_basis: 'inclusive' };
+  // The API refuses this as a typo, but the maths must not invent money if one
+  // ever reaches it.
+  assert.equal(
+    commissionFor(deal, { net_amount: 100, vat_amount: 0, total_amount: 100, commissionable_amount: 400 }),
+    10,
+  );
+});
+
+test('a part caps the commission at the part, not at the invoice', () => {
+  // An inclusive deal takes a slice of the part, so an absurd rate can take all
+  // of the part — and no more, because the rest of the invoice carries none.
+  const deal = { commission_type: 'percentage', commission_rate: 500, commission_basis: 'inclusive' };
+  assert.equal(
+    commissionFor(deal, { net_amount: 500, total_amount: 500, commissionable_amount: 100 }),
+    100,
+  );
+  // Same for a flat fee agreed on part of a job.
+  const fixed = { commission_type: 'fixed', commission_fixed: 250, commission_basis: 'inclusive' };
+  assert.equal(
+    commissionFor(fixed, { net_amount: 500, total_amount: 500, commissionable_amount: 100 }),
+    100,
+  );
+});
+
+test('the commissionable part is measured against whatever the deal is taken on', () => {
+  const amounts = { net_amount: 100, vat_amount: 20, total_amount: 120 };
+  assert.equal(commissionableCeiling({ commission_on: 'net' }, amounts), 100);
+  assert.equal(commissionableCeiling({ commission_on: 'gross' }, amounts), 120);
 });
 
 test('a slice-of-the-invoice deal still works, for contractors worded that way', () => {

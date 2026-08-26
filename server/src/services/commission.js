@@ -50,15 +50,25 @@ export function dealFor(contractor = {}) {
 // A commission that is already inside the invoice can never exceed the invoice
 // itself: a mis-keyed 500% rate must not produce a claim for more than the job
 // was worth. An 'on_top' commission is charged separately, so it isn't capped.
-export function commissionPence(deal, { netPence = 0, totalPence = 0 }) {
+//
+// `commissionablePence` is the part of the invoice the commission applies to —
+// materials passed on at cost carry none, so a £500 invoice can be £200
+// commissionable. It replaces the whole invoice as BOTH the base the rate is
+// applied to and the money the commission has to come out of; null (the usual
+// case) means the whole invoice, exactly as before.
+export function commissionPence(deal, { netPence = 0, totalPence = 0, commissionablePence = null }) {
   const d = dealFor(deal);
-  const base = Math.max(0, d.commission_on === 'gross' ? totalPence : netPence);
+  const whole = Math.max(0, d.commission_on === 'gross' ? totalPence : netPence);
+  const part = commissionablePence === null || commissionablePence === undefined
+    ? null
+    : Math.max(0, Math.min(commissionablePence, whole));
+  const base = part === null ? whole : part;
+  // What the commission is taken out of, for the caps below.
+  const pot = part === null ? Math.max(0, totalPence || whole) : part;
 
   if (d.commission_type === 'fixed') {
     const fixed = Math.max(0, toPence(d.commission_fixed) ?? 0);
-    return d.commission_basis === 'on_top'
-      ? fixed
-      : Math.min(fixed, Math.max(0, totalPence || base));
+    return d.commission_basis === 'on_top' ? fixed : Math.min(fixed, pot);
   }
 
   if (d.commission_basis === 'markup') {
@@ -70,17 +80,29 @@ export function commissionPence(deal, { netPence = 0, totalPence = 0 }) {
   }
 
   const raw = percentOfPence(base, d.commission_rate);
-  return d.commission_basis === 'inclusive'
-    ? Math.min(raw, Math.max(0, totalPence || base))
-    : raw;
+  return d.commission_basis === 'inclusive' ? Math.min(raw, pot) : raw;
 }
 
 // Commission for an invoice expressed in pounds, ready for the API/DB.
-export function commissionFor(deal, { net_amount, vat_amount, total_amount }) {
+export function commissionFor(deal, { net_amount, vat_amount, total_amount, commissionable_amount }) {
   const netPence = toPence(net_amount) ?? 0;
   const vatPence = toPence(vat_amount) ?? 0;
   const totalPence = toPence(total_amount) ?? netPence + vatPence;
-  return fromPence(commissionPence(deal, { netPence, totalPence }));
+  const commissionablePence =
+    commissionable_amount === null || commissionable_amount === undefined
+      ? null
+      : toPence(commissionable_amount);
+  return fromPence(commissionPence(deal, { netPence, totalPence, commissionablePence }));
+}
+
+// What the commissionable part is measured against — the net or the gross,
+// whichever the deal applies the rate to. The forms label it with this and the
+// API refuses a part bigger than it.
+export function commissionableCeiling(deal, { net_amount, vat_amount, total_amount }) {
+  const netPence = toPence(net_amount) ?? 0;
+  const vatPence = toPence(vat_amount) ?? 0;
+  const totalPence = toPence(total_amount) ?? netPence + vatPence;
+  return dealFor(deal).commission_on === 'gross' ? fromPence(totalPence) : fromPence(netPence);
 }
 
 // Given whichever amounts the user (or the extractor) supplied, work out the
