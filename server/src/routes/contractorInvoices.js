@@ -16,6 +16,7 @@ import {
   reconcileAmounts,
   commissionStatus,
   commissionableCeiling,
+  carriedLineSql,
   matchContractorByName,
   contractorSuggestionFrom,
   resolveContractor,
@@ -393,22 +394,41 @@ function windowFrom(q) {
 // invoices — splitting here is what makes that the obvious thing to raise
 // rather than something to remember.
 async function summarise({ from, to }) {
+  // A month end is not simply "the invoices dated in this month": one that
+  // arrived after its own month was billed has moved on to this one, and one
+  // dated in this month that arrived after THIS month was billed has moved on
+  // to the next. carriedLineSql() is the single definition; see it for why.
+  const carried = carriedLineSql('i');
+  const inWindow = 'i.invoice_date BETWEEN $1 AND $2';
+  const pending = 'i.commission_invoice_id IS NULL AND NOT i.waived';
+  // What raising now would actually claim.
+  const claimable = `((${inWindow} AND NOT ${carried} AND ${pending}) OR i.invoice_date < $1)`;
+
   const { rows } = await query(
     `SELECT c.id AS contractor_id, c.name AS contractor_name, c.email AS contractor_email,
             i.region                                                AS region,
-            count(i.id)::int                                        AS invoice_count,
-            COALESCE(sum(i.total_amount), 0)                        AS invoiced_total,
-            COALESCE(sum(i.commission_amount), 0)                   AS commission_total,
-            count(i.id) FILTER (WHERE i.commission_invoice_id IS NULL
-                                  AND NOT i.waived)::int            AS pending_count,
+            count(i.id) FILTER (WHERE ${inWindow})::int             AS invoice_count,
+            COALESCE(sum(i.total_amount) FILTER (WHERE ${inWindow}), 0)      AS invoiced_total,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE ${inWindow}), 0) AS commission_total,
+            count(i.id) FILTER (WHERE ${claimable})::int            AS pending_count,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE ${claimable}), 0) AS pending_commission,
+            -- Received late for a month already invoiced, so billed here.
+            count(i.id) FILTER (WHERE i.invoice_date < $1)::int     AS carried_count,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE i.invoice_date < $1), 0)
+                                                                    AS carried_commission,
+            -- Dated in this month but arrived after it was invoiced: they go on
+            -- the next one, so this month's figure must not count them.
+            count(i.id) FILTER (WHERE ${inWindow} AND ${carried})::int AS moved_count,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE ${inWindow} AND ${carried}), 0)
+                                                                    AS moved_commission,
             COALESCE(sum(i.commission_amount) FILTER (
-              WHERE i.commission_invoice_id IS NULL AND NOT i.waived), 0) AS pending_commission,
-            COALESCE(sum(i.commission_amount) FILTER (
-              WHERE i.commission_invoice_id IS NOT NULL), 0)        AS billed_commission,
-            COALESCE(sum(i.commission_amount) FILTER (WHERE i.waived), 0) AS waived_commission
+              WHERE ${inWindow} AND i.commission_invoice_id IS NOT NULL), 0) AS billed_commission,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE ${inWindow} AND i.waived), 0)
+                                                                    AS waived_commission
        FROM contractors c
        JOIN contractor_invoices i
-         ON i.contractor_id = c.id AND i.invoice_date BETWEEN $1 AND $2
+         ON i.contractor_id = c.id
+        AND (${inWindow} OR (i.invoice_date < $1 AND ${carried}))
       GROUP BY c.id, c.name, c.email, i.region
       HAVING count(i.id) > 0
       ORDER BY pending_commission DESC, c.name ASC, i.region ASC`,
@@ -420,6 +440,8 @@ async function summarise({ from, to }) {
       'invoiced_total',
       'commission_total',
       'pending_commission',
+      'carried_commission',
+      'moved_commission',
       'billed_commission',
       'waived_commission',
     ]),
@@ -432,9 +454,13 @@ async function summarise({ from, to }) {
     totals: {
       invoice_count: contractors.reduce((a, r) => a + r.invoice_count, 0),
       pending_count: contractors.reduce((a, r) => a + r.pending_count, 0),
+      carried_count: contractors.reduce((a, r) => a + r.carried_count, 0),
+      moved_count: contractors.reduce((a, r) => a + r.moved_count, 0),
       invoiced_total: sum('invoiced_total'),
       commission_total: sum('commission_total'),
       pending_commission: sum('pending_commission'),
+      carried_commission: sum('carried_commission'),
+      moved_commission: sum('moved_commission'),
       billed_commission: sum('billed_commission'),
       waived_commission: sum('waived_commission'),
     },
@@ -477,6 +503,9 @@ router.get(
         WHERE i.commission_invoice_id IS NULL
           AND NOT i.waived
           AND i.invoice_date < $1::date
+          -- Not a month anyone missed: its invoice went out, and this line
+          -- arrived afterwards, so it is carried onto the next one.
+          AND NOT ${carriedLineSql('i')}
         GROUP BY 1
        HAVING sum(i.commission_amount) > 0
         ORDER BY 1 ASC

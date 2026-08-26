@@ -200,6 +200,44 @@ export function commissionInvoiceNumber(seq, prefix = 'GC-COM-') {
   return `${prefix}${String(Math.max(0, Math.trunc(Number(seq) || 0))).padStart(5, '0')}`;
 }
 
+// An invoice that arrived AFTER its own month was invoiced.
+//
+// Month end bills a period and sends the invoice, so a contractor invoice that
+// turns up late — the post that lands a week after August's commission invoice
+// went out — has no month end left to go on. Rather than stranding it (nobody
+// looks at August again) or raising a second invoice for a month already
+// billed, it is carried onto the NEXT invoice raised for that contractor and
+// office. The line keeps its own date, so the paperwork still says when the
+// work was done.
+//
+// Written as SQL because every path that decides what a month end contains is a
+// query — the month-end table, the preview and the raise itself have to agree
+// to the penny. `alias` is the contractor_invoices alias in the calling query;
+// it comes from our own code, never from a request.
+//
+// Note the pending test inside: a line that has already been billed is not
+// carried (the invoice covering its date is the one that billed it), and
+// neither is a waived one. Voiding an invoice therefore hands its lines back to
+// their own month, exactly as it did before.
+export function carriedLineSql(alias = 'i') {
+  return `(${alias}.commission_invoice_id IS NULL AND NOT ${alias}.waived AND EXISTS (
+    SELECT 1 FROM commission_invoices billed
+     WHERE billed.contractor_id = ${alias}.contractor_id
+       AND billed.region = ${alias}.region
+       AND billed.status <> 'void'
+       AND ${alias}.invoice_date BETWEEN billed.period_start AND billed.period_end
+  ))`;
+}
+
+// What a month end covers: the period's own lines, minus any whose month has
+// already been invoiced (they have moved on), plus the ones carried in from
+// earlier months that were.
+export function monthEndLinesSql(alias, fromParam, toParam) {
+  const carried = carriedLineSql(alias);
+  return `((${alias}.invoice_date BETWEEN ${fromParam} AND ${toParam} AND NOT ${carried})
+        OR (${alias}.invoice_date < ${fromParam} AND ${carried}))`;
+}
+
 // Where a logged invoice stands in the cycle. Derived rather than stored, so it
 // can't drift out of step with the commission invoice it belongs to.
 export function commissionStatus(row) {

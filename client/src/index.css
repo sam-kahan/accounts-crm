@@ -541,6 +541,13 @@ th.num .th-sort { justify-content: flex-end; width: 100%; }
 
 /* Our own reference for a record — quoted on statements and read down the
    phone, so it is set in a face where 0 and O can't be confused. */
+/* A sentence under a figure in a numeric column: wrapped and boxed in, so it
+   can't stretch its column and push the table off the card. */
+.cell-note {
+  font-size: 12px; max-width: 240px; margin-left: auto;
+  white-space: normal; text-align: right; line-height: 1.35;
+}
+
 .ref-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; color: var(--navy-500); white-space: nowrap;

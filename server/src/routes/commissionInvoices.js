@@ -7,6 +7,7 @@ import { todayISO, monthRange, monthOf } from '../lib/dates.js';
 import { withNumbers, fromPence } from '../lib/money.js';
 import {
   commissionInvoiceNumber,
+  monthEndLinesSql,
   invoiceTotalsFromLines,
   commissionNetPence,
   applyExternalState,
@@ -175,14 +176,14 @@ router.get(
     const region = isRegion(req.query.region) ? req.query.region : null;
 
     const { rows: lines } = await query(
-      `SELECT id, invoice_number, invoice_date, property, description,
-              net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-              commission_vat_inclusive, region
-         FROM contractor_invoices
-        WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
-          AND invoice_date BETWEEN $2 AND $3
-          AND ($4 = '' OR region = $4)
-        ORDER BY invoice_date, created_at`,
+      `SELECT i.id, i.invoice_number, i.invoice_date, i.property, i.description,
+              i.net_amount, i.vat_amount, i.total_amount, i.commission_rate, i.commission_amount,
+              i.commission_vat_inclusive, i.region
+         FROM contractor_invoices i
+        WHERE i.contractor_id = $1 AND i.commission_invoice_id IS NULL AND NOT i.waived
+          AND ${monthEndLinesSql('i', '$2', '$3')}
+          AND ($4 = '' OR i.region = $4)
+        ORDER BY i.invoice_date, i.created_at`,
       [req.params.contractorId, from, to, region || ''],
     );
 
@@ -243,13 +244,14 @@ router.post(
       // two people raising the same month's invoice at once would otherwise
       // each claim the same commission, and we'd bill the contractor twice.
       const { rows: lines } = await client.query(
-        `SELECT id, commission_amount, commission_vat_inclusive FROM contractor_invoices
-          WHERE contractor_id = $1 AND commission_invoice_id IS NULL AND NOT waived
-            AND invoice_date BETWEEN $2 AND $3
-            AND region = $5
-            AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[]))
-          ORDER BY invoice_date, created_at
-          FOR UPDATE`,
+        `SELECT i.id, i.commission_amount, i.commission_vat_inclusive
+           FROM contractor_invoices i
+          WHERE i.contractor_id = $1 AND i.commission_invoice_id IS NULL AND NOT i.waived
+            AND ${monthEndLinesSql('i', '$2', '$3')}
+            AND i.region = $5
+            AND ($4::uuid[] IS NULL OR i.id = ANY($4::uuid[]))
+          ORDER BY i.invoice_date, i.created_at
+          FOR UPDATE OF i`,
         [d.contractor_id, from, to, d.invoice_ids?.length ? d.invoice_ids : null, d.region],
       );
 

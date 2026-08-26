@@ -76,11 +76,16 @@ export default function CommissionInvoices() {
   // the period becomes a line on it.
   async function raise(row) {
     const from = officeOf(row.region) || row.region_label;
+    // Say when part of it is late post from a month already invoiced — the
+    // figure won't match that month's own total, and it should be obvious why.
+    const carried = Number(row.carried_commission) > 0
+      ? ` Includes ${formatMoney(row.carried_commission)} from ${row.carried_count} invoice(s) received after their own month was invoiced.`
+      : '';
     if (
       !confirm(
         `Raise a commission invoice from ${from} to ${row.contractor_name} for ${formatMoney(
           row.pending_commission,
-        )} (${row.pending_count} invoice(s), ${monthLabel(month)})?`,
+        )} (${row.pending_count} invoice(s), ${monthLabel(month)}).${carried}`,
       )
     ) {
       return;
@@ -205,6 +210,19 @@ export default function CommissionInvoices() {
                     <strong>{formatMoney(r.pending_commission, { blankZero: true })}</strong>
                     {r.pending_count > 0 && (
                       <div className="muted" style={{ fontSize: 12 }}>{r.pending_count} line(s)</div>
+                    )}
+                    {/* Kept narrow: this is a figures column, and a sentence
+                        set across it stretches the table off the card. */}
+                    {Number(r.carried_commission) > 0 && (
+                      <div className="cell-note muted">
+                        incl. {formatMoney(r.carried_commission)} received late for an earlier month
+                      </div>
+                    )}
+                    {Number(r.moved_commission) > 0 && (
+                      <div className="cell-note" style={{ color: 'var(--warn)' }}>
+                        {formatMoney(r.moved_commission)} arrived after {monthLabel(month)} was
+                        invoiced — it goes on the next one
+                      </div>
                     )}
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>

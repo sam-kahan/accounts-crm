@@ -224,6 +224,22 @@ contractor at month end.
   and a warning that cries wolf is one everybody learns to click past. The
   invoice number is trimmed on save so " INV-1" and "INV-1" are one invoice to
   the index as well as to the reader.
+- **An invoice that arrives after its month was billed goes on the NEXT
+  invoice, not a second one for that month.** Month end sends a document, so a
+  contractor invoice logged after it went out has no month end left to sit in —
+  and nobody looks at a closed month again. `carriedLineSql()` /
+  `monthEndLinesSql()` in `services/commission.js` are the single definition,
+  used by the month-end table, the preview and the raise itself so the three
+  agree to the penny: a month end is its own period's lines, **minus** any whose
+  month has already been invoiced (they have moved on), **plus** the ones
+  carried in from earlier months that were. The line keeps its own date, so the
+  paperwork still says when the work was done, and both screens say so — the old
+  month reads "£80 arrived after August was invoiced — it goes on the next one",
+  the new one "incl. £80 received late for an earlier month". Carried lines are
+  left out of the missed-month warning and the dashboard tile: nothing was
+  missed. A month that was **never** invoiced is not swept up — it still has its
+  own month end to raise, which is what the warning is for — and voiding an
+  invoice hands its lines straight back to their own month.
 - `commission_invoices` is what we raise. Raising **locks the pending rows
   `FOR UPDATE`** inside the transaction — two people raising the same month at
   once would otherwise each claim the same commission. Voiding releases the
@@ -341,6 +357,15 @@ contractor at month end.
 - The commission preview both screens show now lives in `client/src/commission.js`
   rather than inside the page, so the batch and the single form can't work a
   figure out differently.
+
+### 2026-08-26 — late post goes on the next invoice
+- **An invoice logged for a month already invoiced is carried onto the next
+  month end** rather than stranded or raised as a second invoice for that
+  month. The rule and its reasoning are in "Contractor commission" above; in
+  short, `monthEndLinesSql()` is now what "this month end" means, and the
+  summary, the preview and the raise all ask it the same question. The month-end
+  table says both halves of the move, and the raised invoice notes any lines
+  dated outside its period so their dates don't read as a mistake.
 
 ### 2026-08-26 — a contractor's usual office
 - **`contractors.default_region`** (migration `018`): set on the contractor form

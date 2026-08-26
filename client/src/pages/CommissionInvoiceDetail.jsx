@@ -90,6 +90,11 @@ export default function CommissionInvoiceDetail() {
   const b = inv.billing || {};
   const invoicing = inv.invoicing;
   const hasVat = Number(inv.vat_rate) > 0;
+  // Lines dated outside the period: invoices that arrived after their own month
+  // had been billed, carried onto this one.
+  const carried = (inv.lines || []).filter(
+    (l) => l.invoice_date < inv.period_start || l.invoice_date > inv.period_end,
+  ).length;
 
   // Push it to Greenco Invoicing, which raises the numbered invoice the
   // contractor receives and takes over emailing and chasing it.
@@ -274,6 +279,15 @@ export default function CommissionInvoiceDetail() {
             <div>
               {formatDate(inv.period_start)} - {formatDate(inv.period_end)}
             </div>
+            {/* Late post: an invoice that arrived after its own month was
+                billed is carried here, keeping its own date. Say so, or the
+                dates in the table look like a mistake. */}
+            {carried > 0 && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                Includes {carried} invoice{carried === 1 ? '' : 's'} received after
+                {carried === 1 ? ' its' : ' their'} own month was invoiced
+              </div>
+            )}
           </div>
         </div>
 
