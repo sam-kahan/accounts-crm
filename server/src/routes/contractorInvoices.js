@@ -17,6 +17,7 @@ import {
   commissionStatus,
   commissionableCeiling,
   carriedLineSql,
+  invoiceTotalsFromLines,
   matchContractorByName,
   contractorSuggestionFrom,
   resolveContractor,
@@ -435,6 +436,25 @@ async function summarise({ from, to }) {
     [from, to],
   );
 
+  // What raising now would actually come to — the same function the raise and
+  // the invoice itself use, so the month-end table can't quote a different
+  // figure from the document it produces. Worth a second query: the netting
+  // down of a VAT-inclusive commission searches for the exact split, which is
+  // not something to re-implement in SQL and hope stays in step.
+  const { rows: claimableLines } = await query(
+    `SELECT i.contractor_id, i.region, i.commission_amount, i.commission_vat_inclusive
+       FROM contractor_invoices i
+      WHERE ${pending}
+        AND ((${inWindow} AND NOT ${carried}) OR i.invoice_date < $1)`,
+    [from, to],
+  );
+  const raises = new Map();
+  for (const line of claimableLines) {
+    const key = `${line.contractor_id}:${line.region}`;
+    if (!raises.has(key)) raises.set(key, []);
+    raises.get(key).push(line);
+  }
+
   const contractors = rows.map((r) => ({
     ...withNumbers(r, [
       'invoiced_total',
@@ -446,6 +466,11 @@ async function summarise({ from, to }) {
       'waived_commission',
     ]),
     region_label: REGION_LABEL[r.region] || r.region,
+    // net + VAT of the invoice this row would raise. Null when there is
+    // nothing to raise, so the UI has nothing to explain.
+    raises: raises.has(`${r.contractor_id}:${r.region}`)
+      ? invoiceTotalsFromLines(raises.get(`${r.contractor_id}:${r.region}`), config.commission.vatRate)
+      : null,
   }));
 
   const sum = (key) => fromPence(contractors.reduce((acc, r) => acc + (toPence(r[key]) ?? 0), 0));
@@ -463,6 +488,7 @@ async function summarise({ from, to }) {
       moved_commission: sum('moved_commission'),
       billed_commission: sum('billed_commission'),
       waived_commission: sum('waived_commission'),
+      raises: invoiceTotalsFromLines(claimableLines, config.commission.vatRate),
     },
   };
 }

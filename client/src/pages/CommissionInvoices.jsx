@@ -90,11 +90,14 @@ export default function CommissionInvoices() {
     const carried = Number(row.carried_commission) > 0
       ? ` Includes ${formatMoney(row.carried_commission)} from ${row.carried_count} invoice(s) received after their own month was invoiced.`
       : '';
+    const totalToRaise = row.raises ? row.raises.total_amount : row.pending_commission;
     if (
       !confirm(
         `Raise a commission invoice from ${from} to ${row.contractor_name} for ${formatMoney(
+          totalToRaise,
+        )} (${formatMoney(row.raises?.net_amount ?? row.pending_commission)} + VAT, from ${formatMoney(
           row.pending_commission,
-        )} (${row.pending_count} invoice(s), ${monthLabel(month)}).${carried}`,
+        )} of commission on ${row.pending_count} invoice(s), ${monthLabel(month)}).${carried}`,
       )
     ) {
       return;
@@ -186,7 +189,14 @@ export default function CommissionInvoices() {
         <div className="stat-row">
           <div className="stat accent">
             <div className="label">To invoice</div>
-            <div className="value">{formatMoney(totals.pending_commission)}</div>
+            <div className="value">
+              {formatMoney(totals.raises ? totals.raises.total_amount : 0)}
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              {totals.raises && Number(totals.pending_commission) > 0
+                ? `from ${formatMoney(totals.pending_commission)} of commission collected`
+                : 'nothing left to raise'}
+            </div>
           </div>
           <div className="stat">
             <div className="label">Already invoiced</div>
@@ -219,8 +229,8 @@ export default function CommissionInvoices() {
                 <th>Invoiced by</th>
                 <th className="num">Invoices</th>
                 <th className="num">Paid to them</th>
-                <th className="num">Commission</th>
-                <th className="num">To invoice</th>
+                <th className="num">Commission collected</th>
+                <th className="num">Invoice to raise</th>
                 <th />
               </tr>
             </thead>
@@ -239,12 +249,22 @@ export default function CommissionInvoices() {
                   <td className="num muted">{formatMoney(r.invoiced_total)}</td>
                   <td className="num">{formatMoney(r.commission_total)}</td>
                   <td className="num">
-                    <strong>{formatMoney(r.pending_commission, { blankZero: true })}</strong>
-                    {r.pending_count > 0 && (
-                      <div className="muted" style={{ fontSize: 12 }}>{r.pending_count} line(s)</div>
+                    {/* The INVOICE total leads, because that is the thing this
+                        button is about to create and the figure that appears in
+                        the raised list below. The commission collected is the
+                        column to the left; showing it again here as the headline
+                        is what made the two halves of the page look like they
+                        disagreed. */}
+                    <strong>
+                      {formatMoney(r.raises ? r.raises.total_amount : 0, { blankZero: true })}
+                    </strong>
+                    {r.raises && Number(r.pending_commission) > 0 && (
+                      <div className="cell-note muted">
+                        {formatMoney(r.raises.net_amount)} + {formatMoney(r.raises.vat_amount)} VAT
+                        {' · '}
+                        {r.pending_count} line{r.pending_count === 1 ? '' : 's'}
+                      </div>
                     )}
-                    {/* Kept narrow: this is a figures column, and a sentence
-                        set across it stretches the table off the card. */}
                     {Number(r.carried_commission) > 0 && (
                       <div className="cell-note muted">
                         incl. {formatMoney(r.carried_commission)} received late for an earlier month
@@ -284,7 +304,14 @@ export default function CommissionInvoices() {
                 <td className="num">{totals.invoice_count}</td>
                 <td className="num">{formatMoney(totals.invoiced_total)}</td>
                 <td className="num">{formatMoney(totals.commission_total)}</td>
-                <td className="num">{formatMoney(totals.pending_commission)}</td>
+                <td className="num">
+                  {formatMoney(totals.raises ? totals.raises.total_amount : 0)}
+                  {totals.raises && Number(totals.pending_commission) > 0 && (
+                    <div className="cell-note muted">
+                      from {formatMoney(totals.pending_commission)} collected
+                    </div>
+                  )}
+                </td>
                 <td />
               </tr>
             </tbody>
@@ -323,6 +350,18 @@ export default function CommissionInvoices() {
           </ul>
         </div>
       )}
+
+      <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        <strong>Commission collected</strong> is what the contractors took inside their own
+        invoices. <strong>Invoice to raise</strong> is what we bill back, which is a different
+        figure and differs in opposite directions. A contractor who is <strong>VAT registered</strong>{' '}
+        collected the commission net, so VAT goes on top: £50.00 collected → £50.00 + £10.00 =
+        <strong> £60.00</strong> invoiced. One who is <strong>not</strong> only ever collected that
+        much in total, so it is treated as VAT-inclusive and invoiced netted down: £10.05 collected
+        → £8.37 + £1.67 = <strong>£10.04</strong> invoiced — the same money, split out of what they
+        already took, which is why the two columns can look alike for them. The right-hand figure
+        is the one that appears in the list below.
+      </div>
 
       <div className="section-title flex-between">
         <span>

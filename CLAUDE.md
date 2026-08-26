@@ -368,6 +368,20 @@ contractor at month end.
   rather than inside the page, so the batch and the single form can't work a
   figure out differently.
 
+### 2026-08-26 — the month-end table quotes the invoice, not the commission
+- **The two halves of `/commission/raised` no longer disagree.** The top table
+  showed what the contractors *collected*; the list underneath shows what was
+  *invoiced*, and those are never the same figure — VAT goes on top for a
+  VAT-registered contractor and comes out of the total for everyone else, so the
+  same page appeared to state two different answers. The columns are now
+  **Commission collected** and **Invoice to raise**, the second leading with the
+  invoice total (with its `net + VAT` underneath), which is the figure the raise
+  produces and the one the list below carries. `summarise()` computes it with
+  `invoiceTotalsFromLines()` — the same function the raise and the invoice
+  itself use, so the quote and the document cannot drift apart. A footnote under
+  the table works both examples through, including why the two columns look
+  almost identical for a contractor who isn't VAT registered.
+
 ### 2026-08-26 — the bridge keeps itself in step, and says what the VAT is doing
 - **Nightly reconcile** (`services/invoicingSync.js`, run from
   `/api/dashboard/send-reminders`): re-push what never reached Greenco
