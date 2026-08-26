@@ -1416,6 +1416,19 @@ export default function ContractorInvoices() {
                     {r.commission_override && (
                       <div className="muted" style={{ fontSize: 12 }}>edited</div>
                     )}
+                    {/* What the figure IS depends on the contractor's VAT
+                        status, so the unusual half says so: a contractor who
+                        isn't VAT registered only ever collected this much, so
+                        it is VAT-inclusive and we invoice it netted down. */}
+                    {r.commission_vat_inclusive && (
+                      <div
+                        className="muted"
+                        style={{ fontSize: 12 }}
+                        title="They aren't VAT registered, so this is all they collected. We invoice it netted down — VAT comes out of it, not on top."
+                      >
+                        incl. VAT
+                      </div>
+                    )}
                     {r.commissionable_amount !== null && r.commissionable_amount !== undefined && (
                       <div
                         className="muted"
@@ -1482,6 +1495,14 @@ export default function ContractorInvoices() {
           }.`}
         />
       )}
+
+      <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        <strong>Commission</strong> is what the contractor collected inside their invoice. Where
+        they are VAT registered that is the net, and VAT is added on top when we invoice it back
+        (£9.00 → £10.80). Where they are not, it is all they took, so it is treated as
+        VAT-inclusive and invoiced netted down (£9.00 → £7.50 + £1.50), and they pay back exactly
+        what they collected.
+      </div>
 
       {editing && (
         <EditInvoiceModal

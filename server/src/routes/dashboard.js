@@ -11,6 +11,7 @@ import {
 import { carriedLineSql } from '../services/commission.js';
 import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
 import { syncAllCompanies } from '../services/companySync.js';
+import { syncInvoicing } from '../services/invoicingSync.js';
 import { withNumbers } from '../lib/money.js';
 
 const router = Router();
@@ -219,6 +220,22 @@ router.post(
       console.error('[reminders] Companies House sync failed:', err.message);
     }
 
+    // Then put the two invoicing systems back in step: re-push anything that
+    // never reached Greenco Invoicing, and read back anything that could have
+    // moved there without us hearing about it. Best-effort for the same reason
+    // — a bridge that is down must not stop the digest going out.
+    let invoicing = null;
+    try {
+      invoicing = await syncInvoicing();
+      if (invoicing?.pushes?.sent || invoicing?.refreshes?.changed) {
+        console.log(
+          `[reminders] invoicing: ${invoicing.pushes.sent} pushed, ${invoicing.refreshes.changed} updated`,
+        );
+      }
+    } catch (err) {
+      console.error('[reminders] invoicing sync failed:', err.message);
+    }
+
     const [dueItems, complaintItems] = await Promise.all([
       collectDueItems(days),
       collectComplaintDueItems(days),
@@ -228,7 +245,7 @@ router.post(
     );
     const digest = buildDigest(items);
     const result = await sendReminderEmail(digest);
-    res.json({ items: items.length, sync, ...result });
+    res.json({ items: items.length, sync, invoicing, ...result });
   }),
 );
 

@@ -31,8 +31,13 @@ export default function CommissionInvoices() {
   // showing every invoice ever raised under a heading that says August is how
   // June's invoice ends up on screen. Chasing an older one is a click away.
   const [allMonths, setAllMonths] = useState(false);
+  // Raised here but never landed over there. Asked for separately because it is
+  // not a question about the month on screen: one stranded in June is exactly
+  // the one nobody would go looking for.
+  const [unsent, setUnsent] = useState([]);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [sendingId, setSendingId] = useState(null);
   const [msg, setMsg] = useState(null);
 
   const setMonth = (m) => {
@@ -49,6 +54,10 @@ export default function CommissionInvoices() {
       .outstanding({ before: month })
       .then(setOutstanding)
       .catch(() => setOutstanding(null));
+    api.commissionInvoices
+      .list({ unsent: 'true' })
+      .then(setUnsent)
+      .catch(() => setUnsent([]));
     return Promise.all([
       api.contractorInvoices.summary({ month }).then(setSummary),
       api.commissionInvoices.list(allMonths ? {} : { month }).then(setInvoices),
@@ -111,6 +120,29 @@ export default function CommissionInvoices() {
       setMsg(e.message);
     } finally {
       setBusyId(null);
+    }
+  }
+
+  // Invoices raised here that never made it across. Only worth saying when the
+  // bridge is configured at all — without it nothing is ever pushed, and a
+  // warning about that on every invoice would be noise.
+  // Send (or re-send) one to Greenco Invoicing. The endpoint is idempotent —
+  // our GC-COM number is the key at the other end.
+  async function send(inv) {
+    setSendingId(inv.id);
+    setMsg(null);
+    try {
+      const res = await api.commissionInvoices.push(inv.id);
+      setMsg(
+        `${inv.invoice_number} sent to Greenco Invoicing${
+          res.invoice?.external_number ? ` as ${res.invoice.external_number}` : ''
+        }${res.created === false ? ' (it was already there — linked to it)' : ''}.`,
+      );
+      await load();
+    } catch (e) {
+      setMsg(`${inv.invoice_number} still couldn’t be sent: ${e.message}`);
+    } finally {
+      setSendingId(null);
     }
   }
 
@@ -260,6 +292,38 @@ export default function CommissionInvoices() {
         )}
       </div>
 
+      {settings?.invoicing?.enabled && unsent.length > 0 && (
+        <div className="inline-note warn" style={{ margin: '20px 0 12px' }}>
+          <strong>
+            {unsent.length === 1
+              ? 'One commission invoice hasn’t reached Greenco Invoicing.'
+              : `${unsent.length} commission invoices haven’t reached Greenco Invoicing.`}
+          </strong>{' '}
+          {unsent.length === 1 ? 'It won’t be' : 'They won’t be'} emailed, chased or paid there
+          until {unsent.length === 1 ? 'it is' : 'they are'} sent. Sending again is safe — our
+          reference is the key over there, so it links to any invoice already raised rather than
+          billing twice.
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {unsent.map((i) => (
+              <li key={i.id} style={{ marginBottom: 4 }}>
+                <Link to={`/commission/raised/${i.id}`} style={{ color: 'var(--green-600)' }}>
+                  <strong>{i.invoice_number}</strong>
+                </Link>{' '}
+                — {i.contractor_name}, {formatMoney(i.total_amount)}
+                {i.external_error ? ` · ${i.external_error}` : ''}{' '}
+                <button
+                  className="btn-ghost btn-sm"
+                  disabled={sendingId === i.id}
+                  onClick={() => send(i)}
+                >
+                  {sendingId === i.id ? 'Sending…' : 'Send it now'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="section-title flex-between">
         <span>
           Commission invoices raised{allMonths ? '' : ` for ${monthLabel(month)}`}
@@ -302,8 +366,18 @@ export default function CommissionInvoices() {
                       {i.line_count} line(s)
                       {i.external_number ? ` · ${i.invoice_number}` : ''}
                     </div>
-                    {i.external_error && (
-                      <span className="badge amber" title={i.external_error}>not in invoicing</span>
+                    {/* No external id means it never got there — with or
+                        without a recorded reason. Either way it is not being
+                        emailed or chased, which is the whole point of sending
+                        it, so it says so on the row rather than only on the
+                        message that flashed up when it was raised. */}
+                    {i.status !== 'void' && !i.external_id && (
+                      <span
+                        className="badge amber"
+                        title={i.external_error || 'It has not been sent to Greenco Invoicing'}
+                      >
+                        not in invoicing
+                      </span>
                     )}
                   </td>
                   <td>{i.contractor_name}</td>

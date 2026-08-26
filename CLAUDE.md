@@ -308,6 +308,16 @@ contractor at month end.
   system's *header reference*, which is also its **idempotency key** — a retried
   push links to the invoice already there instead of billing twice. That system
   assigns the number the contractor sees.
+- **Nothing is left half-pushed.** A push that fails at raise time is recorded
+  and the invoice keeps its commission, but it is then sitting somewhere nothing
+  emails or chases it — and a status webhook that never arrives leaves an
+  invoice looking like a draft nobody sent. Neither shows up unless someone
+  opens the invoice, so `services/invoicingSync.js` runs on the nightly job:
+  it re-pushes anything with no `external_id` (idempotent — our `GC-COM` number
+  is the key over there) and reads back anything still `draft` or `sent`. Both
+  are best-effort and capped; the digest must go out regardless. The raised page
+  also lists unsent invoices **across every month** with a Send button, because
+  one stranded in June is exactly the one nobody would look for.
 - **Status comes back on its own.** Greenco Invoicing posts to
   `POST /api/webhooks/invoicing` (`routes/invoicingWebhook.js`) whenever one of
   our invoices moves there — emailed, paid, overdue. It sits outside
@@ -357,6 +367,26 @@ contractor at month end.
 - The commission preview both screens show now lives in `client/src/commission.js`
   rather than inside the page, so the batch and the single form can't work a
   figure out differently.
+
+### 2026-08-26 — the bridge keeps itself in step, and says what the VAT is doing
+- **Nightly reconcile** (`services/invoicingSync.js`, run from
+  `/api/dashboard/send-reminders`): re-push what never reached Greenco
+  Invoicing, read back what could have moved there without a webhook. Reasoning
+  in "Contractor commission" above.
+- **Unsent invoices are visible**: the raised page lists any non-void invoice
+  with no `external_id` — every month, not just the one on screen — each with a
+  **Send it now** button, and the row badge no longer needs a recorded error to
+  say "not in invoicing". `GET /commission-invoices?unsent=true` is the filter.
+- **A totals mismatch is flagged.** Both systems compute VAT per line from the
+  same nets (verified against `computeTotals` in the invoicing app), so they
+  should never disagree; if `external_total` ever differs from ours the invoice
+  says so rather than waiting to be found on a statement.
+- **The VAT treatment is now written down where it is read.** The logged-invoice
+  list marks a VAT-inclusive commission ("incl. VAT") and carries a footnote
+  explaining both halves; the raised invoice shows each netted-down line as
+  "£8.37 of £10.05 collected", marks the ones with no exact split "(1p under)",
+  and says in the footer why the total can be a penny less than was collected —
+  never more.
 
 ### 2026-08-26 — late post goes on the next invoice
 - **An invoice logged for a month already invoiced is carried onto the next

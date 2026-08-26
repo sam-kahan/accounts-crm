@@ -92,6 +92,22 @@ export default function CommissionInvoiceDetail() {
   const hasVat = Number(inv.vat_rate) > 0;
   // Lines dated outside the period: invoices that arrived after their own month
   // had been billed, carried onto this one.
+  // Their grand total against ours. Both compute VAT per line from the same
+  // nets, so a difference means something has been edited on one side.
+  const totalsDisagree =
+    inv.external_total !== null &&
+    inv.external_total !== undefined &&
+    Math.abs(Number(inv.external_total) - Number(inv.total_amount)) > 0.004;
+  // A VAT-inclusive commission that 20% doesn't split exactly: the net is
+  // rounded DOWN, so the invoice comes to a penny less than the contractor
+  // collected rather than a penny more. About one value in six.
+  const roundedDown = (line, rate) => {
+    if (!line.commission_vat_inclusive || !line.commission_net) return false;
+    const net = Math.round(Number(line.commission_net) * 100);
+    const gross = net + Math.round((net * Number(rate || 0)) / 100);
+    return gross !== Math.round(Number(line.commission_amount) * 100);
+  };
+  const anyRoundedDown = (inv.lines || []).some((l) => roundedDown(l, inv.vat_rate));
   const carried = (inv.lines || []).filter(
     (l) => l.invoice_date < inv.period_start || l.invoice_date > inv.period_end,
   ).length;
@@ -226,6 +242,17 @@ export default function CommissionInvoiceDetail() {
                   Open it
                 </a>
               )}
+              {/* The two systems work the VAT out separately, from the same
+                  net figures. They should never disagree — if they ever do,
+                  that is a reconciliation problem and it says so here rather
+                  than waiting to be noticed on a statement. */}
+              {totalsDisagree && (
+                <div style={{ marginTop: 6, color: 'var(--warn)' }}>
+                  <strong>The totals don’t match.</strong> This invoice is{' '}
+                  {formatMoney(inv.total_amount)} here and{' '}
+                  {formatMoney(inv.external_total)} there — worth checking before it is chased.
+                </div>
+              )}
             </>
           ) : inv.external_error ? (
             <>Not sent to Greenco Invoicing: {inv.external_error}</>
@@ -323,7 +350,8 @@ export default function CommissionInvoiceDetail() {
                   {formatMoney(l.commission_net ?? l.commission_amount)}
                   {l.commission_vat_inclusive && (
                     <div className="muted" style={{ fontSize: 11 }}>
-                      {formatMoney(l.commission_amount)} inc VAT
+                      of {formatMoney(l.commission_amount)} collected
+                      {roundedDown(l, inv.vat_rate) ? ' (1p under)' : ''}
                     </div>
                   )}
                 </td>
@@ -358,6 +386,13 @@ export default function CommissionInvoiceDetail() {
         )}
 
         <div className="inv-foot">
+          {anyRoundedDown && (
+            <div style={{ marginBottom: 6 }}>
+              Where a commission collected inside an invoice has no exact {Number(inv.vat_rate)}%
+              split, the net is rounded down — so the line comes to a penny less than was
+              collected, never a penny more.
+            </div>
+          )}
           {inv.sent_at && <>Emailed to {inv.sent_to} on {formatDate(inv.sent_at)}. </>}
           Any query on this invoice, please quote {inv.external_number || inv.invoice_number}.
         </div>

@@ -102,6 +102,10 @@ router.get(
           -- Overlap, not containment: a period raised across a fortnight or a
           -- quarter still belongs to every month it covers.
           AND ($4::date IS NULL OR (ci.period_start <= $5::date AND ci.period_end >= $4::date))
+          -- ?unsent=true: raised here but never landed in Greenco Invoicing, so
+          -- nothing is emailing or chasing it. Deliberately not month-scoped —
+          -- one left behind in June is exactly the one nobody would look for.
+          AND ($6 = '' OR (ci.status <> 'void' AND ci.external_id IS NULL))
         ORDER BY ci.issue_date DESC, ci.invoice_number DESC`,
       [
         req.query.contractor_id || null,
@@ -109,6 +113,7 @@ router.get(
         isRegion(req.query.region) ? req.query.region : '',
         range?.from || null,
         range?.to || null,
+        req.query.unsent === 'true' ? 'y' : '',
       ],
     );
     res.json(rows.map(decorate));
