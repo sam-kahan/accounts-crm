@@ -128,7 +128,7 @@ function requireEnabled() {
   }
 }
 
-async function call(path, { method = 'GET', body } = {}) {
+async function call(path, { method = 'GET', body, rejected = 'rejected the invoice' } = {}) {
   requireEnabled();
   let res;
   try {
@@ -157,7 +157,7 @@ async function call(path, { method = 'GET', body } = {}) {
     const detail = data?.error || `HTTP ${res.status}`;
     throw new HttpError(
       res.status === 401 ? 502 : res.status,
-      `Greenco Invoicing rejected the invoice: ${detail}`,
+      `Greenco Invoicing ${rejected}: ${detail}`,
     );
   }
   return data;
@@ -193,4 +193,31 @@ export async function pushInvoice({ invoice, contractor, lines }) {
 export async function fetchInvoiceState(externalId) {
   const data = await call(`/api/external/invoices/${encodeURIComponent(externalId)}`);
   return data.invoice;
+}
+
+// Withdraw an invoice over there, because it has been voided here.
+//
+// Cancelling is not deleting: the contractor already has the emailed PDF, so
+// the invoice stays on their system marked cancelled, with the reason on it.
+// That is what stops it being chased, and what stops the corrected month end
+// arriving as a second invoice against a first one still standing.
+//
+// Safe to repeat — a second call reports the invoice as already cancelled
+// rather than failing — so the nightly reconcile can retry it freely. An
+// invoice with money recorded against it is refused at the far end (a payment
+// would drop out of their books), and that refusal comes back as its message.
+export async function cancelInvoice(externalId, reason) {
+  const data = await call(`/api/external/invoices/${encodeURIComponent(externalId)}/cancel`, {
+    method: 'POST',
+    body: { reason: reason ? String(reason).slice(0, 500) : '' },
+    rejected: 'wouldn’t cancel the invoice',
+  });
+  return {
+    // False when it was already cancelled — the outcome is the same, but the
+    // caller can tell "we withdrew it" from "it was already withdrawn".
+    cancelled: data.cancelled !== false,
+    external_status: data.invoice?.status || 'cancelled',
+    external_number: data.invoice?.invoiceNumber || null,
+    external_url: data.invoice?.url || null,
+  };
 }

@@ -5,6 +5,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { applyExternalState } from '../services/commission.js';
+import { releaseLinesOf } from '../services/commissionVoid.js';
 
 // ---------------------------------------------------------------------------
 // Greenco Invoicing tells us when a commission invoice changes over there —
@@ -96,7 +97,15 @@ router.post(
       ],
     );
 
-    res.json({ ok: true, changed: next.changed, invoice: updated[0] });
+    // Cancelled over there (by hand, on their screen) voids it here, and a void
+    // has to hand its lines back — otherwise the commission stays claimed by an
+    // invoice nobody will ever pay, and no month end can bill it again.
+    let released = 0;
+    if (next.status === 'void' && current.status !== 'void') {
+      released = await releaseLinesOf(current.id);
+    }
+
+    res.json({ ok: true, changed: next.changed, released, invoice: updated[0] });
   }),
 );
 

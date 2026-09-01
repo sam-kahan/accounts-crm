@@ -13,6 +13,7 @@ import {
   invoiceTotalsFromLines,
   commissionNetPence,
   applyExternalState,
+  needsWithdrawing,
   sumCommissionPence,
   commissionInvoiceNumber,
   commissionStatus,
@@ -804,6 +805,49 @@ test('a voided invoice here is never resurrected from over there', () => {
   const next = applyExternalState({ status: 'void' }, { status: 'paid', grandTotal: 10.8 });
   assert.equal(next.status, 'void');
   assert.equal(next.paid_on, null);
+});
+
+test('a void that never reached the other side needs withdrawing', () => {
+  assert.equal(
+    needsWithdrawing({ status: 'void', external_id: '42', external_status: 'sent' }),
+    true,
+  );
+  // Already cancelled there — nothing left to do.
+  assert.equal(
+    needsWithdrawing({ status: 'void', external_id: '42', external_status: 'cancelled' }),
+    false,
+  );
+  // Never pushed, so nothing is standing against the contractor.
+  assert.equal(needsWithdrawing({ status: 'void', external_id: null }), false);
+  // Not voided at all: this one is meant to stand.
+  assert.equal(
+    needsWithdrawing({ status: 'sent', external_id: '42', external_status: 'sent' }),
+    false,
+  );
+  assert.equal(needsWithdrawing(null), false);
+});
+
+test('cancelled over there voids it here — its commission has to be billable again', () => {
+  const next = applyExternalState(
+    { status: 'sent', external_status: 'sent' },
+    { status: 'cancelled', grandTotal: 10.8 },
+  );
+  assert.equal(next.status, 'void');
+  assert.equal(next.paid_on, null);
+  assert.equal(next.external_status, 'cancelled');
+  assert.equal(next.changed, true);
+});
+
+test('a paid invoice is not voided by a cancellation over there', () => {
+  // Voiding releases the lines back to pending, and re-billing commission the
+  // contractor has already settled is the one thing worse than a disagreement.
+  const next = applyExternalState(
+    { status: 'paid', paid_on: '2026-09-30', external_status: 'paid' },
+    { status: 'cancelled' },
+  );
+  assert.equal(next.status, 'paid');
+  assert.equal(next.paid_on, '2026-09-30');
+  assert.equal(next.external_status, 'cancelled'); // the mismatch is on the record
 });
 
 test('a payment date corrected over there wins — that is where payments live', () => {

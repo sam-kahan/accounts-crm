@@ -35,6 +35,10 @@ export default function CommissionInvoices() {
   // not a question about the month on screen: one stranded in June is exactly
   // the one nobody would go looking for.
   const [unsent, setUnsent] = useState([]);
+  // Voided here but still standing over there — the mirror of `unsent`, asked
+  // for across every month for the same reason. A contractor being chased for
+  // an invoice we withdrew won't wait for someone to open the right month.
+  const [unwithdrawn, setUnwithdrawn] = useState([]);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
@@ -58,6 +62,10 @@ export default function CommissionInvoices() {
       .list({ unsent: 'true' })
       .then(setUnsent)
       .catch(() => setUnsent([]));
+    api.commissionInvoices
+      .list({ unwithdrawn: 'true' })
+      .then(setUnwithdrawn)
+      .catch(() => setUnwithdrawn([]));
     return Promise.all([
       api.contractorInvoices.summary({ month }).then(setSummary),
       api.commissionInvoices.list(allMonths ? {} : { month }).then(setInvoices),
@@ -144,6 +152,27 @@ export default function CommissionInvoices() {
       await load();
     } catch (e) {
       setMsg(`${inv.invoice_number} still couldn’t be sent: ${e.message}`);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  // The other half of a void: withdraw the document over there. Same shape as
+  // `send` above and the same reasoning — a failure has to stay on screen.
+  async function withdraw(inv) {
+    const reason = prompt('Why was it withdrawn? (written onto the invoice over there)', '');
+    if (reason === null) return;
+    setSendingId(inv.id);
+    setMsg(null);
+    try {
+      const res = await api.commissionInvoices.withdraw(inv.id, reason);
+      setMsg(
+        res.skipped ||
+          `${inv.invoice_number} cancelled in Greenco Invoicing — it won’t be chased again.`,
+      );
+      await load();
+    } catch (e) {
+      setMsg(`${inv.invoice_number} still couldn’t be cancelled there: ${e.message}`);
     } finally {
       setSendingId(null);
     }
@@ -344,6 +373,38 @@ export default function CommissionInvoices() {
                   onClick={() => send(i)}
                 >
                   {sendingId === i.id ? 'Sending…' : 'Send it now'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {settings?.invoicing?.enabled && unwithdrawn.length > 0 && (
+        <div className="inline-note warn" style={{ margin: '20px 0 12px' }}>
+          <strong>
+            {unwithdrawn.length === 1
+              ? 'One voided invoice still stands in Greenco Invoicing.'
+              : `${unwithdrawn.length} voided invoices still stand in Greenco Invoicing.`}
+          </strong>{' '}
+          The commission is back on the “to invoice” list here, but the contractor is still being
+          chased over there — and will hold two invoices once the corrected month end goes out.
+          Cancelling again is safe: an invoice already cancelled just reports back as cancelled.
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {unwithdrawn.map((i) => (
+              <li key={i.id} style={{ marginBottom: 4 }}>
+                <Link to={`/commission/raised/${i.id}`} style={{ color: 'var(--green-600)' }}>
+                  <strong>{i.invoice_number}</strong>
+                </Link>{' '}
+                — {i.contractor_name}, {formatMoney(i.total_amount)}
+                {i.external_number ? ` · ${i.external_number} there` : ''}
+                {i.external_error ? ` · ${i.external_error}` : ''}{' '}
+                <button
+                  className="btn-ghost btn-sm"
+                  disabled={sendingId === i.id}
+                  onClick={() => withdraw(i)}
+                >
+                  {sendingId === i.id ? 'Cancelling…' : 'Cancel it there'}
                 </button>
               </li>
             ))}

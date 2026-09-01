@@ -234,10 +234,17 @@ export const api = {
     push: (id) => request(`/commission-invoices/${id}/push`, { method: 'POST' }),
     // Read its state back from there (payment is recorded on that side).
     refresh: (id) => request(`/commission-invoices/${id}/refresh`, { method: 'POST' }),
-    setStatus: (id, status, paidOn) =>
+    setStatus: (id, status, paidOn, reason) =>
       request(`/commission-invoices/${id}/status`, {
         method: 'POST',
-        body: JSON.stringify({ status, paid_on: paidOn }),
+        body: JSON.stringify({ status, paid_on: paidOn, reason: reason || null }),
+      }),
+    // Withdraw a voided invoice over there, so the contractor stops being
+    // chased for it. The void does this itself; this is the retry.
+    withdraw: (id, reason) =>
+      request(`/commission-invoices/${id}/withdraw`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason || null }),
       }),
     remove: (id) => request(`/commission-invoices/${id}`, { method: 'DELETE' }),
   },

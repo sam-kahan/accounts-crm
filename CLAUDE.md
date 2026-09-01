@@ -318,6 +318,32 @@ contractor at month end.
   are best-effort and capped; the digest must go out regardless. The raised page
   also lists unsent invoices **across every month** with a Send button, because
   one stranded in June is exactly the one nobody would look for.
+- **A void reverses BOTH systems.** Voiding releases the lines here, and the
+  invoice was already numbered, PDF'd and emailed over there — so a void that
+  stopped at our database left the contractor being chased for a document we had
+  withdrawn, and holding two invoices once the corrected month end went out.
+  Voiding now also cancels it in Greenco Invoicing
+  (`POST /api/external/invoices/:id/cancel`, added to `sam-kahan/invoices-manager`
+  in the same change): **cancelled, not deleted** — the contractor has a copy and
+  the number stays spoken for, so it keeps the invoice with the reason written
+  onto it, and drops out of every money view there because each names the
+  statuses it counts. Best-effort like the push, for the same reason (the
+  reversal here is correct and committed whatever the network does), so a failure
+  is recorded on the invoice with a **Cancel it there** button, listed on the
+  raised page across every month, and retried nightly. It is idempotent — an
+  invoice already cancelled reports back as cancelled — and refused at the far
+  end if payments are recorded there, which is right: money that arrived can't
+  vanish out of their books for a correction over here. `commissionVoid.js` holds
+  both halves; `needsWithdrawing()` in `commission.js` is the "voided here, still
+  standing there" test the API and both pages share.
+- **Cancelled there voids here too.** `applyExternalState` maps their
+  `cancelled` to our `void` so someone withdrawing an invoice on their screen
+  doesn't strand its commission on an invoice nobody will pay — and the webhook
+  and Refresh release the lines when it does, exactly as the Void button would.
+  The one exception is an invoice we hold as **paid**: voiding it would re-bill
+  commission the contractor has settled, so the two systems disagree in the open
+  instead. The nightly job also sweeps any line left attached to a void invoice,
+  since those paths write the status and release the lines in separate steps.
 - **Status comes back on its own.** Greenco Invoicing posts to
   `POST /api/webhooks/invoicing` (`routes/invoicingWebhook.js`) whenever one of
   our invoices moves there — emailed, paid, overdue. It sits outside
@@ -341,6 +367,29 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-09-01 — voiding an invoice withdraws it in Greenco Invoicing too
+- **Reversing a month end is one action again.** Void released the lines here
+  but left the invoice standing over there, still being chased — so the fix was
+  "void here, then remember to cancel it there", and the corrected month end
+  arrived next to an invoice that still stood. Voiding now cancels it in Greenco
+  Invoicing as well, with the reason written onto the document; the reasoning is
+  in "Contractor commission" above.
+- **New over there** (`sam-kahan/invoices-manager`, `v2/`): a `cancelled`
+  invoice status (migration `20260901120000_invoice_cancelled_status`, applied
+  by that box's own `deploy-v2.sh`, which runs `prisma migrate deploy` before
+  the rebuild and keeps the old build if it fails) and
+  `POST /api/external/invoices/:id/cancel`, authenticated with the same
+  `INTEGRATION_SECRET`. Cancelled invoices are excluded from Total Value and
+  can't be emailed or chased; every other money view already named the statuses
+  it counts, so they dropped out on their own.
+- **New here**: `services/commissionVoid.js` (release the lines, withdraw the
+  document), `POST /commission-invoices/:id/withdraw` to retry a withdrawal that
+  failed, `?unwithdrawn=true` to list them across every month, a nightly sweep
+  in `invoicingSync.js`, and `needs_withdrawing` on every invoice so both pages
+  can say so. The Void prompt now asks why, and the answer travels with it.
+- **The mapping works in both directions**: an invoice cancelled by hand over
+  there voids here and hands its lines back, except one we hold as paid.
 
 ### 2026-08-26 — a batch is read together and submitted in one go
 - **Drop a pile of invoices, check them side by side, log them all.** More than

@@ -154,20 +154,65 @@ export default function CommissionInvoiceDetail() {
   }
 
   async function changeStatus(status) {
-    if (status === 'void' && !confirm('Void this invoice? Its lines go back to “to invoice”.')) {
-      return;
+    let reason = null;
+    if (status === 'void') {
+      // The reason travels to Greenco Invoicing and is written onto the invoice
+      // there, so the next person to open the document can see why it was
+      // withdrawn. Cancelling the prompt cancels the void.
+      reason = prompt(
+        inv.external_id
+          ? 'Void this invoice? Its lines go back to “to invoice”, and it is cancelled in Greenco Invoicing so the contractor stops being chased for it.\n\nWhy is it being withdrawn?'
+          : 'Void this invoice? Its lines go back to “to invoice”.\n\nWhy is it being withdrawn?',
+        '',
+      );
+      if (reason === null) return;
     }
     setBusy(true);
     setMsg(null);
     try {
-      await api.commissionInvoices.setStatus(inv.id, status, status === 'paid' ? todayISO() : null);
+      const res = await api.commissionInvoices.setStatus(
+        inv.id,
+        status,
+        status === 'paid' ? todayISO() : null,
+        reason,
+      );
+      await load();
+      if (status !== 'void') {
+        setMsg(status === 'paid' ? 'Marked paid.' : `Marked ${status}.`);
+      } else {
+        // The void always worked; the withdrawal over there might not have, and
+        // that half is the one the contractor notices.
+        const released = 'Voided — the commission is back on the “to invoice” list.';
+        setMsg(
+          res?.withdrawn?.error
+            ? `${released} It could NOT be cancelled in Greenco Invoicing: ${res.withdrawn.error}`
+            : res?.withdrawn?.cancelled
+              ? `${released} It is cancelled in Greenco Invoicing too.`
+              : released,
+        );
+      }
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Retry the half of a void that didn't land: the invoice is dead here but
+  // still standing — and still being chased — over there.
+  async function withdrawFromInvoicing() {
+    const reason = prompt('Why was it withdrawn? (written onto the invoice over there)', '');
+    if (reason === null) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.commissionInvoices.withdraw(inv.id, reason);
       await load();
       setMsg(
-        status === 'paid'
-          ? 'Marked paid.'
-          : status === 'void'
-            ? 'Voided — the commission is back on the “to invoice” list.'
-            : `Marked ${status}.`,
+        res.skipped ||
+          (res.cancelled
+            ? 'Cancelled in Greenco Invoicing — it won’t be chased again.'
+            : 'It was already cancelled in Greenco Invoicing.'),
       );
     } catch (e) {
       setMsg(e.message);
@@ -193,9 +238,14 @@ export default function CommissionInvoiceDetail() {
               {inv.external_id ? 'Re-send to invoicing' : 'Send to invoicing'}
             </button>
           )}
-          {invoicing?.enabled && inv.external_id && (
+          {invoicing?.enabled && inv.external_id && inv.status !== 'void' && (
             <button className="btn" disabled={busy} onClick={refreshFromInvoicing}>
               Refresh status
+            </button>
+          )}
+          {invoicing?.enabled && inv.needs_withdrawing && (
+            <button className="btn-danger" disabled={busy} onClick={withdrawFromInvoicing}>
+              Cancel it in invoicing
             </button>
           )}
           {inv.status !== 'paid' && inv.status !== 'void' && (
@@ -224,6 +274,20 @@ export default function CommissionInvoiceDetail() {
         <div className="inline-note warn no-print" style={{ marginBottom: 12 }}>
           Your address and bank details are missing from the invoice. Set <code>BILLING_ADDRESS</code>{' '}
           and <code>BILLING_BANK_DETAILS</code> in the server .env so the contractor knows where to pay.
+        </div>
+      )}
+
+      {/* A void that only happened here is the worst of both worlds: the
+          commission is back on the "to invoice" list AND the contractor is
+          still being chased for the invoice we withdrew — so when the corrected
+          month end goes out they are holding two. Say so at the top. */}
+      {inv.needs_withdrawing && (
+        <div className="inline-note warn no-print" style={{ marginBottom: 12 }}>
+          <strong>This invoice is voided here but still stands in Greenco Invoicing.</strong>{' '}
+          {inv.contractor_name} is still being chased for {inv.external_number || 'it'}.{' '}
+          <button className="btn-ghost btn-sm" disabled={busy} onClick={withdrawFromInvoicing}>
+            Cancel it there now
+          </button>
         </div>
       )}
 

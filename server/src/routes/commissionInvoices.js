@@ -11,6 +11,7 @@ import {
   invoiceTotalsFromLines,
   commissionNetPence,
   applyExternalState,
+  needsWithdrawing,
   dueDateFor,
   buildCommissionInvoiceEmail,
 } from '../services/commission.js';
@@ -21,6 +22,7 @@ import {
   fetchInvoiceState,
 } from '../services/invoicesManager.js';
 import { REGION_KEYS, REGION_LABEL, isRegion } from '../services/regions.js';
+import { releaseLinesOf, withdrawExternally } from '../services/commissionVoid.js';
 
 const router = Router();
 
@@ -37,6 +39,9 @@ const decorate = (row) =>
   row
     ? {
         ...withNumbers(row, MONEY_COLS),
+        // Voided here but still standing in Greenco Invoicing — the contractor
+        // is being chased for an invoice we have withdrawn.
+        needs_withdrawing: needsWithdrawing(row),
         region_label: REGION_LABEL[row.region] || row.region || null,
         // Which Greenco company this invoice is raised by. The region is the
         // decision; this is the name that goes on the paperwork.
@@ -106,6 +111,12 @@ router.get(
           -- nothing is emailing or chasing it. Deliberately not month-scoped —
           -- one left behind in June is exactly the one nobody would look for.
           AND ($6 = '' OR (ci.status <> 'void' AND ci.external_id IS NULL))
+          -- ?unwithdrawn=true: voided here, still standing over there. The
+          -- mirror of ?unsent, and not month-scoped for the same reason — a
+          -- contractor being chased for a withdrawn June invoice is exactly
+          -- the one nobody would think to look for.
+          AND ($7 = '' OR (ci.status = 'void' AND ci.external_id IS NOT NULL
+                           AND (ci.external_status IS DISTINCT FROM 'cancelled')))
         ORDER BY ci.issue_date DESC, ci.invoice_number DESC`,
       [
         req.query.contractor_id || null,
@@ -114,6 +125,7 @@ router.get(
         range?.from || null,
         range?.to || null,
         req.query.unsent === 'true' ? 'y' : '',
+        req.query.unwithdrawn === 'true' ? 'y' : '',
       ],
     );
     res.json(rows.map(decorate));
@@ -507,6 +519,13 @@ router.post(
        WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
       [req.params.id, next.external_status, next.external_total, next.status, next.paid_on],
     );
+
+    // Same as the webhook: an invoice cancelled over there is void here, and a
+    // void hands its lines back or the commission is stranded on a dead invoice.
+    if (next.status === 'void' && row.status !== 'void') {
+      await releaseLinesOf(req.params.id);
+    }
+
     res.json({ invoice: decorate(updated[0]), external: state });
   }),
 );
@@ -514,6 +533,10 @@ router.post(
 const statusInput = z.object({
   status: z.enum(['draft', 'sent', 'paid', 'void']),
   paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  // Why it is being withdrawn. Travels to Greenco Invoicing and is written onto
+  // the invoice there, where whoever opens it next is looking at the document
+  // rather than at this system.
+  reason: z.string().max(500).optional().nullable(),
 });
 
 router.post(
@@ -547,12 +570,22 @@ router.post(
               )
             : new HttpError(404, 'Commission invoice not found');
         }
-        const { rowCount } = await client.query(
-          'UPDATE contractor_invoices SET commission_invoice_id = NULL WHERE commission_invoice_id = $1',
-          [req.params.id],
-        );
+        const released = await releaseLinesOf(req.params.id, client);
         await client.query('COMMIT');
-        return res.json({ status: 'void', released: rowCount });
+
+        // The lines are back and the invoice is dead here. Now withdraw the
+        // document over there, so it stops being chased and the corrected month
+        // end doesn't reach the contractor as a second invoice against a first
+        // one still standing. Best-effort on purpose: the reversal here is
+        // already correct and committed, and a withdrawal that didn't land is
+        // recorded on the invoice for the retry button and the nightly sweep.
+        // It swallows its own failures, but not even an unexpected one may
+        // reach the caller: the void is committed, and reporting it as an error
+        // would have someone void an invoice that is already void.
+        const withdrawn = await withdrawExternally(req.params.id, d.reason).catch((err) => ({
+          error: err.message,
+        }));
+        return res.json({ status: 'void', released, withdrawn });
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         throw err;
@@ -570,6 +603,46 @@ router.post(
     );
     if (!rows[0]) throw new HttpError(404, 'Commission invoice not found');
     return res.json(decorate(rows[0]));
+  }),
+);
+
+// Retry the withdrawal in Greenco Invoicing for an invoice voided here.
+//
+// The void itself is done and can't be undone; what this fixes is the half of
+// it that didn't reach the other side — the invoice the contractor is still
+// being chased for. The void path tries this automatically, so reaching for
+// this button means that attempt failed (or the invoice was voided before any
+// of this existed).
+router.post(
+  '/:id/withdraw',
+  asyncHandler(async (req, res) => {
+    const d = parse(
+      z.object({ reason: z.string().max(500).optional().nullable() }),
+      req.body || {},
+    );
+
+    const { rows } = await query(
+      'SELECT id, status, external_id, external_status FROM commission_invoices WHERE id = $1',
+      [req.params.id],
+    );
+    if (!rows[0]) throw new HttpError(404, 'Commission invoice not found');
+    if (rows[0].status !== 'void') {
+      throw new HttpError(
+        409,
+        'Only a voided invoice is withdrawn in Greenco Invoicing — void this one first.',
+      );
+    }
+
+    const result = await withdrawExternally(req.params.id, d.reason);
+    // Here the failure IS the answer: someone pressed a button to fix exactly
+    // this, so it must not come back looking like it worked.
+    if (result.error) throw new HttpError(502, result.error);
+
+    const { rows: after } = await query(
+      `SELECT ${COLS.replaceAll('ci.', '')} FROM commission_invoices WHERE id = $1`,
+      [req.params.id],
+    );
+    res.json({ ...result, invoice: decorate(after[0]) });
   }),
 );
 

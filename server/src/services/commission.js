@@ -523,16 +523,31 @@ export function contractorSuggestionFrom(extracted = {}, amounts = {}) {
 //
 // Shared by the webhook and the manual Refresh so the two can never drift.
 // A voided invoice here is never resurrected by anything arriving from there.
+//
+// Their 'cancelled' is our 'void', and it travels in both directions: voiding
+// here withdraws the invoice there, and an invoice cancelled by hand there has
+// to void here — otherwise its commission stays claimed by an invoice nobody is
+// going to pay. The caller releases the lines when that happens; this only says
+// what the status becomes.
 export function applyExternalState(current, state) {
   const externalStatus = String(state?.status || '').toLowerCase();
   const status =
     current?.status === 'void'
       ? 'void'
-      : externalStatus === 'paid'
-        ? 'paid'
-        : externalStatus === 'draft'
-          ? 'draft'
-          : 'sent';
+      : externalStatus === 'cancelled'
+        ? // Cancelled there voids here — unless we have it down as paid, which
+          // is the one case voiding is refused on this side too: releasing the
+          // lines would re-bill commission the contractor has already settled.
+          // The two systems then disagree in the open (status paid, theirs
+          // cancelled) rather than quietly losing a payment.
+          current?.status === 'paid'
+          ? 'paid'
+          : 'void'
+        : externalStatus === 'paid'
+          ? 'paid'
+          : externalStatus === 'draft'
+            ? 'draft'
+            : 'sent';
 
   // When the money actually arrived, falling back to when it was marked paid.
   // Their date wins over anything already here: payments are recorded on that
@@ -554,6 +569,16 @@ export function applyExternalState(current, state) {
     external_total: state?.grandTotal ?? null,
     changed: current?.status !== status || (current?.external_status || null) !== (externalStatus || null),
   };
+}
+
+// An invoice is withdrawn over there once its external status says so. Anything
+// else — a void raised before the bridge could withdraw one, a push that never
+// landed, a cancel that failed — is still standing on the contractor's system,
+// still being chased, and about to be joined by the corrected month end.
+export function needsWithdrawing(row) {
+  return Boolean(
+    row && row.status === 'void' && row.external_id && row.external_status !== 'cancelled',
+  );
 }
 
 // Who the logged invoice belongs to, once the name has been read off it.

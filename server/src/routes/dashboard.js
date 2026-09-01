@@ -227,9 +227,14 @@ router.post(
     let invoicing = null;
     try {
       invoicing = await syncInvoicing();
-      if (invoicing?.pushes?.sent || invoicing?.refreshes?.changed) {
+      if (
+        invoicing?.pushes?.sent ||
+        invoicing?.refreshes?.changed ||
+        invoicing?.withdrawals?.withdrawn
+      ) {
         console.log(
-          `[reminders] invoicing: ${invoicing.pushes.sent} pushed, ${invoicing.refreshes.changed} updated`,
+          `[reminders] invoicing: ${invoicing.pushes.sent} pushed, ` +
+            `${invoicing.withdrawals.withdrawn} withdrawn, ${invoicing.refreshes.changed} updated`,
         );
       }
     } catch (err) {
