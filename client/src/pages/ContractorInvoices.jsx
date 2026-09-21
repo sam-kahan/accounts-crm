@@ -829,6 +829,15 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // The Total field starts pre-filled with the invoice's current total (so it
+  // reads sensibly rather than looking blank/broken) — but that means a plain
+  // number is sent on every save whether or not anyone touched it, and the
+  // server can't tell "resubmitted as-is" from "deliberately set to this".
+  // Editing the net or VAT here is meant to keep the total adding up (same as
+  // logging a new invoice, where leaving Total blank does exactly that) — so
+  // only an explicit edit to Total itself counts as overriding it; otherwise
+  // it's left out of what's saved and the server re-derives it from net + VAT.
+  const [totalTouched, setTotalTouched] = useState(false);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const detectedRegion = useDetectedRegion(form.property, invoice.contractor_id);
@@ -874,7 +883,11 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
         ...form,
         net_amount: num(form.net_amount),
         vat_amount: num(form.vat_amount),
-        total_amount: num(form.total_amount),
+        // Omitted unless the user actually edited this field — see the note
+        // on totalTouched above. Sending the pre-filled value back verbatim
+        // would freeze the total at its old figure the moment net or VAT
+        // changes here, leaving the invoice adding up to the wrong amount.
+        total_amount: totalTouched ? num(form.total_amount) : undefined,
         // Explicitly null when the box is cleared: the commission goes back to
         // being costed on the whole invoice, which "omitted" could not say.
         commissionable_amount: form.commissionable_amount === '' ? null : num(form.commissionable_amount),
@@ -978,7 +991,10 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
               step="0.01"
               min="0"
               value={form.total_amount}
-              onChange={(e) => set('total_amount', e.target.value)}
+              onChange={(e) => {
+                set('total_amount', e.target.value);
+                setTotalTouched(true);
+              }}
               placeholder="Leave blank to use net + VAT"
             />
           </label>
