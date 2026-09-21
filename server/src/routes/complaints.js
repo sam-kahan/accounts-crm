@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
 import { todayISO } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
@@ -35,6 +35,11 @@ import {
 } from '../services/attachments.js';
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500.
+// (Attachments use a separate :attId param, validated individually below —
+// this doesn't cover those.)
+router.param('id', requireUuidParam);
 
 // Unambiguous characters only (no 0/O/1/I).
 function makeRefCode() {
@@ -352,6 +357,9 @@ router.post(
 router.get(
   '/attachments/:attId/download',
   asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.attId).success) {
+      throw new HttpError(400, 'Invalid attachment id');
+    }
     const a = await getAttachment(req.params.attId);
     if (!a) throw new HttpError(404, 'Attachment not found');
     // Force a download (never render inline): a user could upload an HTML/SVG
@@ -367,6 +375,9 @@ router.get(
 router.delete(
   '/attachments/:attId',
   asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.attId).success) {
+      throw new HttpError(400, 'Invalid attachment id');
+    }
     const ok = await deleteAttachment(req.params.attId);
     if (!ok) throw new HttpError(404, 'Attachment not found');
     res.status(204).end();

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import {
@@ -29,6 +29,9 @@ import { sendInviteEmail, mailerStatus } from '../services/mailer.js';
 // ---------------------------------------------------------------------------
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500.
+router.param('id', requireUuidParam);
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 const COLS = `id, email, name, job_title, role, permissions, active,

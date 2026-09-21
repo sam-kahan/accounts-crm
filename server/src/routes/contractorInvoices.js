@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
 import { monthRange, monthOf, monthLabel } from '../lib/dates.js';
 import { withNumbers, toPence, fromPence } from '../lib/money.js';
@@ -28,6 +28,11 @@ import { invoiceUpload, invoiceMemoryUpload, documentStream, removeDocument } fr
 import { extractInvoice } from '../services/invoiceExtract.js';
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500. Any
+// non-UUID path segment under this router (a typo, a stale link, a wrong
+// sub-path) otherwise falls through to GET /:id and hits the database.
+router.param('id', requireUuidParam);
 
 const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_fixed', 'commission_amount', 'commissionable_amount'];
 

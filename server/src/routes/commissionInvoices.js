@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
 import { todayISO, monthRange, monthOf } from '../lib/dates.js';
 import { withNumbers, fromPence } from '../lib/money.js';
@@ -25,6 +25,9 @@ import { REGION_KEYS, REGION_LABEL, isRegion } from '../services/regions.js';
 import { releaseLinesOf, withdrawExternally } from '../services/commissionVoid.js';
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500.
+router.param('id', requireUuidParam);
 
 const MONEY_COLS = ['net_amount', 'vat_rate', 'vat_amount', 'total_amount', 'external_total'];
 const LINE_MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate', 'commission_amount'];

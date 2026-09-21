@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import {
   getCompanyProfile,
   searchCompanies,
@@ -15,6 +15,9 @@ import {
 import { config } from '../config.js';
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500.
+router.param('id', requireUuidParam);
 
 const companyInput = z.object({
   name: z.string().min(1),

@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
 import { ruleFor } from '../services/complaintRules.js';
 import { researchOrganisation } from '../services/orgResearch.js';
 
 const router = Router();
+// Every :id route on this router is a UUID primary key — reject anything else
+// with a clean 400 instead of a raw Postgres "invalid input syntax" 500.
+router.param('id', requireUuidParam);
 
 const ORG_TYPES = [
   'council',
