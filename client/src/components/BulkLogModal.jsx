@@ -379,8 +379,14 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
   useEffect(() => {
     if (!aiEnabled) {
       // Nothing to read them with — the batch is still worth having, it just
-      // gets typed in.
-      setRows((list) => list.map((r) => (r.state === 'queued' ? { ...r, state: 'ready' } : r)));
+      // gets typed in. Bail out to the same array when nothing is actually
+      // queued: `rows` is a dependency here, and a `.map()` that always
+      // returns a fresh array (even a no-op one) would re-trigger this effect
+      // on every render — an infinite loop the moment the modal opens with no
+      // API key configured.
+      setRows((list) => (list.some((r) => r.state === 'queued')
+        ? list.map((r) => (r.state === 'queued' ? { ...r, state: 'ready' } : r))
+        : list));
       return;
     }
     const queued = rows.filter((r) => r.state === 'queued' && !reading.current.has(r.id));

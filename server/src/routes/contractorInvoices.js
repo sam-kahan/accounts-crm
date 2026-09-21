@@ -791,7 +791,13 @@ router.put(
           amounts.net_amount, amounts.vat_amount, amounts.total_amount,
           commission.commission_type, commission.commission_rate, commission.commission_on,
           commission.commission_basis, commission.commission_amount, commission.commission_override,
-          d.paid_from ?? null, d.paid_on ?? current.paid_on, d.notes ?? current.notes,
+          d.paid_from ?? null,
+          // `??` can't be used here: the amend form sends an explicit `null`
+          // to clear the paid date (un-marking an invoice as paid), and `??`
+          // treats null the same as omitted — so it would silently keep the
+          // old paid_on instead of clearing it.
+          d.paid_on === undefined ? current.paid_on : d.paid_on,
+          d.notes ?? current.notes,
           // Only ever moved deliberately. Re-reading the address on every edit
           // would let a tidied-up property line move an invoice between two
           // companies without anyone asking for it.

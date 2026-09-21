@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { docxToText, isDocx, isLegacyDoc, DocxError } from '../lib/docx.js';
+import { toPence, fromPence } from '../lib/money.js';
 
 // ---------------------------------------------------------------------------
 // Read a contractor's invoice (PDF, Word document, photo or plain text) and
@@ -124,10 +125,16 @@ function cleanStr(v, max) {
 
 function cleanAmount(v) {
   if (v === null || v === undefined || v === '') return null;
-  const n = typeof v === 'number' ? v : Number(String(v).replace(/[£,\s]/g, ''));
+  // Via integer pence, not `Math.round(n * 100) / 100` — that naive form
+  // mis-rounds a value like 1.005 (see lib/money.js's own header comment for
+  // why), and this only pre-fills a form a person then reviews, but a wrong
+  // figure nobody edits would still save wrong.
+  const pence = toPence(v);
+  if (pence === null) return null;
+  const n = fromPence(pence);
   // A tap repair is not £2m: an absurd figure is a misread, not a windfall.
   if (!Number.isFinite(n) || n < 0 || n > 1000000) return null;
-  return Math.round(n * 100) / 100;
+  return n;
 }
 
 // A property address arrives with the tenant's name on the front more often
