@@ -175,6 +175,13 @@ export const api = {
         body: JSON.stringify({ waived, reason }),
       }),
     remove: (id) => request(`/contractor-invoices/${id}`, { method: 'DELETE' }),
+    // Swap the stored document for another (the wrong file went up) — pending
+    // lines only, like Amend.
+    replaceDocument: (id, file) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return request(`/contractor-invoices/${id}/document`, { method: 'POST', body: fd });
+    },
     documentUrl: (id) => `/api/contractor-invoices/${id}/document`,
     summary: (params = {}) => {
       const qs = new URLSearchParams(clean(params)).toString();

@@ -803,8 +803,9 @@ function LogInvoiceModal({
 // not, because the commission was costed under THEIR agreement and the row
 // carries that agreement as a snapshot; logging it against somebody else is a
 // different invoice, so it is deleted and logged again. The document stays as
-// uploaded: it is the evidence, and a correction to what was read off it must
-// not quietly replace it.
+// uploaded unless a replacement is deliberately chosen here (the wrong file
+// went up): it is the evidence, and a correction to what was read off it must
+// not quietly replace it. The swap is said on screen before it is saved.
 function EditInvoiceModal({ invoice, onClose, onSaved }) {
   const [form, setForm] = useState({
     invoice_number: invoice.invoice_number || '',
@@ -838,6 +839,14 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   // only an explicit edit to Total itself counts as overriding it; otherwise
   // it's left out of what's saved and the server re-derives it from net + VAT.
   const [totalTouched, setTotalTouched] = useState(false);
+  // A replacement document, sent after the details save. Null keeps the one on
+  // file.
+  const [newFile, setNewFile] = useState(null);
+  const fileInput = useRef(null);
+  const dragging = useWindowFileDrop(
+    useCallback((files) => setNewFile(files[0] || null), []),
+    true,
+  );
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const detectedRegion = useDetectedRegion(form.property, invoice.contractor_id);
@@ -899,7 +908,9 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
         region: form.region || undefined,
         commission_amount: overridden ? Number(commission) : undefined,
       });
-      onSaved(saved);
+      // The details first: if they are refused, the document on file is left
+      // alone rather than swapped under an amendment that didn't happen.
+      onSaved(newFile ? await api.contractorInvoices.replaceDocument(invoice.id, newFile) : saved);
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -908,6 +919,13 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
 
   return (
     <Modal title={`Amend ${invoice.ref || invoice.invoice_number || 'invoice'}`} onClose={onClose}>
+      {dragging && (
+        <FileDropPrompt
+          overDialog
+          title={invoice.has_document ? 'Drop to replace the document' : 'Drop to attach the document'}
+          hint="PDF, Word, photo or text. Nothing changes until you save."
+        />
+      )}
       {error && <div className="login-error" style={{ marginBottom: 14 }}>{error}</div>}
       <form onSubmit={save}>
         <div className="inline-note" style={{ marginBottom: 14 }}>
@@ -916,7 +934,54 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
           {invoice.commission_type === 'fixed'
             ? `${formatMoney(invoice.commission_fixed)} a job`
             : `${Number(invoice.commission_rate)}%`}
-          {invoice.has_document ? ' · the uploaded document stays as it is' : ''}.
+          .
+        </div>
+
+        <div className="inline-note" style={{ marginBottom: 14 }}>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              setNewFile(e.target.files?.[0] || null);
+              e.target.value = '';
+            }}
+          />
+          {newFile ? (
+            <>
+              <strong>{newFile.name}</strong> will{' '}
+              {invoice.has_document
+                ? <>replace <strong>{invoice.filename || 'the current document'}</strong></>
+                : 'be attached'}{' '}
+              when you save
+              {invoice.has_document ? ' — the old file is deleted' : ''}.{' '}
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setNewFile(null)}>
+                {invoice.has_document ? 'Keep the current one' : 'Don’t attach'}
+              </button>
+            </>
+          ) : (
+            <>
+              {invoice.has_document ? (
+                <>
+                  Document:{' '}
+                  <a href={api.contractorInvoices.documentUrl(invoice.id)}>
+                    {invoice.filename || 'download'}
+                  </a>
+                  .{' '}
+                </>
+              ) : (
+                'No document on file. '
+              )}
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => fileInput.current?.click()}
+              >
+                {invoice.has_document ? 'Replace document…' : 'Attach document…'}
+              </button>
+            </>
+          )}
         </div>
         <DuplicateNote found={duplicates} verb="Renumbering this one onto it" />
 
@@ -1481,6 +1546,8 @@ export default function ContractorInvoices() {
                         title={`Void ${r.commission_invoice_number || 'the commission invoice'} to amend this`}
                       >
                         billed
+                        <br />
+                        void {r.commission_invoice_number || 'it'} to change
                       </span>
                     ) : (
                       <>

@@ -883,6 +883,48 @@ router.delete(
   }),
 );
 
+// Replace (or attach) the document on a logged invoice — the wrong file was
+// uploaded, or none was. Only while the line is still pending: once it is on a
+// commission invoice the document is the evidence for what was billed, so it is
+// frozen with the rest of the row (void that invoice first, as for Amend).
+router.post(
+  '/:id/document',
+  invoiceUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const file = req.file;
+    if (!file) throw new HttpError(400, 'Choose the document to attach.');
+    let old;
+    try {
+      // The old path is read in the same statement that swaps it, so the file
+      // removed afterwards is exactly the one this row stopped pointing at.
+      const { rows } = await query(
+        `UPDATE contractor_invoices i
+            SET filename = $2, mimetype = $3, size_bytes = $4, storage_path = $5
+           FROM (SELECT id, storage_path FROM contractor_invoices WHERE id = $1 FOR UPDATE) o
+          WHERE i.id = o.id AND i.commission_invoice_id IS NULL
+          RETURNING o.storage_path AS old_path`,
+        [req.params.id, file.originalname, file.mimetype, file.size, file.path],
+      );
+      if (!rows[0]) {
+        const { rows: exists } = await query('SELECT id FROM contractor_invoices WHERE id = $1', [
+          req.params.id,
+        ]);
+        throw exists[0]
+          ? new HttpError(409, 'This invoice is on a commission invoice — void that first to change its document.')
+          : new HttpError(404, 'Invoice not found');
+      }
+      old = rows[0].old_path;
+    } catch (err) {
+      // Nothing points at the new file if the row didn't take it.
+      await removeDocument(file.path);
+      throw err;
+    }
+    await removeDocument(old);
+    const { rows: full } = await query(`SELECT ${JOINED} ${FROM} WHERE i.id = $1`, [req.params.id]);
+    res.json(decorate(full[0]));
+  }),
+);
+
 // Download the stored invoice document.
 router.get(
   '/:id/document',
