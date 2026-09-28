@@ -94,7 +94,8 @@ function emailIsForNow(r) {
   if (!r?.email?.body) return false;
   if (r.email_now === false) return false;
   if (r.next_action?.type === 'wait') return false;
-  if (/^\s*(do not|don['’]t|no need|nothing|no action|no further|not yet|wait\b|hold\b)/i.test(r.headline || '')) return false;
+  // The same "don't send" wording as the server (reviewGuard.js#saysHold).
+  if (/^\s*((do not|don['’]t|no need to) (send|chase|email|write|contact|reply|follow)|nothing\b|no action|no further action|not yet\b|wait\b|hold\b)/i.test(r.headline || '')) return false;
   return true;
 }
 

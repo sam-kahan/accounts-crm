@@ -39,12 +39,20 @@ export function nextDueFromThem(tracks) {
   return due.sort((a, b) => a.date.localeCompare(b.date))[0] || null;
 }
 
-// A headline that says NOT to act ("Do not escalate.", "No need to chase",
-// "Nothing to send", "Wait…"): the email that came with it is the one kept
+// A headline that says not to SEND anything ("Don't chase", "Nothing to send",
+// "No action needed", "Wait…"): the email that came with it is the one kept
 // ready for later, never one to send now.
-const HOLD_WORDS = /^\s*(do not|don['’]t|no need|nothing|no action|no further|not yet|wait\b|hold\b)/i;
+const HOLD_WORDS =
+  /^\s*((do not|don['’]t|no need to) (send|chase|email|write|contact|reply|follow)|nothing\b|no action|no further action|not yet\b|wait\b|hold\b)/i;
 export function saysHold(r) {
   return HOLD_WORDS.test(r?.headline || '');
+}
+
+// A headline that only says what NOT to do about something else ("Do not
+// escalate.") and nothing about what to do instead.
+function onlyNegative(h) {
+  const t = String(h || '').trim();
+  return /^(do not|don['’]t|no need to)\b/i.test(t) && !/\b(send|email|reply|wait|until|due|instead|ask|chase)\b/i.test(t);
 }
 
 // Does a review tell Greenco to send an email NOW (whatever it is about)?
@@ -61,9 +69,24 @@ export function wantsToSendNow(r) {
 export function guardReview(review, facts) {
   if (!review) return review;
   const today = facts.today || todayISO();
-  // "Do not escalate." says what not to do and nothing about what to do, and
-  // the email beside it read as one to send. The advice is made whole: hold,
-  // with what is being waited for and until when; the email is kept ready.
+  // "Do not escalate." says what not to do and nothing about what to do. It
+  // is made whole from the review's own next action: the email below, when
+  // there is one to send (the ball rule further down still applies), or
+  // waiting, with what for and until when.
+  if (onlyNegative(review.headline) && !saysHold(review)) {
+    const base = review.headline.replace(/[.\s]*$/, '');
+    const sendIt = review.email?.body && review.email_now !== false && review.next_action?.type !== 'wait';
+    if (sendIt) {
+      const h = `${base} yet. Send the email below${review.email.subject ? `: “${review.email.subject}”` : ''}.`;
+      review = { ...review, headline: h, recommended_action: h };
+    } else {
+      const h = `${base}. Nothing to send now: ${facts.nextDue ? `wait for ${facts.nextDue.what}, due ${ukDate(facts.nextDue.date)}` : 'wait for their reply'}.`;
+      return {
+        ...review, headline: h, recommended_action: h, email_now: false,
+        next_action: { type: 'wait', by: review.next_action?.by || facts.nextDue?.date || null },
+      };
+    }
+  }
   if (saysHold(review)) {
     const bare = !/\b(wait|until|due|by \w+ \d|nothing to send)\b/i.test(review.headline);
     const tail = facts.nextDue
