@@ -398,13 +398,13 @@ the page says how far each date can be trusted.
   correction (`PUT`) writes "Details corrected — field: old → new" via
   `describeChanges`. Dated steps (acknowledged, response, escalate, resolved)
   always ask for the date — it moves deadlines — defaulting to today.
-- **Incoming email** is matched only by the complaint's own address or ref (the
-  mailbox is a shared catch-all), and matching changes nothing by itself: it is
-  flagged **New** until a person says whether it is their acknowledgement, their
-  response or just correspondence (`POST /:id/emails/:emailId/review`), which
-  dates it on the UK day it arrived (`londonDateOf`). Only the preview is
-  captured, and a reply that didn't copy in the complaint address never arrives
-  — the page says both, and to upload the letter under Documents.
+- **Incoming email** reaches a complaint by its own address or ref, the
+  complaints inbox, a watched mailbox (thread, account number, or complaint
+  words), or the account-number search — see "Forward it…" and "Watching…"
+  below. What it records is decided by `planFromAnalysis` (high confidence
+  only, with Undo); anything else stays **New** for a person to mark
+  (`POST /:id/emails/:emailId/review`), dated on the UK day it arrived
+  (`londonDateOf`).
 - **The AI reads the evidence**: PDFs and photos on a complaint go to the model
   as document/image blocks (`attachmentBlocks`, capped at 10 files / 20 MB, and
   it's told by name which it didn't get), with the same untrusted-content rule.
@@ -449,27 +449,36 @@ the page says how far each date can be trusted.
   past-complaints search is for. Each check writes `app_settings.email_last_check`
   and the page shows it ("last checked 3 min ago", or why not).
 - **Finding past complaints** (`services/pastComplaints.js`). A person picks
-  mailboxes and how far back; it searches (Graph `$search`) for complaint
+  mailboxes (always the last 12 months, the ombudsman window); it searches (Graph `$search`) for complaint
   phrases, groups results into threads, has the AI read each thread
   (`parseImportedComplaint` with `is_complaint`, `state`, `resolved_on`), and
   lists the complaints Greenco made in `complaint_import_candidates` for
-  **Import / Skip** — never created unasked, since old ones may be settled.
+  **Import / Link / Skip**, or imports/links them itself when "Import
+  automatically" is on (`runAutoImport` + `autoPlan`, see Recent changes).
   Non-complaints are kept as `not_complaint` so no thread is read twice.
   Import creates it at its stage with its dates (resolved if it ended), brings
   in the whole thread via `processHistoricalEmail` (full text + attachments,
   nothing re-recorded), and runs the review. Background job; progress in
   `app_settings.past_scan`.
-- **One issue, one complaint.** `orgMatch.js` is the rule: an organisation
-  name matches exactly after cleaning, or by an unambiguous shortening
-  ("LivingCity" → "Livingcity Asset Management Limited"; ≥5 characters, one
-  saved organisation only); `sameIssue()` = same organisation + same property
-  postcode (or raised within a fortnight). Found threads about one issue are
+- **One issue, one complaint — and the ACCOUNT NUMBER is the key.**
+  `orgMatch.js` is the rule. An organisation name matches exactly after
+  cleaning, or by an unambiguous shortening ("LivingCity" → "Livingcity Asset
+  Management Limited"; ≥5 characters; council words are not generic, so
+  "Liverpool" never matches its council). `issueMatch()` decides, in order:
+  same account number = same complaint (even across organisations, e.g. a debt
+  collector); different account numbers = different; same case reference;
+  both postcodes → the property (`sameProperty`: flat/house numbers subset);
+  same address text without a postcode (`sameAddressText`); only then, with no
+  address or account on either side, raised within a fortnight = POSSIBLE
+  only. `sameIssue()` = `issueMatch().same`. Found threads about one issue are
   grouped (`groupCandidates`/`mergeExtracted`: earliest raised, furthest stage,
   latest state) and imported or linked as one; a found thread that is certainly
   an existing complaint (same postcode) is linked by the search itself; a "new
   complaint" email about an issue already open is filed on it.
 - **Tidy up** (`services/tidy.js`, Complaints page card): likely duplicate
   complaints and organisations, each merged on a click — never automatically.
+  The card says whether each is open or closed (the list shows open ones by
+  default) and links to both; a merge keeps the open one.
   A merge moves every email, document, timeline entry and found thread,
   fills blanks without overwriting, and says so on the timeline; one
   transaction.
@@ -488,9 +497,9 @@ the page says how far each date can be trusted.
   `recomputeForOrganisation` writes each moved date onto the complaint's
   timeline and refreshes its AI review. Procedures can be uploaded, researched
   or pasted as text (kept on file as a .txt).
-- The search reads four threads at a time.
-- A past-complaints search stopped by a restart (every deploy) carries on at
-  start-up (`resumeInterruptedScan`); threads already read are skipped.
+- The search reads four threads at a time and never re-reads a thread (any
+  mailbox). A search stopped by a restart carries on at start-up
+  (`resumeInterruptedScan`). Nothing ever starts a search by itself.
 - **Creating a complaint** has one definition, `services/complaintCreate.js`
   (the Log form, a complaint started from an email, one created from our own
   email, and an import). The Log form can fill itself from the complaint
@@ -523,6 +532,39 @@ the page says how far each date can be trusted.
 - CI (`.github/workflows/ci.yml`) re-runs the tests + client build on every push
   to `main`. It's a **signal, not a gate** — auto-pull deploys the moment you
   push, so run the checks locally first.
+
+## Where things stand (handover for a new chat)
+
+- **Owner's priorities**: accounts work, so everything must be exactly right;
+  as automated and easy for staff as possible; and **economical with AI
+  credits** — the owner watches the Anthropic bill. Before adding any AI call,
+  prefer no-AI rules, low effort, the fewest files, and doing it once
+  (remember it was done). Never repeat research or re-read what was read.
+- **Client emails** (drafts the AI writes): warm and genuine, a caring
+  professional, not overfamiliar. No long dashes in complaint wording.
+- **Live state (28 Sep 2026)**: a 12-month past-complaints search ran (555
+  threads) with automatic import ON; imported complaints are marked **To
+  check** ("Looks right, next ›" walks through them). Account numbers were
+  backfilled and each complaint's number is searched in the mailboxes once.
+  Model is `claude-sonnet-5-5` (no `ANTHROPIC_MODEL` in the server's `.env`).
+- **Open items the owner may raise**: E.ON Next procedure (they were to
+  re-check and save after the 0-days fix — don't research again); a CDER
+  duplicate (GC-C-3NXGAW / GC-C-SN58SC) offered in Tidy up; forwarded CDER
+  emails that may be waiting under "Emails to file".
+- **See the live picture** without changing anything: on the server,
+  `cd /var/www/accounts-crm/server && node src/scripts/complaints-report.mjs`
+  (set-up, automatic import state, each complaint, found complaints waiting
+  or dealt with, emails to file). Ask the owner to paste it.
+- **Local testing** in a cloud session: Postgres at
+  `DATABASE_URL="postgres://postgres@localhost:5433/crm?host=/var/tmp/pgcrm"`
+  (start with `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D
+  /var/tmp/pgcrm/data -o '-p 5433 -k /var/tmp/pgcrm' -l /var/tmp/pgcrm/pg2.log
+  start"`; it may need recreating in a fresh container). The AI and Graph are
+  exercised by stubbing `globalThis.fetch` in a throwaway script under
+  `server/src/scripts/_t.mjs` (delete it after). Don't `pkill -f` a pattern
+  that matches your own shell.
+- **Deploys restart the server**; `deploy.sh` waits for imports first. Push to
+  `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
 
