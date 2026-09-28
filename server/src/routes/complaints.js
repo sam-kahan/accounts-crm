@@ -12,7 +12,9 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importCandidate } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importCandidate, linkCandidate } from '../services/pastComplaints.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
+import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
@@ -527,7 +529,24 @@ router.get(
       `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status
          FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at DESC`,
     );
-    res.json(rows);
+    // Say when one is already in the system, so it is linked, not duplicated.
+    const complaints = (await query(
+      'SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints',
+    )).rows;
+    const orgs = (await query('SELECT id, name FROM organisations')).rows;
+    // Threads about the same issue are shown (and imported) as one complaint.
+    res.json(groupCandidates(rows).map((group) => {
+      const merged = mergeExtracted(group);
+      const hit = group.map((c) => findExistingComplaint(complaints, orgs, c.extracted)).find(Boolean)
+        || findExistingComplaint(complaints, orgs, merged);
+      return {
+        ...group[0],
+        extracted: merged,
+        message_count: group.reduce((n, c) => n + (c.message_count || 0), 0),
+        members: group.map((c) => ({ id: c.id, subject: c.subject, first_at: c.first_at, message_count: c.message_count })),
+        existing: hit ? { id: hit.id, ref_code: hit.ref_code, subject: hit.subject } : null,
+      };
+    }));
   }),
 );
 
@@ -541,6 +560,55 @@ router.post(
     } catch (err) {
       throw new HttpError(err.status || 500, err.message);
     }
+  }),
+);
+
+// --- Tidy up: likely duplicates, merged on a click --------------------------
+router.get(
+  '/tidy',
+  asyncHandler(async (_req, res) => {
+    res.json(await tidySuggestions());
+  }),
+);
+
+const mergeInput = z.object({ keep_id: z.string().uuid(), merge_id: z.string().uuid() });
+router.post(
+  '/tidy/complaints',
+  asyncHandler(async (req, res) => {
+    const d = parse(mergeInput, req.body);
+    try {
+      res.json(await mergeComplaints(d.keep_id, d.merge_id, who(req)));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+  }),
+);
+router.post(
+  '/tidy/organisations',
+  asyncHandler(async (req, res) => {
+    const d = parse(mergeInput, req.body);
+    try {
+      res.json(await mergeOrganisations(d.keep_id, d.merge_id, who(req)));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+  }),
+);
+
+// Bring a found thread's emails onto a complaint already in the system,
+// instead of importing it again.
+const linkInput = z.object({ complaint_id: z.string().uuid() });
+router.post(
+  '/past/candidates/:candId/link',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
+    const d = parse(linkInput, req.body);
+    try {
+      await linkCandidate(req.params.candId, d.complaint_id, who(req));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    res.json({ linked: true, complaint_id: d.complaint_id });
   }),
 );
 

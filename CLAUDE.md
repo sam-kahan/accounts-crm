@@ -459,6 +459,22 @@ the page says how far each date can be trusted.
   in the whole thread via `processHistoricalEmail` (full text + attachments,
   nothing re-recorded), and runs the review. Background job; progress in
   `app_settings.past_scan`.
+- **One issue, one complaint.** `orgMatch.js` is the rule: an organisation
+  name matches exactly after cleaning, or by an unambiguous shortening
+  ("LivingCity" → "Livingcity Asset Management Limited"; ≥5 characters, one
+  saved organisation only); `sameIssue()` = same organisation + same property
+  postcode (or raised within a fortnight). Found threads about one issue are
+  grouped (`groupCandidates`/`mergeExtracted`: earliest raised, furthest stage,
+  latest state) and imported or linked as one; a found thread that is certainly
+  an existing complaint (same postcode) is linked by the search itself; a "new
+  complaint" email about an issue already open is filed on it.
+- **Tidy up** (`services/tidy.js`, Complaints page card): likely duplicate
+  complaints and organisations, each merged on a click — never automatically.
+  A merge moves every email, document, timeline entry and found thread,
+  fills blanks without overwriting, and says so on the timeline; one
+  transaction.
+- A past-complaints search stopped by a restart (every deploy) carries on at
+  start-up (`resumeInterruptedScan`); threads already read are skipped.
 - **Creating a complaint** has one definition, `services/complaintCreate.js`
   (the Log form, a complaint started from an email, one created from our own
   email, and an import). The Log form can fill itself from the complaint

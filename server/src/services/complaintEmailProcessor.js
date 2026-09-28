@@ -10,7 +10,7 @@ import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName } from './orgMatch.js';
+import { findOrgByName, findExistingComplaint } from './orgMatch.js';
 import { researchOrganisation } from './orgResearch.js';
 
 // ---------------------------------------------------------------------------
@@ -239,6 +239,18 @@ async function createFromEmail(em, analysis) {
     return null;
   }
   if (p.is_complaint === false || !p.subject || !p.org_name) return null;
+
+  // Already open about the same issue (same organisation and property, or
+  // raised within a fortnight)? File it there rather than start a second one.
+  const open = (await query(
+    `SELECT id, org_name, organisation_id, property, raised_on FROM complaints WHERE state = 'open'`,
+  )).rows;
+  const orgsAll = (await query('SELECT id, name FROM organisations')).rows;
+  const existing = findExistingComplaint(open, orgsAll, p);
+  if (existing) {
+    await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'same_issue' WHERE id = $1`, [em.id, existing.id]);
+    return existing.id;
+  }
 
   let org = await findOrgByName(p.org_name);
   if (!org) {

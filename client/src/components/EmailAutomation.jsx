@@ -90,6 +90,7 @@ export default function EmailAutomation({ onChanged }) {
     setBusyId(c.id);
     try {
       if (how === 'import') await api.complaints.importPast(c.id);
+      else if (how === 'link') await api.complaints.linkPast(c.id, c.existing.id);
       else await api.complaints.skipPast(c.id);
       await loadCands();
       onChanged?.();
@@ -99,9 +100,13 @@ export default function EmailAutomation({ onChanged }) {
       setBusyId(null);
     }
   }
+  // Import all leaves out any that are already in the system: those are
+  // linked one at a time, so nothing is duplicated.
+  const fresh = cands.filter((c) => !c.existing);
   async function importAll() {
-    if (!confirm(`Import all ${cands.length}? Each one is created with its dates and emails.`)) return;
-    for (const c of cands) {
+    if (!confirm(`Import ${fresh.length}? Each one is created with its dates and emails.` +
+      (cands.length > fresh.length ? ` (${cands.length - fresh.length} already in the system are left for you to link.)` : ''))) return;
+    for (const c of fresh) {
       // eslint-disable-next-line no-await-in-loop
       await decide(c, 'import');
     }
@@ -188,7 +193,11 @@ export default function EmailAutomation({ onChanged }) {
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>
           <div className="card-head">
             <h2>Past complaints found <span className="badge navy">{cands.length}</span></h2>
-            <button className="btn-primary btn-sm" onClick={importAll} disabled={Boolean(busyId)}>Import all</button>
+            {fresh.length > 0 && (
+              <button className="btn-primary btn-sm" onClick={importAll} disabled={Boolean(busyId)}>
+                Import all{cands.length > fresh.length ? ` ${fresh.length} new` : ''}
+              </button>
+            )}
           </div>
           <table>
             <tbody>
@@ -202,15 +211,27 @@ export default function EmailAutomation({ onChanged }) {
                         {x.org_name || 'Unknown organisation'}{x.property ? ` · ${x.property}` : ''}
                       </div>
                       {x.summary && <div style={{ fontSize: 13, marginTop: 2 }}>{x.summary}</div>}
+                      {c.existing && (
+                        <div className="inline-note" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
+                          <strong>Already in the system:</strong> {c.existing.ref_code}, {c.existing.subject}.
+                          Link its emails there rather than importing it again.
+                        </div>
+                      )}
                       <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                         Raised {formatDate(x.raised_on) } · {x.state === 'resolved' ? `resolved ${formatDate(x.resolved_on)}` : `open, at ${String(x.stage || 'stage_1').replace('_', ' ')}`}
                         {' '}· {c.message_count} email{c.message_count === 1 ? '' : 's'} · {x.confidence ? `${x.confidence} confidence` : ''}
                       </div>
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button className="btn-primary btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'import')}>
-                        {busyId === c.id ? 'Importing…' : 'Import'}
-                      </button>{' '}
+                      {c.existing ? (
+                        <button className="btn-primary btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'link')}>
+                          {busyId === c.id ? 'Linking…' : `Link emails to ${c.existing.ref_code}`}
+                        </button>
+                      ) : (
+                        <button className="btn-primary btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'import')}>
+                          {busyId === c.id ? 'Importing…' : 'Import'}
+                        </button>
+                      )}{' '}
                       <button className="btn-ghost btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'skip')}>Skip</button>
                     </td>
                   </tr>

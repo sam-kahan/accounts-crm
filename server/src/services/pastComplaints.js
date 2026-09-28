@@ -7,8 +7,8 @@ import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName } from './orgMatch.js';
-import { processHistoricalEmail } from './complaintEmailProcessor.js';
+import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf } from './orgMatch.js';
+import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
 
@@ -28,7 +28,10 @@ const PHRASES = [
   'formal complaint', 'complaint', 'stage 1', 'stage 2', 'final viewpoint', 'final response',
   'ombudsman', 'complaints procedure', 'deadlock',
 ];
-const MAX_THREADS = 250;
+// Per search. Most threads are ruled out before the full read (no email from
+// us to an outside party, or a quick low-effort look), so this is generous; a
+// second search carries on past it, as threads already read are skipped.
+const MAX_THREADS = 2000;
 
 let running = false;
 
@@ -78,7 +81,7 @@ export function couldBeOurComplaint(msgs, ourDomain) {
   });
 }
 
-async function runScan({ mailboxes, months }) {
+async function runScan({ mailboxes, months, carry = null }) {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - months);
   const errors = [];
@@ -96,7 +99,7 @@ async function runScan({ mailboxes, months }) {
   for (const mb of mailboxes) {
     for (const phrase of PHRASES) {
       try {
-        for (const m of await searchMailbox(mb, phrase)) {
+        for (const m of await searchMailbox(mb, phrase, 2500)) {
           if (!m.conversationId || m.receivedAt < cutoff || known.has(m.conversationId)) continue;
           const key = `${mb}|${m.conversationId}`;
           if (!seen.has(key)) threads.set(key, { mailbox: mb, conversationId: m.conversationId });
@@ -109,11 +112,13 @@ async function runScan({ mailboxes, months }) {
     }
   }
   const list = [...threads.values()].slice(0, MAX_THREADS);
-  await progress({ stage: 'Reading each email thread', threads: list.length, errors });
+  // Carrying on after a restart: the counts continue from where they were.
+  const before = carry?.read || 0;
+  await progress({ stage: 'Reading each email thread', threads: before + list.length, errors });
 
   // 2. Read each thread.
-  let read = 0;
-  let found = 0;
+  let read = before;
+  let found = carry?.found || 0;
   for (const t of list) {
     try {
       const msgs = await fetchConversation(t.mailbox, t.conversationId);
@@ -147,25 +152,61 @@ async function runScan({ mailboxes, months }) {
           JSON.stringify(extracted), isComplaint ? 'pending' : 'not_complaint',
         ],
       );
+      // Certain to be a complaint already in the system (same organisation,
+      // same property postcode): its emails are added there straight away,
+      // rather than waiting for someone to press Link.
+      if (isComplaint) {
+        const cand = (await query(
+          `SELECT id FROM complaint_import_candidates WHERE mailbox = $1 AND conversation_id = $2 AND status = 'pending'`,
+          [t.mailbox, t.conversationId],
+        )).rows[0];
+        const pc = postcodeOf(extracted.property);
+        const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+        const orgs = (await query('SELECT id, name FROM organisations')).rows;
+        const hit = findExistingComplaint(complaints, orgs, extracted);
+        if (cand && hit && pc && postcodeOf(hit.property) === pc) {
+          await linkCandidate(cand.id, hit.id, 'Automatic (past-complaints search)', { withGroup: false });
+          found -= 1; // not a new one to look at
+        }
+      }
     } catch (err) {
       errors.push(`thread ${t.conversationId.slice(0, 12)}…: ${err.message}`);
     }
     read += 1;
-    if (read % 5 === 0 || read === list.length) await progress({ read, found, errors: errors.slice(-10) });
+    if (read % 5 === 0 || read === before + list.length) await progress({ read, found, errors: errors.slice(-10) });
   }
   await progress({ status: 'done', stage: 'Finished', read, found, finished_at: new Date().toISOString(), errors: errors.slice(-10) });
 }
 
 // Import one found complaint: create it at its stage with its dates, then
 // bring in the whole thread (read in full, attachments kept).
+// The pending threads about the same issue as this one (itself included).
+async function groupOf(id) {
+  const pending = (await query(`SELECT * FROM complaint_import_candidates WHERE status = 'pending'`)).rows;
+  return groupCandidates(pending).find((g) => g.some((c) => c.id === id)) || [];
+}
+
 export async function importCandidate(id, by) {
   const cand = (await query('SELECT * FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
   if (!cand) throw Object.assign(new Error('Not found'), { status: 404 });
   if (cand.status !== 'pending') throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
-  const x = cand.extracted || {};
+  // Every thread about the same issue becomes this one complaint.
+  const group = await groupOf(id);
+  const others = group.filter((c) => c.id !== id);
+  const x = group.length > 1 ? mergeExtracted(group) : cand.extracted || {};
   const msgs = await fetchConversation(cand.mailbox, cand.conversation_id);
   const firstDay = londonDateOf(new Date(cand.first_at));
-  const org = x.org_name ? await findOrgByName(x.org_name) : null;
+  let org = x.org_name ? await findOrgByName(x.org_name) : null;
+  if (!org && x.org_name) {
+    // Set it up so the complaint is linked; its procedure is added (or
+    // researched) on the Organisations page, and the complaint says so.
+    org = (await query(
+      `INSERT INTO organisations (name, type, research_status, notes)
+       VALUES ($1, $2, 'none', 'Set up when a past complaint was imported. Add its complaints procedure.')
+       RETURNING *`,
+      [x.org_name, ['council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other'].includes(x.org_type) ? x.org_type : 'other'],
+    )).rows[0];
+  }
   const iso = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
   const complaint = await createComplaint(
@@ -205,6 +246,65 @@ export async function importCandidate(id, by) {
     `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3 WHERE id = $1`,
     [id, complaint.id, by],
   );
+  for (const o of others) await linkCandidate(o.id, complaint.id, by, { historical: true, withGroup: false });
   scheduleReview(complaint.id);
   return complaint;
+}
+
+// A found thread that is a complaint already in the system: bring its emails
+// onto that complaint. Each is read as a normal email would be, so an
+// acknowledgement or response in the thread is recorded (with Undo), and
+// future replies in the thread are filed there automatically.
+export async function linkCandidate(id, complaintId, by, { historical = false, withGroup = true } = {}) {
+  const cand = (await query('SELECT * FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
+  if (!cand) throw Object.assign(new Error('Not found'), { status: 404 });
+  if (cand.status !== 'pending') throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
+  const c = (await query('SELECT id FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  if (!c) throw Object.assign(new Error('Complaint not found'), { status: 404 });
+  // Linking one thread of an issue links the others found with it.
+  const others = withGroup ? (await groupOf(id)).filter((o) => o.id !== id) : [];
+  const msgs = await fetchConversation(cand.mailbox, cand.conversation_id);
+  let added = 0;
+  for (const m of msgs) {
+    const eid = await storeEmail(m, { complaintId, method: 'linked', mailbox: cand.mailbox });
+    if (!eid) continue;
+    added += 1;
+    try {
+      // Threads brought in with an import are history (the dates came from
+      // reading them together); linking to a live complaint reads each one.
+      if (historical) await processHistoricalEmail(eid);
+      else await processEmail(eid);
+    } catch (err) {
+      console.error(`[complaints] linked email ${eid} not processed:`, err.message);
+    }
+  }
+  await query(
+    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+     VALUES ($1, $2, 'note', $3, $4)`,
+    [complaintId, londonDateOf(new Date()), `Email thread "${cand.subject || ''}" brought in from ${cand.mailbox} (${added} new email${added === 1 ? '' : 's'}).`, by],
+  );
+  await query(
+    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3 WHERE id = $1`,
+    [id, complaintId, by],
+  );
+  for (const o of others) await linkCandidate(o.id, complaintId, by, { historical, withGroup: false });
+  scheduleReview(complaintId);
+}
+
+// A deploy restarts the server, which stops a search part-way. On start-up a
+// search left "running" is picked up again with the same mailboxes and period;
+// threads already read are skipped, so nothing is read (or paid for) twice.
+export async function resumeInterruptedScan() {
+  const s = await getSetting('past_scan');
+  if (s?.status !== 'running' || running) return false;
+  if (!config.ms.enabled || !config.anthropic.enabled) {
+    await progress({ status: 'failed', error: 'Stopped by a restart, and the mailbox or AI is no longer set up.' });
+    return false;
+  }
+  running = true;
+  await progress({ stage: 'Carrying on after a restart' });
+  runScan({ mailboxes: s.mailboxes || [], months: s.months || 24, carry: { read: s.read || 0, found: s.found || 0 } })
+    .catch(async (err) => progress({ status: 'failed', error: err.message }))
+    .finally(() => { running = false; });
+  return true;
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 import EmailAutomation from '../components/EmailAutomation.jsx';
+import TidyUp from '../components/TidyUp.jsx';
 
 const STAGE_LABEL = {
   stage_1: 'Stage 1',
@@ -460,6 +461,7 @@ export default function Complaints() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
   const [search, setSearch] = useState('');
+  const [tidyKey, setTidyKey] = useState(0);
   const [showNew, setShowNew] = useState(false);
   // An email from the general inbox being turned into a new complaint.
   const [newFromEmail, setNewFromEmail] = useState(null);
@@ -536,7 +538,8 @@ export default function Complaints() {
 
   return (
     <>
-      <EmailAutomation onChanged={() => { load(); loadUnfiled(); }} />
+      <EmailAutomation onChanged={() => { load(); loadUnfiled(); setTidyKey((k) => k + 1); }} />
+      <TidyUp refreshKey={tidyKey} onChanged={load} />
 
       {unfiled.length > 0 && (
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--warn)' }}>

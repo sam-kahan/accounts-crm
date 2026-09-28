@@ -313,6 +313,16 @@ export const api = {
     pastCandidates: () => request('/complaints/past/candidates'),
     importPast: (candId) => request(`/complaints/past/candidates/${candId}/import`, { method: 'POST' }),
     skipPast: (candId) => request(`/complaints/past/candidates/${candId}/skip`, { method: 'POST' }),
+    tidy: () => request('/complaints/tidy'),
+    mergeComplaints: (keepId, mergeId) =>
+      request('/complaints/tidy/complaints', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_id: mergeId }) }),
+    mergeOrganisations: (keepId, mergeId) =>
+      request('/complaints/tidy/organisations', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_id: mergeId }) }),
+    linkPast: (candId, complaintId) =>
+      request(`/complaints/past/candidates/${candId}/link`, {
+        method: 'POST',
+        body: JSON.stringify({ complaint_id: complaintId }),
+      }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
     aiConfig: () => request('/complaints/ai/config'),
