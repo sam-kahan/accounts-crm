@@ -61,6 +61,8 @@ Work out, from the evidence only:
 - summary: 1-2 plain-English sentences on what it says.
 - action_needed: what Greenco should do because of it, in one sentence, or null.
 - evidence: the exact short quote that shows the kind and the date.
+- new_complaint: true only if this is Greenco MAKING a new formal complaint to an organisation
+  (its first complaint email/letter about the matter), not a reply within a complaint already made.
 - confidence: "high" only if the kind, the author and the date are all unambiguous; otherwise
   "medium" or "low".
 If you are also given a list of open complaints, pick the one this email is about ("complaint_id"),
@@ -74,7 +76,7 @@ Return ONLY a JSON object with exactly these keys:
 {"forwarded": boolean, "author": string|null, "from_organisation": boolean, "sent_on": string|null,
  "kind": string, "their_reference": string|null, "promised_by": string|null, "summary": string,
  "action_needed": string|null, "evidence": string|null, "confidence": "high"|"medium"|"low",
- "complaint_id": string|null}`;
+ "complaint_id": string|null, "new_complaint": boolean}`;
 
 function extractJson(text) {
   const start = text.indexOf('{');
@@ -120,6 +122,7 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
     evidence: str(r?.evidence, 600),
     confidence,
     complaint_id: candidateIds.includes(r?.complaint_id) ? r.complaint_id : null,
+    new_complaint: Boolean(r?.new_complaint),
   };
 }
 

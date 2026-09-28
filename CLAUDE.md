@@ -431,6 +431,42 @@ the page says how far each date can be trusted.
   the values it replaced, so **Undo** puts them back exactly. Our own emails
   (CC'd copies) are filed as correspondence. Every step is best-effort: an
   email is never lost to a mailbox or AI failure, it just waits for a person.
+- **Watching a mailbox people already copy** (migration `021`,
+  `services/mailWatch.js`). The mailboxes are set in the app (Complaints page →
+  Watching; `app_settings.watch_mailboxes`, `MS_WATCH_MAILBOXES` as the server
+  default) — typically accounts@, which is already CC'd on complaint emails.
+  Each 5-minute check reads their new mail and keeps only three kinds
+  (`routeWatchedEmail`, pure and tested): a reply in a **thread** already on a
+  complaint (filed with certainty, by Graph `conversationId`), mail to/from an
+  **organisation with an open complaint** (the AI files it, or it is deleted —
+  unrelated mail is never kept), and **our own email mentioning a complaint**
+  (possibly a new one). Everything else is never stored. Emails are
+  de-duplicated on `message_id` across mailboxes (`storeEmail`). When the AI
+  reads one of ours as a NEW complaint with high confidence,
+  `createFromEmail` creates it (organisation matched by `orgMatch.js#orgKey`,
+  or set up and researched, marked not checked). A mailbox is read from when it
+  was first watched (`app_settings.watch_since`); earlier mail is what the
+  past-complaints search is for. Each check writes `app_settings.email_last_check`
+  and the page shows it ("last checked 3 min ago", or why not).
+- **Finding past complaints** (`services/pastComplaints.js`). A person picks
+  mailboxes and how far back; it searches (Graph `$search`) for complaint
+  phrases, groups results into threads, has the AI read each thread
+  (`parseImportedComplaint` with `is_complaint`, `state`, `resolved_on`), and
+  lists the complaints Greenco made in `complaint_import_candidates` for
+  **Import / Skip** — never created unasked, since old ones may be settled.
+  Non-complaints are kept as `not_complaint` so no thread is read twice.
+  Import creates it at its stage with its dates (resolved if it ended), brings
+  in the whole thread via `processHistoricalEmail` (full text + attachments,
+  nothing re-recorded), and runs the review. Background job; progress in
+  `app_settings.past_scan`.
+- **Creating a complaint** has one definition, `services/complaintCreate.js`
+  (the Log form, a complaint started from an email, one created from our own
+  email, and an import). The Log form can fill itself from the complaint
+  email/letter (`POST /complaints/import/parse` takes text, a file or an email).
+- `server/src/scripts/complaints-report.mjs` prints what the section has done
+  (set-up, last check, each complaint's dates, emails, automatic records, AI
+  review, timeline) without changing anything or printing secrets — run it on
+  the server to see the live picture.
 - **The AI review keeps itself up to date** (`services/complaintReview.js`).
   `complaints.ai_review` is the assistant's standing review — where it stands,
   whether they're keeping to their procedure, the next step, a draft email.
@@ -457,6 +493,23 @@ the page says how far each date can be trusted.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-09-28 — the system watches accounts@, and finds past complaints
+- **Nothing to forward**: complaint emails already copy accounts@, so the system
+  watches it — new complaints we send are created automatically, and replies
+  in the thread are filed and recorded. Reasoning in "Complaints" above.
+- **Find past complaints in email**: search chosen mailboxes over a period,
+  review what the AI found, Import or Skip (or Import all).
+- **Status panel** on the Complaints page: whether the mailbox connection is on,
+  when it last checked, what it watches. Dashboard tile for complaints.
+- **Easier throughout**: a complaint can be started from its own email or
+  letter; one "Next step" with a one-click action from the AI review; less-used
+  tools folded away; the review updates on screen.
+- **Fixed from a full review**: Undo can't wipe a later date; nothing uncertain
+  is filed unseen; marking an email is once-only and never a silent overwrite;
+  UK day for arrival dates; email-derived text passed to the AI as untrusted;
+  the review reads the full email; attachment size capped; per-file attachment
+  saving; an organisation's type change reaches its complaints.
 
 ### 2026-09-28 — forward complaint emails and the system does the rest
 - **One address for everything**: forward any email about any complaint to

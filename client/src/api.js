@@ -304,6 +304,15 @@ export const api = {
         body: JSON.stringify({ complaint_id: complaintId }),
       }),
     dismissEmail: (emailId) => request(`/complaints/emails/${emailId}`, { method: 'DELETE' }),
+    // Email automation: status, watched mailboxes, and finding past complaints.
+    automation: () => request('/complaints/automation'),
+    setWatched: (mailboxes) =>
+      request('/complaints/automation', { method: 'PUT', body: JSON.stringify({ mailboxes }) }),
+    startPastScan: (mailboxes, months) =>
+      request('/complaints/past/scan', { method: 'POST', body: JSON.stringify({ mailboxes, months }) }),
+    pastCandidates: () => request('/complaints/past/candidates'),
+    importPast: (candId) => request(`/complaints/past/candidates/${candId}/import`, { method: 'POST' }),
+    skipPast: (candId) => request(`/complaints/past/candidates/${candId}/skip`, { method: 'POST' }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
     aiConfig: () => request('/complaints/ai/config'),

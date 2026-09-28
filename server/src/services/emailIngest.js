@@ -51,7 +51,7 @@ async function buildIndex() {
 // Returns the ids of the newly stored ones; the caller hands those to
 // processEmail(), which reads them in full, files them and records what they
 // mean. The timeline entry is written there, once it is known what arrived.
-export async function ingestEmails(emails) {
+export async function ingestEmails(emails, { mailbox = null } = {}) {
   const index = await buildIndex();
   const inbox = complaintInboxAddress();
   let matched = 0;
@@ -63,22 +63,35 @@ export async function ingestEmails(emails) {
     // rest of the mailbox (spam / other teams' mail) is left untouched.
     if (!m.complaintId && m.method !== 'inbox') continue;
     matched += 1;
-    const ins = await query(
-      `INSERT INTO complaint_emails
-         (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
-          to_addresses, body_preview, received_at, match_method)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (graph_id) DO NOTHING
-       RETURNING id`,
-      [
-        m.complaintId, e.graphId, e.messageId, e.subject, e.senderName,
-        e.senderEmail, e.toAddresses || [], e.bodyPreview, e.receivedAt, m.method,
-      ],
-    );
-    if (ins.rows.length) ids.push(ins.rows[0].id);
+    const id = await storeEmail(e, { complaintId: m.complaintId, method: m.method, mailbox });
+    if (id) ids.push(id);
   }
 
   return { fetched: emails.length, inserted: ids.length, matched, ids };
+}
+
+// Store one email, once: the same message copied to two mailboxes we read
+// (the catch-all and accounts@, say) is the same email, so it is matched on its
+// internet message id as well as Graph's per-mailbox id. Returns the new id,
+// or null if it was already on file.
+export async function storeEmail(e, { complaintId = null, method, mailbox = null }) {
+  if (e.messageId) {
+    const dup = await query('SELECT 1 FROM complaint_emails WHERE message_id = $1 LIMIT 1', [e.messageId]);
+    if (dup.rows.length) return null;
+  }
+  const ins = await query(
+    `INSERT INTO complaint_emails
+       (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
+        to_addresses, body_preview, received_at, match_method, conversation_id, source_mailbox)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (graph_id) DO NOTHING
+     RETURNING id`,
+    [
+      complaintId, e.graphId, e.messageId, e.subject, e.senderName, e.senderEmail,
+      e.toAddresses || [], e.bodyPreview, e.receivedAt, method, e.conversationId || null, mailbox,
+    ],
+  );
+  return ins.rows[0]?.id || null;
 }
 
 export function listComplaintEmails(complaintId) {

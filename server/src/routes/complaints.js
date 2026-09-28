@@ -8,7 +8,11 @@ import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
 import { describeChanges, theOmbudsman } from '../services/complaintRules.js';
 import { decorate, gatherContext } from '../services/complaintContext.js';
+import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
+import { watchMailboxes } from '../services/mailWatch.js';
+import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
+import { startScan, scanStatus, importCandidate } from '../services/pastComplaints.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
@@ -46,13 +50,6 @@ router.param('id', requireUuidParam);
 // Who did it, for the record kept on the timeline.
 const who = (req) => req.user?.name || req.user?.email || null;
 
-// Unambiguous characters only (no 0/O/1/I).
-function makeRefCode() {
-  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let s = '';
-  for (let i = 0; i < 6; i += 1) s += A[Math.floor(Math.random() * A.length)];
-  return `GC-C-${s}`;
-}
 
 const ORG_TYPES = [
   'council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other',
@@ -91,21 +88,45 @@ router.post(
   '/email/fetch',
   sessionOrCronKey,
   asyncHandler(async (_req, res) => {
-    const emails = await fetchMailboxMessages();
-    const r = await ingestEmails(emails);
-    // Read, file and record each new one. One at a time: each may be a round
-    // trip to the mailbox and the AI, and none may be lost to a failure in
-    // another.
+    const started = new Date().toISOString();
+    const errors = [];
+    // 1. The catch-all: complaint addresses and the general inbox.
+    let r = { fetched: 0, inserted: 0, matched: 0, ids: [] };
+    try {
+      r = await ingestEmails(await fetchMailboxMessages(), { mailbox: config.ms.mailbox || null });
+    } catch (err) {
+      errors.push(`catch-all: ${err.message}`);
+    }
+    // 2. The watched mailboxes (accounts@): replies in known threads, mail
+    //    from organisations we have complaints with, and new complaints of ours.
+    let w = { mailboxes: [], fetched: 0, ids: [], errors: [] };
+    try {
+      w = await watchMailboxes();
+      errors.push(...(w.errors || []));
+    } catch (err) {
+      errors.push(`watching: ${err.message}`);
+    }
+    // 3. Read, file and record each new one. One at a time: each may be a
+    //    round trip to the mailbox and the AI, and none may be lost to a
+    //    failure in another.
     let processed = 0;
-    for (const id of r.ids) {
+    let filed = 0;
+    for (const id of [...r.ids, ...w.ids]) {
       try {
-        await processEmail(id);
+        const out = await processEmail(id);
         processed += 1;
+        if (out?.filed) filed += 1;
       } catch (err) {
         console.error(`[complaints] email ${id} not processed:`, err.message);
       }
     }
-    res.json({ fetched: r.fetched, inserted: r.inserted, matched: r.matched, processed, configured: emailConfigured() });
+    const result = {
+      at: started, ok: errors.length === 0, errors: errors.slice(0, 5),
+      fetched: r.fetched + w.fetched, stored: r.ids.length + w.ids.length, processed, filed,
+      configured: emailConfigured(), watching: w.mailboxes,
+    };
+    await setSetting('email_last_check', result).catch(() => {});
+    res.json({ ...result, inserted: r.inserted, matched: r.matched });
   }),
 );
 
@@ -447,6 +468,96 @@ router.get(
   }),
 );
 
+// --- Email automation: status, which mailboxes to watch, past complaints ----
+router.get(
+  '/automation',
+  asyncHandler(async (_req, res) => {
+    const pending = (
+      await query(`SELECT count(*)::int AS n FROM complaint_import_candidates WHERE status = 'pending'`)
+    ).rows[0].n;
+    const unfiled = (await query('SELECT count(*)::int AS n FROM complaint_emails WHERE complaint_id IS NULL')).rows[0].n;
+    res.json({
+      mailbox_connected: emailConfigured(),
+      catch_all: config.ms.mailbox || null,
+      ai: config.anthropic.enabled,
+      inbox: complaintInboxAddress(),
+      watching: await watchedMailboxes(),
+      last_check: await getSetting('email_last_check'),
+      past_scan: await scanStatus(),
+      past_pending: pending,
+      unfiled,
+    });
+  }),
+);
+
+const EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+const watchInput = z.object({
+  mailboxes: z.array(z.string().trim().toLowerCase().regex(EMAIL, 'Not an email address')).max(10),
+});
+router.put(
+  '/automation',
+  asyncHandler(async (req, res) => {
+    const d = parse(watchInput, req.body);
+    await setSetting('watch_mailboxes', { mailboxes: [...new Set(d.mailboxes)] }, who(req));
+    res.json({ watching: await watchedMailboxes() });
+  }),
+);
+
+const scanInput = z.object({
+  mailboxes: z.array(z.string().trim().toLowerCase().regex(EMAIL, 'Not an email address')).min(1).max(10),
+  months: z.number().int().min(1).max(84),
+});
+router.post(
+  '/past/scan',
+  asyncHandler(async (req, res) => {
+    const d = parse(scanInput, req.body);
+    try {
+      await startScan({ ...d, by: who(req) });
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    res.status(202).json(await scanStatus());
+  }),
+);
+
+router.get(
+  '/past/candidates',
+  asyncHandler(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status
+         FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at DESC`,
+    );
+    res.json(rows);
+  }),
+);
+
+router.post(
+  '/past/candidates/:candId/import',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
+    try {
+      const c = await importCandidate(req.params.candId, who(req));
+      res.json({ imported: true, complaint_id: c.id });
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+  }),
+);
+
+router.post(
+  '/past/candidates/:candId/skip',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
+    const { rowCount } = await query(
+      `UPDATE complaint_import_candidates SET status = 'skipped', decided_by = $2
+        WHERE id = $1 AND status = 'pending'`,
+      [req.params.candId, who(req)],
+    );
+    if (!rowCount) throw new HttpError(409, 'This one has already been dealt with.');
+    res.status(204).end();
+  }),
+);
+
 // Emails sent to the general complaints inbox that the AI couldn't place with
 // confidence. Each carries the AI's reading of it, and its best guess if any.
 router.get(
@@ -455,7 +566,7 @@ router.get(
     const { rows } = await query(
       `SELECT id, subject, sender_name, sender_email, received_at, body_preview, analysis,
               analysis_error
-         FROM complaint_emails WHERE complaint_id IS NULL AND match_method = 'inbox'
+         FROM complaint_emails WHERE complaint_id IS NULL
         ORDER BY received_at DESC LIMIT 100`,
     );
     res.json(rows);
@@ -524,73 +635,7 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
-    const stage = d.stage || 'stage_1';
-    // A linked organisation brings its type: the type decides the default for
-    // anything its procedure doesn't state.
-    if (d.organisation_id) {
-      const org = (await query('SELECT type FROM organisations WHERE id = $1', [d.organisation_id]))
-        .rows[0];
-      if (!org) throw new HttpError(400, 'That organisation no longer exists');
-      d.org_type = org.type;
-    }
-    // An imported complaint already past Stage 1 has a clock that started on
-    // its Stage 2 request, not on raised_on. Without that date there is no
-    // honest due date to show, so none is stored (marked as set by hand, so
-    // recalculating leaves it empty) until someone enters the request date.
-    const unknownClock =
-      d.imported && stage !== 'stage_1' && !d.stage_started_on && !d.response_due;
-    const manual = Boolean(d.response_due || unknownClock);
-
-    // Retry on the (astronomically unlikely) ref_code collision rather than
-    // surfacing a 500 from the unique index.
-    let created = null;
-    for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const { rows } = await client.query(
-          `INSERT INTO complaints
-            (organisation_id, org_name, org_type, reference, our_reference, property,
-             subject, category, description, channel, raised_on, stage, state,
-             response_due, response_due_manual, ref_code, acknowledged_on, responded_on,
-             imported, stage_started_on, final_response_on)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20)
-           RETURNING *`,
-          [
-            d.organisation_id || null, d.org_name, d.org_type || 'council',
-            d.reference || null, d.our_reference || null, d.property || null,
-            d.subject, d.category || null, d.description || null, d.channel || 'email',
-            d.raised_on, stage, d.response_due || null, manual, makeRefCode(),
-            d.acknowledged_on || null, d.responded_on || null, d.imported || false,
-            d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
-            d.final_response_on || null,
-          ],
-        );
-        await client.query(
-          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-           VALUES ($1, $2, 'raised', $3, $4)`,
-          [
-            rows[0].id, d.raised_on,
-            d.imported
-              ? `Existing complaint imported (raised via ${d.channel || 'email'})`
-              : `Complaint raised via ${d.channel || 'email'}`,
-            who(req),
-          ],
-        );
-        created = await recomputeDeadlines(rows[0].id, client);
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK');
-        // Unique violation on the ref_code index — try a fresh code.
-        if (err.code === '23505' && /ref_code/.test(`${err.constraint || ''}${err.detail || ''}`)) {
-          continue;
-        }
-        throw err;
-      } finally {
-        client.release();
-      }
-    }
-    if (!created) throw new HttpError(500, 'Could not allocate a complaint reference; please retry.');
+    const created = await createComplaint(d, { by: who(req) });
     scheduleReview(created.id);
     res.status(201).json(await decorate(created));
   }),

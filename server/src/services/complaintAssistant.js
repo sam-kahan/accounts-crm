@@ -249,6 +249,12 @@ any reference numbers, whether it's been acknowledged and/or responded to, and t
 it's at now. Dates must be ISO YYYY-MM-DD; if a date is clearly implied but not exact, give your best
 estimate and note it. If something isn't determinable, use null. Do NOT invent facts.
 
+First decide "is_complaint": true only if the material shows Greenco (or a client, through Greenco)
+making a complaint to an organisation. A complaint made TO Greenco, or ordinary correspondence, is
+false — then the other fields may be null.
+"state": "open" unless the material shows the complaint was resolved or closed ("resolved"), with
+"resolved_on" the date that happened. "summary": 1-2 sentences on what the complaint is about and
+where it ended up.
 org_type must be one of: council, housing_association, water, energy, managing_agent, supplier, other.
 (managing_agent = a property managing agent, freeholder or ground-rent landlord.)
 stage must be one of: stage_1, stage_2, ombudsman.
@@ -259,6 +265,10 @@ the complaint was first made to the organisation (the date of the complaint emai
 
 Return ONLY a single JSON object with exactly these keys:
 {
+  "is_complaint": boolean,
+  "state": "open"|"resolved",
+  "resolved_on": string|null,
+  "summary": string|null,
   "org_name": string|null,
   "org_type": "council"|"housing_association"|"water"|"energy"|"managing_agent"|"supplier"|"other",
   "subject": string,
@@ -284,6 +294,7 @@ export async function parseImportedComplaint({ text, hint, blocks = [] }) {
       : 'The material about the complaint is the attached document.');
   const out = await callClaude({ system: IMPORT_SYSTEM, user, blocks, maxTokens: 2000 });
   const result = extractJson(out);
+  if (result && result.is_complaint === false) return result;
   if (!result || !result.subject) {
     throw new HttpError(502, 'Could not extract a complaint from that. Add more detail and retry.');
   }

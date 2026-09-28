@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
+import EmailAutomation from '../components/EmailAutomation.jsx';
 
 const STAGE_LABEL = {
   stage_1: 'Stage 1',
@@ -463,7 +464,6 @@ export default function Complaints() {
   const [newFromEmail, setNewFromEmail] = useState(null);
   const [showOverdue, setShowOverdue] = useState(false);
   const [err, setErr] = useState(null);
-  const [inbox, setInbox] = useState(null);
   const [unfiled, setUnfiled] = useState([]);
   const navigate = useNavigate();
 
@@ -501,7 +501,6 @@ export default function Complaints() {
     api.organisations.list().then(setOrgs).catch(() => setOrgs([]));
     api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled)).catch(() => {});
     api.complaints.aiConfig().then((c) => setAiEnabled(c.enabled)).catch(() => {});
-    api.complaints.emailConfig().then((r) => setInbox(r.inbox)).catch(() => {});
     loadUnfiled();
   }, []);
 
@@ -529,18 +528,7 @@ export default function Complaints() {
 
   return (
     <>
-      {inbox && (
-        <div className="inline-note" style={{ marginBottom: 16 }}>
-          <strong>Not sure which complaint an email is about?</strong> Forward it to{' '}
-          <code style={{ wordBreak: 'break-all' }}>{inbox}</code>{' '}
-          <button className="btn-ghost btn-sm" onClick={() => navigator.clipboard?.writeText(inbox).catch(() => {})}>Copy</button>
-          <div style={{ fontSize: 12, marginTop: 4 }}>
-            The system works out which complaint it belongs to and files it. When you know the
-            complaint, use its own address instead (shown on the complaint), which is always
-            filed in the right place.
-          </div>
-        </div>
-      )}
+      <EmailAutomation onChanged={() => { load(); loadUnfiled(); }} />
 
       {unfiled.length > 0 && (
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--warn)' }}>

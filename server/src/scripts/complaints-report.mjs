@@ -38,7 +38,14 @@ p('Lookback days:', config.ms.lookbackDays);
 p('AI (ANTHROPIC_API_KEY):', config.anthropic.enabled ? `ON, model ${config.anthropic.model}` : 'OFF');
 p('Sending email (SMTP):', set(process.env.SMTP_USER && process.env.SMTP_PASS));
 p('Complaint addresses:', `${config.complaintEmail.prefix}<code>@${config.complaintEmail.domain}`, '· general inbox:', complaintInboxAddress());
-p('Watched mailboxes:', process.env.MS_WATCH_MAILBOXES || '(none)');
+const { watchedMailboxes, getSetting } = await import('../services/settings.js');
+p('Watched mailboxes:', (await watchedMailboxes()).join(', ') || '(none)');
+const lastCheck = await getSetting('email_last_check');
+p('Last automatic check:', lastCheck ? `${lastCheck.at} · ${lastCheck.ok ? 'OK' : 'PROBLEM: ' + (lastCheck.errors || []).join(' | ')} · fetched ${lastCheck.fetched}, stored ${lastCheck.stored}, filed ${lastCheck.filed}` : 'never');
+const scan = await getSetting('past_scan');
+p('Past-complaints search:', scan ? `${scan.status} · read ${scan.read ?? 0}/${scan.threads ?? 0} threads · found ${scan.found ?? 0}${scan.error ? ' · ' + scan.error : ''}` : 'never run');
+const cands = (await query(`SELECT status, count(*)::int AS n FROM complaint_import_candidates GROUP BY status`)).rows;
+p('Past complaints found:', cands.map((r) => `${r.status} ${r.n}`).join(', ') || 'none');
 p('Cron key (REMINDER_CRON_KEY):', set(process.env.REMINDER_CRON_KEY));
 const cronFile = '/etc/cron.d/accounts-crm';
 if (existsSync(cronFile)) {

@@ -52,7 +52,77 @@ function normalise(m) {
       .filter(Boolean),
     bodyPreview: m.bodyPreview ?? null,
     receivedAt: m.receivedDateTime ? new Date(m.receivedDateTime) : new Date(),
+    sentAt: m.sentDateTime ? new Date(m.sentDateTime) : null,
+    conversationId: m.conversationId ?? null,
+    isDraft: Boolean(m.isDraft),
   };
+}
+
+const SELECT =
+  'id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,' +
+  'receivedDateTime,sentDateTime,conversationId,isDraft';
+
+async function graphGet(url, token, headers = {}) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, ...headers } });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    const err = new Error(`Microsoft Graph refused (${res.status})${res.status === 403 ? ': the app isn’t allowed to read this mailbox' : ''}`);
+    err.status = res.status;
+    err.detail = detail.slice(0, 300);
+    throw err;
+  }
+  return res.json();
+}
+
+// Messages in one mailbox received since a date (every folder, sent items
+// included, drafts left out), paging across the whole window.
+export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
+  if (!config.ms.enabled) return [];
+  const token = await getAppToken();
+  let url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
+    `?$top=50&$orderby=receivedDateTime desc` +
+    `&$filter=receivedDateTime ge ${new Date(since).toISOString()}` +
+    `&$select=${SELECT}`;
+  const out = [];
+  for (let page = 0; page < maxPages && url; page += 1) {
+    const json = await graphGet(url, token);
+    for (const m of json.value ?? []) if (!m.isDraft) out.push(normalise(m));
+    url = json['@odata.nextLink'] || null;
+  }
+  return out;
+}
+
+// Search a mailbox (Outlook's own search) for a phrase. Used by the
+// past-complaints search; results are filtered by date by the caller.
+export async function searchMailbox(mailbox, phrase, maxResults = 500) {
+  if (!config.ms.enabled) return [];
+  const token = await getAppToken();
+  let url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
+    `?$search=${encodeURIComponent(`"${phrase}"`)}&$top=50&$select=${SELECT}`;
+  const out = [];
+  while (url && out.length < maxResults) {
+    const json = await graphGet(url, token);
+    for (const m of json.value ?? []) if (!m.isDraft) out.push(normalise(m));
+    url = json['@odata.nextLink'] || null;
+  }
+  return out;
+}
+
+// Every message in one email thread in a mailbox, oldest first, with its text.
+export async function fetchConversation(mailbox, conversationId) {
+  if (!config.ms.enabled) return [];
+  const token = await getAppToken();
+  const url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
+    `?$filter=${encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)}` +
+    `&$top=50&$select=${SELECT},body`;
+  const json = await graphGet(url, token, { Prefer: 'outlook.body-content-type="text"' });
+  return (json.value ?? [])
+    .filter((m) => !m.isDraft)
+    .map((m) => ({ ...normalise(m), bodyText: (m.body?.content || '').slice(0, 100000) }))
+    .sort((a, b) => a.receivedAt - b.receivedAt);
 }
 
 export async function fetchMailboxMessages() {
@@ -66,8 +136,7 @@ export async function fetchMailboxMessages() {
   const since = new Date(
     Date.now() - (config.ms.lookbackDays || 14) * 86400000,
   ).toISOString();
-  const select =
-    'id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime';
+  const select = SELECT;
   let url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages` +
     `?$top=50&$orderby=receivedDateTime desc` +
@@ -93,12 +162,12 @@ export async function fetchMailboxMessages() {
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
 
-export async function fetchMessageDetail(graphId, fallback = {}) {
+export async function fetchMessageDetail(graphId, fallback = {}, mailbox = config.ms.mailbox) {
   if (!config.ms.enabled || !graphId || String(graphId).startsWith('dev-') || String(graphId).startsWith('out-')) {
     return { bodyText: fallback.bodyPreview || null, attachments: [], skipped: [] };
   }
   const token = await getAppToken();
-  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages/${encodeURIComponent(graphId)}`;
+  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox || config.ms.mailbox)}/messages/${encodeURIComponent(graphId)}`;
 
   const res = await fetch(`${base}?$select=body`, {
     headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
