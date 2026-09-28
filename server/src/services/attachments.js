@@ -75,7 +75,7 @@ const isImage = (a) => IMAGE_TYPES.includes(a.mimetype);
 
 export function listAttachments(complaintId) {
   return query(
-    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at,
+    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, source_email_id,
             (extracted_text IS NOT NULL) AS has_text
        FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at DESC`,
     [complaintId],
@@ -147,6 +147,28 @@ export async function saveAttachment(complaintId, file) {
      RETURNING id, complaint_id, filename, mimetype, size_bytes, uploaded_at,
                (extracted_text IS NOT NULL) AS has_text`,
     [complaintId, file.originalname, file.mimetype, file.size, file.path, text],
+  );
+  return rows[0];
+}
+
+// Save a file that arrived attached to an email (it never went through
+// multer), noting which email it came from. Same folder, naming and text
+// extraction as an upload.
+export async function saveAttachmentBuffer(complaintId, { filename, mimetype, buffer }, sourceEmailId) {
+  const dir = path.join(UPLOAD_ROOT, complaintId);
+  const rel = path.relative(UPLOAD_ROOT, dir);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid upload path');
+  await fs.mkdir(dir, { recursive: true });
+  const safe = String(filename || 'attachment').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
+  const filePath = path.join(dir, `${globalThis.crypto.randomUUID().slice(0, 8)}__${safe}`);
+  await fs.writeFile(filePath, buffer);
+  const text = await extractText(filePath, mimetype);
+  const { rows } = await query(
+    `INSERT INTO complaint_attachments
+       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, source_email_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING id, filename`,
+    [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null],
   );
   return rows[0];
 }

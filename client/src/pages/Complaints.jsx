@@ -410,7 +410,31 @@ export default function Complaints() {
   const [importInitial, setImportInitial] = useState(null);
   const [showOverdue, setShowOverdue] = useState(false);
   const [err, setErr] = useState(null);
+  const [inbox, setInbox] = useState(null);
+  const [unfiled, setUnfiled] = useState([]);
   const navigate = useNavigate();
+
+  const loadUnfiled = () =>
+    api.complaints.unfiledEmails().then(setUnfiled).catch(() => setUnfiled([]));
+
+  async function fileEmail(emailId, complaintId) {
+    if (!complaintId) return;
+    try {
+      await api.complaints.fileEmail(emailId, complaintId);
+      await Promise.all([loadUnfiled(), load()]);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+  async function dismissEmail(emailId) {
+    if (!confirm('Remove this email? Only do this if it isn’t about any complaint.')) return;
+    try {
+      await api.complaints.dismissEmail(emailId);
+      await loadUnfiled();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
 
   const load = () => {
     setErr(null);
@@ -424,6 +448,8 @@ export default function Complaints() {
     api.organisations.list().then(setOrgs).catch(() => setOrgs([]));
     api.organisations.researchConfig().then((c) => setResearchEnabled(c.enabled)).catch(() => {});
     api.complaints.aiConfig().then((c) => setAiEnabled(c.enabled)).catch(() => {});
+    api.complaints.emailConfig().then((r) => setInbox(r.inbox)).catch(() => {});
+    loadUnfiled();
   }, []);
 
   // Map the AI's parsed import into the review form's initial values.
@@ -471,6 +497,55 @@ export default function Complaints() {
 
   return (
     <>
+      {inbox && (
+        <div className="inline-note" style={{ marginBottom: 16 }}>
+          <strong>Forward any email about a complaint to{' '}
+            <code style={{ wordBreak: 'break-all' }}>{inbox}</code></strong>{' '}
+          <button className="btn-ghost btn-sm" onClick={() => navigator.clipboard?.writeText(inbox).catch(() => {})}>Copy</button>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            The system reads it, works out which complaint it belongs to, saves its attachments,
+            records their acknowledgement or response on the date they sent it, and updates the
+            AI review. Anything it isn’t sure of waits for you here or on the complaint.
+          </div>
+        </div>
+      )}
+
+      {unfiled.length > 0 && (
+        <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--warn)' }}>
+          <div className="card-head">
+            <h2>Emails to file <span className="badge amber">{unfiled.length}</span></h2>
+          </div>
+          <div className="card-body">
+            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+              The system couldn’t tell for certain which complaint these belong to. Pick one and
+              it’s filed and recorded as normal.
+            </p>
+            {unfiled.map((em) => (
+              <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
+                <strong>{em.subject || '(no subject)'}</strong>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  {em.sender_name || em.sender_email} · {formatDate((em.received_at || '').slice(0, 10))}
+                </div>
+                {em.analysis?.summary && <div style={{ fontSize: 13, marginTop: 4 }}>{em.analysis.summary}</div>}
+                <div className="btn-row" style={{ marginTop: 8 }}>
+                  <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}>
+                    <option value="">Choose the complaint…</option>
+                    {open.map((c) => (
+                      <option key={c.id} value={c.id}>{c.org_name}: {c.subject}</option>
+                    ))}
+                  </select>
+                  <button className="btn-primary btn-sm"
+                    onClick={() => fileEmail(em.id, document.getElementById(`file-${em.id}`).value)}>
+                    File it
+                  </button>
+                  <button className="btn-ghost btn-sm" onClick={() => dismissEmail(em.id)}>Not about a complaint</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="stat-row">
         <div className="stat accent">
           <div className="label">Open complaints</div>
@@ -544,6 +619,11 @@ export default function Complaints() {
                 >
                   <td>
                     <strong>{c.subject}</strong>
+                    {c.state === 'open' && c.ai_review?.recommended_action && (
+                      <div style={{ fontSize: 12, marginTop: 2 }}>
+                        <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.recommended_action}
+                      </div>
+                    )}
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}
                   </td>
                   <td className="muted">{c.org_name}</td>

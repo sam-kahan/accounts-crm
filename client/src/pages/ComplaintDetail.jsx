@@ -23,6 +23,15 @@ const STEP_STATE = {
   pending: ['Not dated yet', 'grey'],
   past: ['—', 'grey'],
 };
+const EMAIL_KIND = {
+  acknowledgement: 'Acknowledgement',
+  stage1_response: 'Stage 1 response',
+  final_response: 'Final response',
+  holding_or_extension: 'Holding letter / extension',
+  request_for_information: 'Request for information',
+  our_email: 'Our email',
+  other: 'Email',
+};
 const REVIEWED_AS = {
   acknowledgement: 'Their acknowledgement',
   response: 'Their response',
@@ -58,6 +67,10 @@ export default function ComplaintDetail() {
   // A dated action (acknowledged / response / escalate / resolved) being recorded.
   const [action, setAction] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [inbox, setInbox] = useState(null);
+  const [reviewing, setReviewing] = useState(false);
+  // The date to record for each new email, starting from what the AI read.
+  const [emailDates, setEmailDates] = useState({});
 
   const load = () => {
     setLoadError(null);
@@ -69,6 +82,7 @@ export default function ComplaintDetail() {
   useEffect(() => {
     load();
     api.complaints.aiConfig().then((r) => setAiEnabled(r.enabled)).catch(() => {});
+    api.complaints.emailConfig().then((r) => setInbox(r.inbox)).catch(() => {});
   }, [id]);
 
   async function runAssistant() {
@@ -202,13 +216,34 @@ export default function ComplaintDetail() {
     }
   }
 
-  async function reviewEmail(emailId, as) {
+  async function reviewEmail(emailId, as, date) {
     setMsg(null);
     try {
-      await api.complaints.reviewEmail(id, emailId, as);
+      await api.complaints.reviewEmail(id, emailId, as, date);
       await load();
     } catch (e) {
       setMsg(e.message);
+    }
+  }
+  async function undoEmail(em) {
+    if (!confirm('Undo what was recorded automatically from this email? It goes back to “New” for you to decide.')) return;
+    setMsg(null);
+    try {
+      await api.complaints.undoEmail(id, em.id);
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    }
+  }
+  async function refreshAiReview() {
+    setReviewing(true);
+    setMsg(null);
+    try {
+      setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setReviewing(false);
     }
   }
 
@@ -358,6 +393,77 @@ export default function ComplaintDetail() {
         </div>
       </div>
 
+      {/* The assistant's standing review */}
+      {aiEnabled && (
+        <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>
+          <div className="card-head">
+            <h2>✨ AI review</h2>
+            <div className="btn-row">
+              {c.ai_reviewed_at && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Updated {new Date(c.ai_reviewed_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
+              )}
+              <button className="btn btn-sm" onClick={refreshAiReview} disabled={reviewing}>
+                {reviewing ? 'Reviewing…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          <div className="card-body">
+            {!c.ai_review ? (
+              <div className="muted" style={{ fontSize: 13 }}>
+                {c.ai_review_error
+                  ? <>The last review failed ({c.ai_review_error}). Press Refresh to try again.</>
+                  : <>The assistant reviews each complaint automatically after every change. Press Refresh to review it now.</>}
+              </div>
+            ) : (
+              <>
+                <p style={{ marginTop: 0 }}>{c.ai_review.summary}</p>
+                {c.ai_review.recommended_action && (
+                  <div className="inline-note warn" style={{ marginBottom: 10 }}>
+                    <strong>Recommended next step:</strong> {c.ai_review.recommended_action}
+                  </div>
+                )}
+                {c.ai_review.steps?.length > 0 && (
+                  <ol style={{ margin: '0 0 10px', paddingLeft: 20 }}>
+                    {c.ai_review.steps.map((st, i) => <li key={i} style={{ marginBottom: 4 }}>{st}</li>)}
+                  </ol>
+                )}
+                {c.ai_review.caution && (
+                  <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+                    <strong>Check:</strong> {c.ai_review.caution}
+                  </div>
+                )}
+                {c.ai_review.email?.body && (
+                  <details>
+                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                      Draft email ready: {c.ai_review.email.subject}
+                    </summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '8px 0' }}>
+                      {c.ai_review.email.body}
+                    </pre>
+                    <div className="btn-row">
+                      <button className="btn btn-sm"
+                        onClick={() => copyText(`Subject: ${c.ai_review.email.subject}\n\n${c.ai_review.email.body}`)}>
+                        Copy
+                      </button>
+                      <button className="btn-primary btn-sm" onClick={() => openSend(c.ai_review.email)}>
+                        Review &amp; send…
+                      </button>
+                    </div>
+                  </details>
+                )}
+                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                  Written by AI from this complaint’s procedure, emails and documents. Check any
+                  figure or date against the documents before relying on it. Nothing is sent
+                  unless you press Send.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Emails that arrived and haven't been looked at */}
       {newEmails.length > 0 && (
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--warn)' }}>
@@ -366,40 +472,55 @@ export default function ComplaintDetail() {
           </div>
           <div className="card-body">
             <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-              Say what each one is. Marking it as their acknowledgement or response records the
-              date it arrived and updates the deadlines. Only the first lines of an email are
-              captured here, so save any letter or attachment it carried under Documents.
+              These need a quick check. Confirm what each one is and the date on their email. The
+              deadlines update from that date.
             </p>
-            {newEmails.map((em) => (
-              <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
-                <div className="flex-between" style={{ gap: 12, flexWrap: 'wrap' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <strong>{em.subject || '(no subject)'}</strong>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {em.sender_name || em.sender_email} · {formatDate((em.received_at || '').slice(0, 10))}
+            {newEmails.map((em) => {
+              const a = em.analysis;
+              const arrived = (em.received_at || '').slice(0, 10);
+              const date = emailDates[em.id] ?? (a?.sent_on || arrived);
+              return (
+                <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
+                  <strong>{em.subject || '(no subject)'}</strong>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {em.sender_name || em.sender_email} · arrived {formatDate(arrived)}
+                  </div>
+                  {a ? (
+                    <div className="inline-note" style={{ marginTop: 6 }}>
+                      <strong>AI reads this as:</strong> {EMAIL_KIND[a.kind] || 'Email'}
+                      {a.author && <> from {a.author}</>}
+                      {a.sent_on && <>, sent {formatDate(a.sent_on)}</>}
+                      {a.forwarded && ' (forwarded)'}. {a.summary}
+                      {a.confidence !== 'high' && <div style={{ fontSize: 12, marginTop: 2 }}>Not certain ({a.confidence} confidence), so please check.</div>}
                     </div>
-                    {em.body_preview && (
-                      <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{em.body_preview}</div>
+                  ) : (
+                    em.body_preview && <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{em.body_preview}</div>
+                  )}
+                  <div className="btn-row" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+                    <label className="field" style={{ margin: 0, maxWidth: 180 }}>
+                      <span className="lbl" style={{ fontSize: 12 }}>Date on their email</span>
+                      <input type="date" value={date} max={today}
+                        onChange={(e) => setEmailDates((d) => ({ ...d, [em.id]: e.target.value }))} />
+                    </label>
+                    {c.stage === 'stage_1' && !c.acknowledged_on && (
+                      <button className={`btn btn-sm ${a?.kind === 'acknowledgement' ? 'btn-primary' : ''}`}
+                        onClick={() => reviewEmail(em.id, 'acknowledgement', date)}>
+                        Their acknowledgement
+                      </button>
                     )}
+                    {atStage && (
+                      <button className={`btn btn-sm ${a?.kind === 'stage1_response' || a?.kind === 'final_response' ? 'btn-primary' : ''}`}
+                        onClick={() => reviewEmail(em.id, 'response', date)}>
+                        Their {c.stage === 'stage_2' ? 'final' : 'Stage 1'} response
+                      </button>
+                    )}
+                    <button className="btn-ghost btn-sm" onClick={() => reviewEmail(em.id, 'correspondence', date)}>
+                      Just correspondence
+                    </button>
                   </div>
                 </div>
-                <div className="btn-row" style={{ marginTop: 8 }}>
-                  {c.stage === 'stage_1' && !c.acknowledged_on && (
-                    <button className="btn btn-sm" onClick={() => reviewEmail(em.id, 'acknowledgement')}>
-                      This is their acknowledgement
-                    </button>
-                  )}
-                  {atStage && (
-                    <button className="btn btn-sm" onClick={() => reviewEmail(em.id, 'response')}>
-                      This is their {c.stage === 'stage_2' ? 'final' : 'Stage 1'} response
-                    </button>
-                  )}
-                  <button className="btn-ghost btn-sm" onClick={() => reviewEmail(em.id, 'correspondence')}>
-                    Just correspondence
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -436,6 +557,7 @@ export default function ComplaintDetail() {
                     </a>
                     <div className="muted" style={{ fontSize: 12 }}>
                       {(a.size_bytes / 1024).toFixed(0)} KB
+                      {a.source_email_id ? ' · attached to an email' : ''}
                       {a.ai_readable ? ' · read by the AI assistant' : ' · not readable by the AI'}
                     </div>
                   </td>
@@ -478,18 +600,15 @@ export default function ComplaintDetail() {
         </div>
         <div className="card-body" style={{ paddingBottom: 0 }}>
           <div className="inline-note" style={{ marginBottom: 12 }}>
-            <strong>To have their replies logged here automatically,</strong> copy this address
-            into every email you send them:{' '}
-            <code style={{ fontWeight: 600, wordBreak: 'break-all' }}>
-              {c.email_address || '— (set COMPLAINT_EMAIL_DOMAIN)'}
-            </code>{' '}
-            {c.email_address && (
-              <button className="btn-ghost btn-sm" onClick={() => copyText(c.email_address)}>Copy</button>
-            )}
+            <strong>Just forward anything about this complaint</strong> to{' '}
+            <code style={{ fontWeight: 600, wordBreak: 'break-all' }}>{inbox || c.email_address}</code>
+            {inbox && <button className="btn-ghost btn-sm" onClick={() => copyText(inbox)}>Copy</button>}
             <div style={{ fontSize: 12, marginTop: 4 }}>
-              Replies are picked up when they reply to all, or quote {c.ref_code}. An email that
-              didn’t include it won’t appear, so upload it under Documents instead. The inbox is
-              checked every 5 minutes.
+              It’s read in full, filed here with its attachments, and their acknowledgement or
+              response is recorded on the date they sent it. Tip: copy{' '}
+              <code>{c.email_address}</code>{' '}
+              <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(c.email_address)}>Copy</button>{' '}
+              into emails you send them, and replies to all arrive here without forwarding.
             </div>
           </div>
         </div>
@@ -505,11 +624,29 @@ export default function ComplaintDetail() {
                     <strong>{em.subject || '(no subject)'}</strong>
                     <div className="muted" style={{ fontSize: 12 }}>
                       {em.sender_name || em.sender_email}
+                      {em.analysis?.forwarded && em.analysis?.author && <> · forwarded, originally from {em.analysis.author}</>}
+                      {em.analysis?.sent_on && <> · sent {formatDate(em.analysis.sent_on)}</>}
                     </div>
-                    {em.body_preview && (
-                      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                        {em.body_preview}
+                    {em.analysis?.summary ? (
+                      <div style={{ fontSize: 13, marginTop: 2 }}>{em.analysis.summary}</div>
+                    ) : em.body_preview && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{em.body_preview}</div>
+                    )}
+                    {em.applied && (
+                      <div className="inline-note" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
+                        Recorded automatically
+                        {em.applied.after?.acknowledged_on && <>: acknowledged {formatDate(em.applied.after.acknowledged_on)}</>}
+                        {em.applied.after?.responded_on && <>: responded {formatDate(em.applied.after.responded_on)}</>}
+                        {em.applied.after?.reference && <> · their reference {em.applied.after.reference}</>}
+                        .{' '}
+                        <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => undoEmail(em)}>Undo</button>
                       </div>
+                    )}
+                    {em.body_text && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>Show the full email</summary>
+                        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, margin: '6px 0' }}>{em.body_text}</pre>
+                      </details>
                     )}
                   </td>
                   <td style={{ textAlign: 'right' }}>
@@ -517,7 +654,7 @@ export default function ComplaintDetail() {
                       <span className="badge navy">Sent</span>
                     ) : em.reviewed_at ? (
                       <span className="badge grey" title={em.reviewed_by ? `Marked by ${em.reviewed_by}` : ''}>
-                        {REVIEWED_AS[em.reviewed_as] || 'Reviewed'}
+                        {em.analysis?.kind === 'our_email' ? 'Our email' : REVIEWED_AS[em.reviewed_as] || 'Reviewed'}
                       </span>
                     ) : (
                       <span className="badge amber">New</span>
@@ -591,7 +728,7 @@ export default function ComplaintDetail() {
       {/* AI assistant */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-head">
-          <h2>✨ AI assistant</h2>
+          <h2>Ask the assistant</h2>
           {aiEnabled && (
             <button className="btn-navy btn-sm" onClick={runAssistant} disabled={aiBusy}>
               {aiBusy ? 'Working…' : ai ? 'Regenerate' : 'Analyse & draft next email'}

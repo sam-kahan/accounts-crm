@@ -184,6 +184,17 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
+// The one address anything about ANY complaint can be forwarded to. The AI
+// works out which complaint it belongs to. Like the per-complaint addresses it
+// isn't a real mailbox; it lands in the catch-all. "inbox" is five letters, so
+// it can never collide with a six-character complaint code.
+export function complaintInboxAddress() {
+  return (
+    process.env.COMPLAINT_INBOX_ADDRESS ||
+    `${config.complaintEmail.prefix}inbox@${config.complaintEmail.domain}`
+  ).toLowerCase();
+}
+
 // Build a complaint's unique CC address from its ref code.
 export function complaintEmailAddress(refCode) {
   if (!refCode) return null;

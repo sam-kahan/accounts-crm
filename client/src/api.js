@@ -288,11 +288,22 @@ export const api = {
     escalate: (id, date) =>
       request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
     // Say what an email that arrived was: acknowledgement | response | correspondence.
-    reviewEmail: (id, emailId, as) =>
+    reviewEmail: (id, emailId, as, date) =>
       request(`/complaints/${id}/emails/${emailId}/review`, {
         method: 'POST',
-        body: JSON.stringify({ as }),
+        body: JSON.stringify({ as, date: date || null }),
       }),
+    undoEmail: (id, emailId) =>
+      request(`/complaints/${id}/emails/${emailId}/undo`, { method: 'POST' }),
+    refreshReview: (id) => request(`/complaints/${id}/review`, { method: 'POST' }),
+    // The general inbox: emails the AI couldn't place with confidence.
+    unfiledEmails: () => request('/complaints/emails/unfiled'),
+    fileEmail: (emailId, complaintId) =>
+      request(`/complaints/emails/${emailId}/file`, {
+        method: 'POST',
+        body: JSON.stringify({ complaint_id: complaintId }),
+      }),
+    dismissEmail: (emailId) => request(`/complaints/emails/${emailId}`, { method: 'DELETE' }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
     aiConfig: () => request('/complaints/ai/config'),

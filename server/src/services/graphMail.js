@@ -85,6 +85,47 @@ export async function fetchMailboxMessages() {
   return out;
 }
 
+// The whole of one email: its text and its file attachments. Fetched only for
+// the emails that belong to a complaint (never the rest of the catch-all), and
+// asked for as plain text so no HTML reaches the database or the model.
+// Inline images (logos and signatures) and attached emails are skipped;
+// anything over the size cap is named but not downloaded.
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
+
+export async function fetchMessageDetail(graphId, fallback = {}) {
+  if (!config.ms.enabled || !graphId || String(graphId).startsWith('dev-') || String(graphId).startsWith('out-')) {
+    return { bodyText: fallback.bodyPreview || null, attachments: [], skipped: [] };
+  }
+  const token = await getAppToken();
+  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages/${encodeURIComponent(graphId)}`;
+
+  const res = await fetch(`${base}?$select=body`, {
+    headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
+  });
+  if (!res.ok) throw new Error(`Graph message request failed: ${res.status}`);
+  const bodyText = ((await res.json()).body?.content || '').slice(0, 100000);
+
+  const attachments = [];
+  const skipped = [];
+  const ares = await fetch(`${base}/attachments`, { headers: { Authorization: `Bearer ${token}` } });
+  if (ares.ok) {
+    for (const a of (await ares.json()).value ?? []) {
+      if (a['@odata.type'] !== '#microsoft.graph.fileAttachment' || a.isInline) continue;
+      if (attachments.length >= MAX_ATTACHMENTS || (a.size || 0) > MAX_ATTACHMENT_BYTES || !a.contentBytes) {
+        skipped.push(a.name || 'attachment');
+        continue;
+      }
+      attachments.push({
+        filename: a.name || 'attachment',
+        mimetype: a.contentType || 'application/octet-stream',
+        buffer: Buffer.from(a.contentBytes, 'base64'),
+      });
+    }
+  }
+  return { bodyText, attachments, skipped };
+}
+
 // Synthetic dev inbox (no MS credentials). One references a complaint ref code
 // so ingestion can be verified end-to-end; one stays unmatched.
 function devEmails() {

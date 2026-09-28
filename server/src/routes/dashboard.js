@@ -12,6 +12,7 @@ import { carriedLineSql } from '../services/commission.js';
 import { effectiveRule, deriveStatus, computeAckDue } from '../services/complaintRules.js';
 import { syncAllCompanies } from '../services/companySync.js';
 import { syncInvoicing } from '../services/invoicingSync.js';
+import { refreshStaleReviews } from '../services/complaintReview.js';
 import { withNumbers } from '../lib/money.js';
 import { todayISO, addDays } from '../lib/dates.js';
 
@@ -239,6 +240,15 @@ router.post(
       console.error('[reminders] invoicing sync failed:', err.message);
     }
 
+    // Complaints whose position the calendar has moved on overnight get a
+    // fresh AI review, so the next step is waiting when someone opens them.
+    let reviews = null;
+    try {
+      reviews = await refreshStaleReviews();
+    } catch (err) {
+      console.error('[reminders] complaint reviews failed:', err.message);
+    }
+
     const [dueItems, complaintItems] = await Promise.all([
       collectDueItems(days),
       collectComplaintDueItems(days),
@@ -248,7 +258,7 @@ router.post(
     );
     const digest = buildDigest(items);
     const result = await sendReminderEmail(digest);
-    res.json({ items: items.length, sync, invoicing, ...result });
+    res.json({ items: items.length, sync, invoicing, reviews, ...result });
   }),
 );
 

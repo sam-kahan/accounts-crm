@@ -1,6 +1,6 @@
 import { query, pool } from '../db/pool.js';
-import { complaintEmailAddress } from '../config.js';
-import { londonDateOf, todayISO } from '../lib/dates.js';
+import { complaintEmailAddress, complaintInboxAddress } from '../config.js';
+import { todayISO } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // Email-to-complaint ingestion. The mailbox we poll is a shared, domain-wide
@@ -14,7 +14,7 @@ import { londonDateOf, todayISO } from '../lib/dates.js';
 // matchEmailToComplaint stays a pure function so it can be unit-tested.
 // ---------------------------------------------------------------------------
 
-export function matchEmailToComplaint(email, index) {
+export function matchEmailToComplaint(email, index, inboxAddress = null) {
   const hay = `${email.subject ?? ''} ${email.bodyPreview ?? ''}`.toLowerCase();
   const addrs = [email.senderEmail, ...(email.toAddresses || [])]
     .filter(Boolean)
@@ -34,6 +34,11 @@ export function matchEmailToComplaint(email, index) {
       return { complaintId: c.id, method: 'ref_code' };
     }
   }
+  // 3. Sent to the general complaints inbox: deliberately ours, so it is kept,
+  //    and the AI works out which complaint it belongs to.
+  if (inboxAddress && addrs.includes(inboxAddress.toLowerCase())) {
+    return { complaintId: null, method: 'inbox' };
+  }
   return { complaintId: null, method: 'unmatched' };
 }
 
@@ -42,56 +47,38 @@ async function buildIndex() {
   return rows.map((c) => ({ ...c, email_address: complaintEmailAddress(c.ref_code) }));
 }
 
+// Store the emails that belong to complaints (or came to the general inbox).
+// Returns the ids of the newly stored ones; the caller hands those to
+// processEmail(), which reads them in full, files them and records what they
+// mean. The timeline entry is written there, once it is known what arrived.
 export async function ingestEmails(emails) {
   const index = await buildIndex();
+  const inbox = complaintInboxAddress();
   let matched = 0;
-  let inserted = 0;
+  const ids = [];
 
   for (const e of emails) {
-    const m = matchEmailToComplaint(e, index);
-    // Shared catch-all: only persist emails that belong to a complaint. The
+    const m = matchEmailToComplaint(e, index, inbox);
+    // Shared catch-all: only persist emails that are deliberately ours. The
     // rest of the mailbox (spam / other teams' mail) is left untouched.
-    if (!m.complaintId) continue;
+    if (!m.complaintId && m.method !== 'inbox') continue;
     matched += 1;
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const ins = await client.query(
-        `INSERT INTO complaint_emails
-           (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
-            to_addresses, body_preview, received_at, match_method)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (graph_id) DO NOTHING
-         RETURNING id`,
-        [
-          m.complaintId, e.graphId, e.messageId, e.subject, e.senderName,
-          e.senderEmail, e.toAddresses || [], e.bodyPreview, e.receivedAt, m.method,
-        ],
-      );
-      if (ins.rows.length) {
-        inserted += 1;
-        // Reflect it on the complaint timeline too (only on first insert).
-        await client.query(
-          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-           VALUES ($1, $2, 'note', $3, 'Email sync')`,
-          [
-            m.complaintId,
-            londonDateOf(e.receivedAt),
-            `Email logged: ${e.subject || '(no subject)'}, from ${e.senderName || e.senderEmail || 'unknown'}`,
-          ],
-        );
-      }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    const ins = await query(
+      `INSERT INTO complaint_emails
+         (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
+          to_addresses, body_preview, received_at, match_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (graph_id) DO NOTHING
+       RETURNING id`,
+      [
+        m.complaintId, e.graphId, e.messageId, e.subject, e.senderName,
+        e.senderEmail, e.toAddresses || [], e.bodyPreview, e.receivedAt, m.method,
+      ],
+    );
+    if (ins.rows.length) ids.push(ins.rows[0].id);
   }
 
-  return { fetched: emails.length, inserted, matched };
+  return { fetched: emails.length, inserted: ids.length, matched, ids };
 }
 
 export function listComplaintEmails(complaintId) {

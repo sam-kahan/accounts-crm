@@ -2,18 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
-import { config, complaintEmailAddress } from '../config.js';
+import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import {
-  computeAckDue,
-  computeOmbudsmanFrom,
-  deriveStatus,
-  procedureSteps,
-  describeChanges,
-  theOmbudsman,
-} from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman } from '../services/complaintRules.js';
+import { decorate, gatherContext } from '../services/complaintContext.js';
+import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
+import { refreshReview, scheduleReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import {
@@ -87,37 +83,6 @@ const input = z.object({
   imported: z.boolean().optional(),
 });
 
-// Attach derived status + rule + procedure checklist + org context to a row.
-async function decorate(c) {
-  const { org, rule } = await ruleForComplaint(c);
-  const derived = deriveStatus(c, rule);
-  return {
-    ...c,
-    ...derived,
-    rule,
-    ack_due: computeAckDue(c, rule),
-    ombudsman_from: computeOmbudsmanFrom(c, rule),
-    steps: procedureSteps(c, rule),
-    email_address: complaintEmailAddress(c.ref_code),
-    org_email: org?.complaints_email || null,
-    org_complaints_url: org?.complaints_url || null,
-    // What the deadlines rest on, so the page can say how far to trust them.
-    procedure: org
-      ? {
-          organisation_id: org.id,
-          name: org.name,
-          procedure_ref: org.procedure_ref,
-          procedure_summary: org.procedure_summary,
-          sources: org.sources || [],
-          evidence: org.procedure_evidence || {},
-          research_status: org.research_status,
-          verified_at: org.verified_at,
-          verified_by: org.verified_by,
-        }
-      : null,
-  };
-}
-
 // --- Email fetch (cron-accessible: session OR cron key) --------------------
 // Defined before the requireAuth guard below so the cron can call it with a key.
 router.post(
@@ -126,7 +91,19 @@ router.post(
   asyncHandler(async (_req, res) => {
     const emails = await fetchMailboxMessages();
     const r = await ingestEmails(emails);
-    res.json({ ...r, configured: emailConfigured() });
+    // Read, file and record each new one. One at a time: each may be a round
+    // trip to the mailbox and the AI, and none may be lost to a failure in
+    // another.
+    let processed = 0;
+    for (const id of r.ids) {
+      try {
+        await processEmail(id);
+        processed += 1;
+      } catch (err) {
+        console.error(`[complaints] email ${id} not processed:`, err.message);
+      }
+    }
+    res.json({ fetched: r.fetched, inserted: r.inserted, matched: r.matched, processed, configured: emailConfigured() });
   }),
 );
 
@@ -137,7 +114,12 @@ router.use(requireAuth, requirePermission('complaints'));
 router.get(
   '/email/config',
   asyncHandler(async (_req, res) => {
-    res.json({ enabled: emailConfigured(), mailbox: config.ms.mailbox || null });
+    res.json({
+      enabled: emailConfigured(),
+      mailbox: config.ms.mailbox || null,
+      inbox: complaintInboxAddress(),
+      ai: config.anthropic.enabled,
+    });
   }),
 );
 
@@ -148,30 +130,6 @@ router.get(
     res.json({ enabled: config.anthropic.enabled });
   }),
 );
-
-// Gather a complaint's full context (row + rule + timeline + emails + attachment
-// text) for the AI endpoints. Throws 404 if the complaint doesn't exist.
-async function gatherContext(id, extraContext) {
-  const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [id]);
-  if (!rows[0]) throw new HttpError(404, 'Complaint not found');
-  const complaint = await decorate(rows[0]);
-  const events = (
-    await query(
-      'SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date DESC, created_at DESC',
-      [id],
-    )
-  ).rows;
-  const emails = await listComplaintEmails(id);
-  const docs = await attachmentTexts(id);
-  const docText = docs.length
-    ? docs.map((a) => `--- Attached document: ${a.filename} ---\n${a.extracted_text}`).join('\n\n')
-    : '';
-  const merged = [extraContext, docText].filter(Boolean).join('\n\n');
-  // PDFs and photos can't be turned into text here, so they go to the model
-  // as documents in their own right — letters and statements are mostly PDFs.
-  const blocks = await attachmentBlocks(id);
-  return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks };
-}
 
 // AI assistant: analyse the complaint + logged emails (+ pasted context) and
 // draft the next email + steps. Does not send anything.
@@ -238,6 +196,7 @@ router.post(
       sentBy: who(req),
     });
     const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    scheduleReview(complaint.id);
     res.json({ sent: true, complaint: await decorate(updated) });
   }),
 );
@@ -293,7 +252,7 @@ router.get(
     if (ctx.emails.length) {
       for (const em of [...ctx.emails].reverse()) {
         lines.push(
-          `${(em.received_at || '').slice(0, 10)}  ${em.direction === 'outbound' ? 'SENT' : 'RECEIVED'}  ` +
+          `${em.received_at ? londonDateOf(new Date(em.received_at)) : ''}  ${em.direction === 'outbound' ? 'SENT' : 'RECEIVED'}  ` +
             `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}`,
         );
       }
@@ -379,6 +338,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const saved = [];
     for (const f of req.files || []) saved.push(await saveAttachment(req.params.id, f));
+    scheduleReview(req.params.id);
     res.status(201).json(saved);
   }),
 );
@@ -461,6 +421,61 @@ router.get(
       params,
     );
     res.json(await Promise.all(rows.map(decorate)));
+  }),
+);
+
+// Emails sent to the general complaints inbox that the AI couldn't place with
+// confidence. Each carries the AI's reading of it, and its best guess if any.
+router.get(
+  '/emails/unfiled',
+  asyncHandler(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT id, subject, sender_name, sender_email, received_at, body_preview, analysis,
+              analysis_error
+         FROM complaint_emails WHERE complaint_id IS NULL AND match_method = 'inbox'
+        ORDER BY received_at DESC LIMIT 100`,
+    );
+    res.json(rows);
+  }),
+);
+
+const fileInput = z.object({ complaint_id: z.string().uuid() });
+
+// File an unfiled email against a complaint; it is then read and recorded
+// exactly as if it had been sent to that complaint's own address.
+router.post(
+  '/emails/:emailId/file',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) {
+      throw new HttpError(400, 'Invalid email id');
+    }
+    const d = parse(fileInput, req.body);
+    const c = (await query('SELECT id FROM complaints WHERE id = $1', [d.complaint_id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    const { rowCount } = await query(
+      `UPDATE complaint_emails SET complaint_id = $2, match_method = 'filed'
+        WHERE id = $1 AND complaint_id IS NULL`,
+      [req.params.emailId, d.complaint_id],
+    );
+    if (!rowCount) throw new HttpError(404, 'That email is not waiting to be filed');
+    await processEmail(req.params.emailId);
+    res.json({ filed: true, complaint_id: d.complaint_id });
+  }),
+);
+
+// An email in the general inbox that isn't about any complaint: remove it.
+router.delete(
+  '/emails/:emailId',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) {
+      throw new HttpError(400, 'Invalid email id');
+    }
+    const { rowCount } = await query(
+      'DELETE FROM complaint_emails WHERE id = $1 AND complaint_id IS NULL',
+      [req.params.emailId],
+    );
+    if (!rowCount) throw new HttpError(404, 'That email is not waiting to be filed');
+    res.status(204).end();
   }),
 );
 
@@ -553,6 +568,7 @@ router.post(
       }
     }
     if (!created) throw new HttpError(500, 'Could not allocate a complaint reference; please retry.');
+    scheduleReview(created.id);
     res.status(201).json(await decorate(created));
   }),
 );
@@ -563,6 +579,9 @@ router.post(
 // arrived (UK time).
 const reviewInput = z.object({
   as: z.enum(['acknowledgement', 'response', 'correspondence']),
+  // The date on THEIR email. Defaults to what the AI read from it, then to the
+  // day it arrived — for a forward, the arrival date is the day it was forwarded.
+  date: isoDate.optional().nullable(),
 });
 
 router.post(
@@ -580,7 +599,8 @@ router.post(
     if (!em) throw new HttpError(404, 'Email not found on this complaint');
     const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]))
       .rows[0];
-    const on = londonDateOf(new Date(em.received_at));
+    const on = d.date || em.analysis?.sent_on || londonDateOf(new Date(em.received_at));
+    if (on > todayISO()) throw new HttpError(400, 'That date is in the future');
     const subject = em.subject || '(no subject)';
 
     await query(
@@ -613,7 +633,39 @@ router.post(
       );
     }
     const updated = await recomputeDeadlines(complaint.id);
+    scheduleReview(complaint.id);
     res.json(await decorate(updated));
+  }),
+);
+
+// Undo what was recorded automatically from an email.
+router.post(
+  '/:id/emails/:emailId/undo',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) {
+      throw new HttpError(400, 'Invalid email id');
+    }
+    const em = (
+      await query('SELECT * FROM complaint_emails WHERE id = $1 AND complaint_id = $2', [
+        req.params.emailId, req.params.id,
+      ])
+    ).rows[0];
+    if (!em) throw new HttpError(404, 'Email not found on this complaint');
+    if (!em.applied) throw new HttpError(400, 'Nothing was recorded automatically from this email');
+    await undoEmail(em, who(req));
+    const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
+    res.json(await decorate(rows[0]));
+  }),
+);
+
+// Refresh the AI review now, rather than waiting for the next change.
+router.post(
+  '/:id/review',
+  asyncHandler(async (req, res) => {
+    if (!config.anthropic.enabled) throw new HttpError(503, 'The AI assistant is not configured.');
+    await refreshReview(req.params.id);
+    const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
+    res.json(await decorate(rows[0]));
   }),
 );
 
@@ -665,6 +717,7 @@ router.post(
     // An acknowledgement can move the Stage 1 date (where their clock runs
     // from it) and a final response starts the referral window.
     const updated = await recomputeDeadlines(req.params.id);
+    scheduleReview(req.params.id);
     res.status(201).json(await decorate(updated));
   }),
 );
@@ -713,6 +766,7 @@ router.post(
     );
 
     const updated = await recomputeDeadlines(req.params.id);
+    scheduleReview(req.params.id);
     res.json(await decorate(updated));
   }),
 );
@@ -784,6 +838,7 @@ router.put(
         [req.params.id, todayISO(), `Details corrected: ${changes.join('; ')}`, who(req)],
       );
     }
+    scheduleReview(req.params.id);
     res.json(await decorate(updated));
   }),
 );

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
+import { londonDateOf } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -127,7 +128,8 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   lines.push('<untrusted_content>');
   if (emails?.length) {
     for (const em of emails) {
-      const when = (em.received_at || '').slice(0, 10);
+      // received_at is a timestamp (a Date from pg), shown as its UK day.
+      const when = em.received_at ? londonDateOf(new Date(em.received_at)) : '';
       lines.push(
         `- ${when} from ${em.sender_name || em.sender_email || 'unknown'} — ` +
           `"${em.subject || '(no subject)'}": ${(em.body_preview || '').slice(0, 500)}`,

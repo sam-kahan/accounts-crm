@@ -409,6 +409,33 @@ the page says how far each date can be trusted.
   as document/image blocks (`attachmentBlocks`, capped at 10 files / 20 MB, and
   it's told by name which it didn't get), with the same untrusted-content rule.
   It is told which timescales are defaults so it doesn't quote them as theirs.
+- **Forward it and the system does the rest** (migration `020`). Anything about
+  any complaint can be forwarded to ONE address, `complaint-inbox@<domain>`
+  (`complaintInboxAddress()`; "inbox" is five letters so it can't collide with
+  a six-character code). `services/complaintEmailProcessor.js#processEmail` then,
+  per new email: fetches the whole body and file attachments from Graph
+  (`fetchMessageDetail`, plain text, inline images skipped), files it (the AI
+  picks from open complaints; only a **high-confidence** match files it,
+  otherwise it waits under "Emails to file" on the Complaints page), saves the
+  attachments as documents (`source_email_id`), and asks
+  `services/emailAnalysis.js#analyseEmail` what it is — kind, real author, the
+  date **they** sent it (a forward's own date is the day it was forwarded),
+  their reference, a summary. `planFromAnalysis()` (pure, tested) decides what
+  is recorded without asking: only high confidence, written by the
+  organisation, dated, a step the complaint is waiting for, and a date inside
+  the complaint. Anything else stays **New** with the AI's reading and date
+  pre-filled. What was recorded is stored in `complaint_emails.applied` with
+  the values it replaced, so **Undo** puts them back exactly. Our own emails
+  (CC'd copies) are filed as correspondence. Every step is best-effort: an
+  email is never lost to a mailbox or AI failure, it just waits for a person.
+- **The AI review keeps itself up to date** (`services/complaintReview.js`).
+  `complaints.ai_review` is the assistant's standing review — where it stands,
+  whether they're keeping to their procedure, the next step, a draft email.
+  `scheduleReview()` refreshes it (debounced) after every change: an email, a
+  document, a recorded step, a correction. The nightly job
+  (`refreshStaleReviews`, from `/api/dashboard/send-reminders`) refreshes any
+  whose `ai_review_status` signature the calendar has overtaken. Nothing is sent
+  from it; the draft waits for a person to press Send.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)
@@ -427,6 +454,18 @@ the page says how far each date can be trusted.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-09-28 — forward complaint emails and the system does the rest
+- **One address for everything**: forward any email about any complaint to
+  `complaint-inbox@greenco.co.uk`. It's read in full, filed to the right
+  complaint, its attachments saved, and their acknowledgement or response
+  recorded on the date they sent it — with Undo. Unsure cases wait with the
+  AI's reading filled in. Reasoning in "Complaints" above.
+- **A standing AI review on every complaint**, refreshed after every change and
+  nightly: where it stands, the next step, a draft email. The next step also
+  shows on the complaints list.
+- Fixed: the AI assistant and the referral pack crashed on any complaint with a
+  logged email (`received_at` is a Date from pg, not a string).
 
 ### 2026-09-28 — complaints follow the organisation's own procedure, step by step
 - **A checklist per complaint** — acknowledgement, Stage 1, Stage 2, when a
