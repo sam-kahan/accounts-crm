@@ -9,7 +9,6 @@ import {
   reviewSignature,
   effectiveRule,
 } from './complaintRules.js';
-import { ruleForComplaint } from './complaintDeadlines.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
