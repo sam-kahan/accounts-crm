@@ -33,7 +33,7 @@ import {
   draftReferralGrounds,
   parseImportedComplaint,
 } from '../services/complaintAssistant.js';
-import { sendMail, fromAddress } from '../services/mailer.js';
+import { sendMail, fromAddress, withExternalCc } from '../services/mailer.js';
 import {
   listAttachments,
   attachmentTexts,
@@ -273,10 +273,13 @@ router.post(
     const to = parseRecipients(d.to);
     const cc = parseRecipients(d.cc);
     if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
-    // Always CC the complaint's own address so the thread self-logs.
+    // Always CC the complaint's own address so the thread self-logs, and
+    // Greenco's own copy address (utilities@) so there is a copy in the
+    // mailbox. Added here so the copy recorded on the complaint says so too.
     if (complaint.email_address && !cc.includes(complaint.email_address)) {
       cc.push(complaint.email_address);
     }
+    for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
     await sendMail({ to, cc, subject: d.subject, text: d.body });
     await recordOutboundEmail({
@@ -886,7 +889,8 @@ router.get(
       complaintId: rows[0].id,
       addresses: [decorated, ...decorated.parties].map((t) => t.org_email).filter(Boolean),
     });
-    res.json({ ...decorated, events, emails, attachments, email_search, bounces });
+    // Copied in on every email sent from here (utilities@), so the page can say so.
+    res.json({ ...decorated, events, emails, attachments, email_search, bounces, external_cc: config.smtp.externalCc });
   }),
 );
 

@@ -122,6 +122,10 @@ From the Greenco logo — use these, don't invent colours:
   dates. Synced dates are stored with `source = 'companies_house'` and upserted
   in place (unique per company+category) so re-syncing never duplicates.
 - **SMTP2GO** (`SMTP_USER` / `SMTP_PASS`) — reminder digests via nodemailer.
+  Every email to someone OUTSIDE Greenco (`mailer.js#sendMail`: complaint
+  emails, commission invoices) copies in `EXTERNAL_CC` (default
+  `utilities@greenco.co.uk`) so Greenco's mailbox has a copy; never password
+  resets or invitations, which carry private links.
 - **Greenco Invoicing** (`INVOICING_API_URL` / `INVOICING_API_KEY` /
   `INVOICING_COMPANY_ID_MANCHESTER` + `INVOICING_COMPANY_ID_LIVERPOOL`, one
   company per office) — commission invoices are pushed to the invoicing app

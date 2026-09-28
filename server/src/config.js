@@ -33,6 +33,13 @@ export const config = {
     pass: process.env.SMTP_PASS || '',
     from: process.env.REMINDER_FROM || 'Greenco Accounts <accounts@greenco.co.uk>',
     to: list(process.env.REMINDER_TO),
+    // Copied in on every email the CRM sends to someone outside Greenco
+    // (complaint emails, commission invoices), so there is always a copy in
+    // Greenco's own mailbox. Set EXTERNAL_CC to change it; "none" for nobody.
+    // Never on password resets or invitations: those carry private links.
+    externalCc: process.env.EXTERNAL_CC === 'none'
+      ? []
+      : list(process.env.EXTERNAL_CC || 'utilities@greenco.co.uk'),
     get enabled() {
       return Boolean(this.user && this.pass);
     },

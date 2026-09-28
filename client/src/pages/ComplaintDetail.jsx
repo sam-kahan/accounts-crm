@@ -856,7 +856,10 @@ export default function ComplaintDetail() {
                         )}
                         <li>
                           Copy this in{!reply && <>, with the subject</>}.{' '}
-                          <span className="muted">Copy in <code>{c.email_address}</code> too, so their reply files itself here.</span>
+                          <span className="muted">
+                            Copy in <code>{c.email_address}</code> (so their reply files itself here)
+                            {c.external_cc?.length ? <> and <code>{c.external_cc.join(', ')}</code></> : null} too.
+                          </span>
                         </li>
                       </ol>
                       {!reply && (
@@ -1462,8 +1465,8 @@ export default function ComplaintDetail() {
               placeholder="optional, comma-separated" />
           </label>
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-            This complaint’s address ({c.email_address}) is copied in automatically so their reply
-            logs here.
+            Copied in automatically: this complaint’s address ({c.email_address}), so their reply
+            logs here{c.external_cc?.length ? <>, and {c.external_cc.join(', ')}</> : null}.
           </div>
           <label className="field">
             <span className="lbl">Subject *</span>

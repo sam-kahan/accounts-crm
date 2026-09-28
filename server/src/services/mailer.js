@@ -48,13 +48,25 @@ export async function sendReminderEmail({ subject, html, text, to }) {
   return { sent: true, to: recipients };
 }
 
-// Send an arbitrary email (used to send complaint correspondence from the app).
-// Throws if SMTP2GO isn't configured so the caller can surface it.
+// The addresses copied in on every email to someone outside Greenco
+// (utilities@ by default), left out when already a recipient.
+export function withExternalCc(to, cc) {
+  const have = new Set([...(to || []), ...(cc || [])].map((a) => String(a).trim().toLowerCase()));
+  return [...(cc || []), ...config.smtp.externalCc.filter((a) => !have.has(a.toLowerCase()))];
+}
+
+// Send an email to someone outside Greenco (complaint correspondence,
+// commission invoices). Greenco's own copy address is always copied in (see
+// config.smtp.externalCc). Throws if SMTP2GO isn't configured so the caller
+// can surface it.
 export async function sendMail({ to, cc, subject, text, html, replyTo }) {
   const transport = getTransport();
   if (!transport) {
     throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
   }
+  const toList = Array.isArray(to) ? to : String(to || '').split(',').map((a) => a.trim()).filter(Boolean);
+  const ccList = Array.isArray(cc) ? cc : String(cc || '').split(',').map((a) => a.trim()).filter(Boolean);
+  cc = withExternalCc(toList, ccList);
   const info = await transport.sendMail({
     from: config.smtp.from,
     to: Array.isArray(to) ? to.join(', ') : to,

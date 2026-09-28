@@ -35,3 +35,12 @@ test('digest never links a non-http address', () => {
   const d = buildDigest([{ due_date: '2026-10-01', label: 'x', link: 'javascript:alert(1)' }]);
   assert.ok(!d.html.includes('javascript:'));
 });
+
+import { withExternalCc } from '../src/services/mailer.js';
+
+test('every email sent to someone outside copies in utilities@ (once)', () => {
+  assert.deepEqual(withExternalCc(['complaints@britishgas.co.uk'], ['complaint-abc234@greenco.co.uk']),
+    ['complaint-abc234@greenco.co.uk', 'utilities@greenco.co.uk']);
+  // already a recipient: not added twice
+  assert.deepEqual(withExternalCc(['Utilities@greenco.co.uk'], []), []);
+});
