@@ -46,6 +46,8 @@ const scan = await getSetting('past_scan');
 p('Past-complaints search:', scan ? `${scan.status} · read ${scan.read ?? 0}/${scan.threads ?? 0} threads · found ${scan.found ?? 0}${scan.error ? ' · ' + scan.error : ''}` : 'never run');
 const cands = (await query(`SELECT status, count(*)::int AS n FROM complaint_import_candidates GROUP BY status`)).rows;
 p('Past complaints found:', cands.map((r) => `${r.status} ${r.n}`).join(', ') || 'none');
+p('Automatic import:', (await getSetting('past_auto_import')) ? 'ON' : 'off',
+  (await getSetting('imports_paused'))?.until ? `(paused until ${(await getSetting('imports_paused')).until})` : '');
 p('Cron key (REMINDER_CRON_KEY):', set(process.env.REMINDER_CRON_KEY));
 const cronFile = '/etc/cron.d/accounts-crm';
 if (existsSync(cronFile)) {
@@ -117,6 +119,33 @@ for (const row of rows) {
   const events = (await query('SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date, created_at', [c.id])).rows;
   p(`Timeline (${events.length}):`);
   for (const e of events) p(`  - ${e.event_date} [${e.type}] ${clip(e.note, 250)} — ${e.created_by || '?'}`);
+}
+
+p('');
+p('--- Found past complaints still waiting or being imported ---');
+const waiting = (await query(
+  `SELECT id, status, subject, extracted, error, import_attempts, last_attempt_at, decided_by, first_at
+     FROM complaint_import_candidates WHERE status IN ('pending', 'importing') ORDER BY first_at DESC`,
+)).rows;
+if (!waiting.length) p('(none)');
+for (const w of waiting) {
+  const x = w.extracted || {};
+  p(`- [${w.status}] ${clip(x.subject || w.subject, 90)} · ${x.org_name || '?'} · ${x.property || 'no address'}` +
+    ` · ${x.confidence || '?'} confidence · tries ${w.import_attempts ?? 0}` +
+    (w.last_attempt_at ? ` (last ${day(w.last_attempt_at)})` : '') +
+    (w.error ? ` · ERROR: ${clip(w.error, 200)}` : ''));
+}
+p('');
+p('--- Found past complaints dealt with (latest 40) ---');
+const dealt = (await query(
+  `SELECT k.status, k.subject, k.extracted, k.decided_by, k.error, c.ref_code
+     FROM complaint_import_candidates k LEFT JOIN complaints c ON c.id = k.complaint_id
+    WHERE k.status IN ('imported', 'skipped') ORDER BY k.created_at DESC LIMIT 40`,
+)).rows;
+if (!dealt.length) p('(none)');
+for (const d of dealt) {
+  p(`- ${d.status}${d.ref_code ? ` → ${d.ref_code}` : ''} by ${d.decided_by || '?'}: ${clip(d.extracted?.subject || d.subject, 90)}` +
+    (d.error ? ` · NOTE: ${clip(d.error, 150)}` : ''));
 }
 
 p('');
