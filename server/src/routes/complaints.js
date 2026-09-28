@@ -1617,11 +1617,47 @@ router.post(
   }),
 );
 
+// Delete a complaint and everything on it. Its emails go with it (they used
+// to be left behind in "Emails to file") and are remembered — each email, and
+// the threads it was on — so the watcher doesn't bring them, or a later reply
+// in the same thread, back in (migration 034). Its documents' files are
+// removed from disk too. One transaction; the files after it commits.
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
-    const { rowCount } = await query('DELETE FROM complaints WHERE id = $1', [req.params.id]);
-    if (!rowCount) throw new HttpError(404, 'Complaint not found');
+    const client = await pool.connect();
+    let files = [];
+    try {
+      await client.query('BEGIN');
+      const c = (await client.query('SELECT id, ref_code FROM complaints WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0];
+      if (!c) throw new HttpError(404, 'Complaint not found');
+      await client.query(
+        `INSERT INTO complaint_email_discards (message_id, mailbox)
+         SELECT DISTINCT ON (message_id) message_id, source_mailbox FROM complaint_emails
+          WHERE complaint_id = $1 AND message_id IS NOT NULL
+         ON CONFLICT DO NOTHING`,
+        [c.id],
+      );
+      await client.query(
+        `INSERT INTO complaint_ignored_threads (conversation_id, reason)
+         SELECT DISTINCT conversation_id, $2 FROM complaint_emails
+          WHERE complaint_id = $1 AND conversation_id IS NOT NULL
+         ON CONFLICT DO NOTHING`,
+        [c.id, `on ${c.ref_code}, which was deleted`],
+      );
+      await client.query('DELETE FROM complaint_emails WHERE complaint_id = $1', [c.id]);
+      files = (await client.query('SELECT storage_path FROM complaint_attachments WHERE complaint_id = $1', [c.id]))
+        .rows.map((r) => r.storage_path);
+      await client.query('DELETE FROM complaints WHERE id = $1', [c.id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+    const { promises: fsp } = await import('node:fs');
+    for (const f of files) await fsp.unlink(f).catch(() => {});
     res.status(204).end();
   }),
 );

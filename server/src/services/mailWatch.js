@@ -43,7 +43,9 @@ export const domainOf = (addr) => String(addr || '').toLowerCase().split('@')[1]
 // costs nothing.
 const COMPLAINT_WORDS = /complain|ombudsman|stage\s*(?:1|2|one|two)\b|final\s+(?:response|viewpoint|decision)|deadlock|escalat|redress/i;
 
-export function routeWatchedEmail(e, { ourDomain, threads, orgDomains, markers = [], numbers = [] }) {
+export function routeWatchedEmail(e, { ourDomain, threads, orgDomains, markers = [], numbers = [], ignoredThreads = null }) {
+  // A thread that was on a complaint since deleted: left alone for good.
+  if (e.conversationId && ignoredThreads?.has(e.conversationId)) return null;
   if (e.conversationId && threads.has(e.conversationId)) {
     return { method: 'thread', complaintId: threads.get(e.conversationId) };
   }
@@ -114,7 +116,8 @@ async function watchContext() {
   const numbers = buildNumberIndex((await query(
     `SELECT c.id, c.account_numbers, c.reference, c.ref_code, ${PARTY_COLS} FROM complaints c WHERE c.state = 'open'`,
   )).rows);
-  return { ourDomain, threads, orgDomains, markers, numbers };
+  const ignoredThreads = new Set((await query('SELECT conversation_id FROM complaint_ignored_threads')).rows.map((r) => r.conversation_id));
+  return { ourDomain, threads, orgDomains, markers, numbers, ignoredThreads };
 }
 
 // Look at the new mail in every watched mailbox. Returns the ids stored, for

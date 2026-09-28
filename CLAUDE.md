@@ -624,6 +624,14 @@ the page says how far each date can be trusted.
   complaint's address and utilities@) or records it sent from Outlook on a
   date — either way the supplier joins as a further organisation
   (`createParty`), dated the day it went. Nothing is added if sending fails.
+- **Deleting a complaint deletes its emails and documents** (migration
+  `034`): `complaint_emails.complaint_id` is ON DELETE SET NULL, so the
+  delete route removes them itself, records their message ids in
+  `complaint_email_discards` and their threads in `complaint_ignored_threads`
+  (the watcher skips both; `storeEmail` checks discards for watched/account/
+  thread mail), and unlinks the documents' files. Migration `034` cleared the
+  emails already stranded in "Emails to file" that way. The Delete prompt
+  points to Mark resolved for a complaint that ended.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)

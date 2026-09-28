@@ -267,3 +267,9 @@ test('watching: any sender quoting an open complaint’s number is filed on it',
   const r = routeWatchedEmail(email({ senderEmail: 'agent@lcs-collections.co.uk', subject: 'Balance due A-49ED9909' }), { ...ctx, numbers: nIndex });
   assert.deepEqual(r, { method: 'account', complaintId: 'eon' });
 });
+
+test('a reply in a thread of a deleted complaint is left alone', () => {
+  const r = routeWatchedEmail(email({ conversationId: 'gone-thread', subject: 'Re: complaint A-49ED9909' }),
+    { ...ctx, numbers: nIndex, ignoredThreads: new Set(['gone-thread']) });
+  assert.equal(r, null);
+});

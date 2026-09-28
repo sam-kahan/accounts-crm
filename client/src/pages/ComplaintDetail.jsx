@@ -489,7 +489,11 @@ export default function ComplaintDetail() {
   }
 
   async function remove() {
-    if (!confirm('Delete this complaint, its timeline, emails and documents? This cannot be undone.')) return;
+    if (!confirm(
+      'Delete this complaint with its timeline, emails and documents? This cannot be undone, and its ' +
+      'emails won’t be brought back in.\n\nIf it has been resolved, press Cancel and use “Mark resolved” ' +
+      'instead: that keeps the record of how it ended.',
+    )) return;
     try {
       await api.complaints.remove(id);
       navigate('/complaints');

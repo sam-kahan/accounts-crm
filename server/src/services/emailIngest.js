@@ -83,7 +83,9 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
 // internet message id as well as Graph's per-mailbox id. Returns the new id,
 // or null if it was already on file.
 export async function storeEmail(e, { complaintId = null, method, mailbox = null }) {
-  if (e.messageId && (method === 'watch' || method === 'watch_new')) {
+  // Found by watching (not deliberately forwarded): an email that was ruled
+  // out, or was on a complaint since deleted, is not brought back.
+  if (e.messageId && ['watch', 'watch_new', 'account', 'thread'].includes(method)) {
     // Already read and found unrelated: not stored (or paid for) again.
     const gone = await query('SELECT 1 FROM complaint_email_discards WHERE message_id = $1', [e.messageId]);
     if (gone.rows.length) return null;
