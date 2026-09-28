@@ -127,7 +127,14 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
 // Returns { changes, event, reviewedAs, auto: true } or { auto: false, reason }.
 export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
   if (!a) return { auto: false, reason: 'Not analysed' };
-  if (a.kind === 'our_email' || !a.from_organisation) {
+  // Our own email (a CC'd copy of what we sent) is filed as correspondence
+  // unless the AI was unsure; nothing else is filed without high confidence —
+  // an uncertain "not from them" could be their real acknowledgement.
+  if (a.kind === 'our_email' && a.confidence !== 'low') {
+    return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+  }
+  if (a.confidence !== 'high') return { auto: false, reason: 'The AI isn’t certain what this is' };
+  if (!a.from_organisation) {
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }
   const date = a.sent_on;
@@ -136,7 +143,6 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
     a.their_reference && !complaint.reference ? { reference: a.their_reference } : {};
   const open = complaint.state === 'open';
 
-  if (a.confidence !== 'high') return { auto: false, reason: 'The AI isn’t certain what this is' };
   if (!date) return { auto: false, reason: 'The date they sent it isn’t clear' };
   if (!open) return { auto: false, reason: 'The complaint is closed' };
   if (date < (complaint.raised_on || '0000') || date > today) {
@@ -210,8 +216,18 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
   lines.push('</untrusted_content>');
   if (attachments.length) lines.push(`Its attachments follow as documents: ${attachments.map((a) => a.filename).join(', ')}.`);
 
+  // Keep the request inside the API's size limit: at most 5 files and 20 MB,
+  // and say which were left out so they aren't assumed read.
   const blocks = [];
-  for (const a of attachments.slice(0, 5)) {
+  const left = [];
+  let bytes = 0;
+  for (const a of attachments) {
+    const size = a.buffer?.length || 0;
+    if (blocks.length >= 10 || bytes + size > 20 * 1024 * 1024) {
+      left.push(a.filename);
+      continue;
+    }
+    bytes += size;
     try {
       blocks.push({ type: 'text', text: `Attachment (third-party document): ${a.filename}` });
       blocks.push(contentFor({ buffer: a.buffer, mimetype: a.mimetype, originalname: a.filename }));
@@ -219,6 +235,7 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
       blocks.pop(); // a type that can't be read is simply not sent
     }
   }
+  if (left.length) lines.push(`Not attached (too large to send): ${left.join(', ')}. Do not assume their contents.`);
 
   const res = await anthropic.messages.create({
     model: config.anthropic.model,

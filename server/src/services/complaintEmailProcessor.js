@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
+import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
 import { ukDate } from './complaintRules.js';
 import { fetchMessageDetail } from './graphMail.js';
@@ -88,11 +89,12 @@ export async function processEmail(emailId) {
   if (!em.complaint_id) return { filed: false, analysis }; // waits in "unfiled"
 
   // 3. Its attachments become documents on the complaint (once).
-  const already = (
-    await query('SELECT count(*)::int AS n FROM complaint_attachments WHERE source_email_id = $1', [em.id])
-  ).rows[0].n;
-  if (!already) {
-    for (const a of detail.attachments) {
+  const saved = new Set(
+    (await query('SELECT filename FROM complaint_attachments WHERE source_email_id = $1', [em.id])).rows
+      .map((r) => r.filename),
+  );
+  {
+    for (const a of detail.attachments.filter((x) => !saved.has(x.filename))) {
       try {
         await saveAttachmentBuffer(em.complaint_id, a, em.id);
       } catch (err) {
@@ -166,6 +168,17 @@ export async function undoEmail(em, by) {
   const applied = em.applied;
   if (!applied) return false;
   const cols = Object.keys(applied.before || {});
+  // Only undo what is still as it was recorded: a date someone has since
+  // entered or corrected must never be wiped by undoing an older email.
+  const now = (await query('SELECT * FROM complaints WHERE id = $1', [em.complaint_id])).rows[0];
+  const moved = cols.filter((c) => (now?.[c] ?? null) !== (applied.after?.[c] ?? null));
+  if (moved.length) {
+    throw new HttpError(
+      409,
+      `Can’t undo: ${moved.map((c) => c.replace(/_/g, ' ')).join(', ')} has been changed since. ` +
+        'Correct it with Edit details instead.',
+    );
+  }
   if (cols.length) {
     const set = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
     await query(`UPDATE complaints SET ${set} WHERE id = $1`, [em.complaint_id, ...cols.map((c) => applied.before[c])]);

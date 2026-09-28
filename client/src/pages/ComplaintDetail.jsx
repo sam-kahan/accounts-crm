@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const STAGE_LABEL = {
@@ -37,6 +37,33 @@ const REVIEWED_AS = {
   response: 'Their response',
   correspondence: 'Correspondence',
   sent: 'Sent',
+};
+
+// The dated steps, shared by the buttons and the AI's one-click action.
+const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name || 'ombudsman'}`);
+const ACK = {
+  kind: 'acknowledged', title: 'Record their acknowledgement',
+  intro: 'The date they acknowledged the complaint (the date on their email or letter).',
+  defaultNote: 'Acknowledged by the organisation',
+};
+const RESPONSE = (c) => ({
+  kind: 'response_received',
+  title: c.stage === 'stage_2' ? 'Record their final (Stage 2) response' : 'Record their Stage 1 response',
+  intro: 'The date on their response. Upload the letter or email itself under Documents so it’s on file.',
+  defaultNote: c.stage === 'stage_2' ? 'Final (Stage 2) response received' : 'Stage 1 response received',
+});
+const ESCALATE = (c) => ({
+  kind: 'escalate',
+  title: c.stage === 'stage_1' ? 'Escalate to Stage 2' : `Refer to ${theOmbudsman(c.rule?.ombudsman)}`,
+  intro: c.stage === 'stage_1'
+    ? 'The date you asked them for Stage 2. Their Stage 2 deadline is counted from it.'
+    : `The date you referred the complaint to ${theOmbudsman(c.rule?.ombudsman)}.`,
+  noNote: true,
+});
+const RESOLVE = {
+  kind: 'resolved', title: 'Mark the complaint resolved',
+  intro: 'The date it was resolved, and the outcome. This is the record of how it ended.',
+  defaultNote: 'Complaint resolved', noteLabel: 'Outcome',
 };
 
 export default function ComplaintDetail() {
@@ -78,6 +105,22 @@ export default function ComplaintDetail() {
       .then(setC)
       .catch((e) => setLoadError(e.message));
   };
+  // While the review is being brought up to date, look again every few
+  // seconds (for up to a minute) so it appears without a reload.
+  const stale = Boolean(c && aiEnabled && c.state === 'open' && !c.ai_review_current);
+  useEffect(() => {
+    if (!stale) return undefined;
+    let n = 0;
+    const t = setInterval(() => {
+      n += 1;
+      if (n > 12) return clearInterval(t);
+      api.complaints.get(id).then((fresh) => {
+        if (fresh.ai_review_current) { setC(fresh); clearInterval(t); }
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+  }, [stale, id]);
+
   useEffect(() => {
     load();
     api.complaints.aiConfig().then((r) => setAiEnabled(r.enabled)).catch(() => {});
@@ -245,6 +288,24 @@ export default function ComplaintDetail() {
     }
   }
 
+  // The button for the AI's recommended step. Each opens the same confirmation
+  // as doing it by hand, with the date filled in — nothing happens unconfirmed.
+  function actionButton(na) {
+    if (!na) return null;
+    const stage1 = c.stage === 'stage_1';
+    const map = {
+      send_email: c.ai_review?.email?.body && ['Review & send the email…', () => openSend(c.ai_review.email)],
+      escalate_stage2: stage1 && ['Escalate to Stage 2…', () => setAction(ESCALATE(c))],
+      refer_ombudsman: c.stage === 'stage_2' && ['Refer to the ombudsman…', () => setAction(ESCALATE(c))],
+      record_acknowledgement: stage1 && !c.acknowledged_on && ['Record their acknowledgement…', () => setAction(ACK)],
+      record_response: !c.responded_on && ['Record their response…', () => setAction(RESPONSE(c))],
+      resolve: ['Mark resolved…', () => setAction(RESOLVE)],
+    };
+    const hit = map[na.type];
+    if (!hit) return null;
+    return <button className="btn-primary btn-sm" onClick={hit[1]}>{hit[0]}</button>;
+  }
+
   async function addEvent(e) {
     e.preventDefault();
     setBusy(true);
@@ -299,7 +360,7 @@ export default function ComplaintDetail() {
 
   const open = c.state === 'open';
   const atStage = c.stage === 'stage_1' || c.stage === 'stage_2';
-  const theOmb = /^the\s/i.test(c.rule?.ombudsman || '') ? c.rule.ombudsman : `the ${c.rule?.ombudsman}`;
+  const theOmb = theOmbudsman(c.rule?.ombudsman);
   const newEmails = (c.emails || []).filter((e) => e.direction !== 'outbound' && !e.reviewed_at);
   const statusBadge =
     c.needs_chasing ? 'red' : c.status === 'responded' || c.status === 'resolved' ? 'ok' : 'amber';
@@ -333,11 +394,20 @@ export default function ComplaintDetail() {
             {c.imported && <span className="badge grey">Imported</span>}
           </div>
 
-          {c.nextAction && (
-            <div className={`inline-note ${c.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
-              <strong>Next step:</strong> {c.nextAction}
-            </div>
-          )}
+          {/* One next step: the AI's when its review is up to date, otherwise
+              the one worked out from the deadlines. */}
+          {(() => {
+            const aiStep = c.ai_review_current && c.ai_review?.recommended_action;
+            const text = aiStep || c.nextAction;
+            if (!text) return null;
+            const btn = aiStep && open ? actionButton(c.ai_review.next_action) : null;
+            return (
+              <div className={`inline-note ${c.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
+                <strong>Next step:</strong> {text}
+                {btn && <div style={{ marginTop: 8 }}>{btn}</div>}
+              </div>
+            );
+          })()}
 
           <div className="form-grid">
             <Info label="Raised" value={formatDate(c.raised_on)} />
@@ -355,43 +425,17 @@ export default function ComplaintDetail() {
           {open && (
             <div className="btn-row" style={{ marginTop: 4 }}>
               {c.stage === 'stage_1' && !c.acknowledged_on && !c.responded_on && (
-                <button className="btn btn-sm" onClick={() => setAction({
-                  kind: 'acknowledged', title: 'Record their acknowledgement',
-                  intro: 'The date they acknowledged the complaint (the date on their email or letter).',
-                  defaultNote: 'Acknowledged by the organisation',
-                })}>
-                  Record acknowledgement…
-                </button>
+                <button className="btn btn-sm" onClick={() => setAction(ACK)}>Record acknowledgement…</button>
               )}
               {atStage && !c.responded_on && (
-                <button className="btn btn-sm" onClick={() => setAction({
-                  kind: 'response_received',
-                  title: c.stage === 'stage_2' ? 'Record their final (Stage 2) response' : 'Record their Stage 1 response',
-                  intro: 'The date on their response. Upload the letter or email itself under Documents so it’s on file.',
-                  defaultNote: c.stage === 'stage_2' ? 'Final (Stage 2) response received' : 'Stage 1 response received',
-                })}>
-                  Record their response…
-                </button>
+                <button className="btn btn-sm" onClick={() => setAction(RESPONSE(c))}>Record their response…</button>
               )}
               {atStage && (
-                <button className="btn-navy btn-sm" onClick={() => setAction({
-                  kind: 'escalate',
-                  title: c.stage === 'stage_1' ? 'Escalate to Stage 2' : `Refer to ${theOmb}`,
-                  intro: c.stage === 'stage_1'
-                    ? 'The date you asked them for Stage 2. Their Stage 2 deadline is counted from it.'
-                    : `The date you referred the complaint to ${theOmb}.`,
-                  noNote: true,
-                })}>
+                <button className="btn-navy btn-sm" onClick={() => setAction(ESCALATE(c))}>
                   {c.stage === 'stage_1' ? 'Escalate to Stage 2…' : 'Refer to ombudsman…'}
                 </button>
               )}
-              <button className="btn-primary btn-sm" onClick={() => setAction({
-                kind: 'resolved', title: 'Mark the complaint resolved',
-                intro: 'The date it was resolved, and the outcome. This is the record of how it ended.',
-                defaultNote: 'Complaint resolved', noteLabel: 'Outcome',
-              })}>
-                Mark resolved…
-              </button>
+              <button className="btn btn-sm" onClick={() => setAction(RESOLVE)}>Mark resolved…</button>
             </div>
           )}
         </div>
@@ -423,9 +467,9 @@ export default function ComplaintDetail() {
             ) : (
               <>
                 <p style={{ marginTop: 0 }}>{c.ai_review.summary}</p>
-                {c.ai_review.recommended_action && (
-                  <div className="inline-note warn" style={{ marginBottom: 10 }}>
-                    <strong>Recommended next step:</strong> {c.ai_review.recommended_action}
+                {!c.ai_review_current && (
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                    Something has changed since this was written, so it’s being updated…
                   </div>
                 )}
                 {c.ai_review.steps?.length > 0 && (
@@ -481,7 +525,7 @@ export default function ComplaintDetail() {
             </p>
             {newEmails.map((em) => {
               const a = em.analysis;
-              const arrived = (em.received_at || '').slice(0, 10);
+              const arrived = londonDay(em.received_at);
               const date = emailDates[em.id] ?? (a?.sent_on || arrived);
               return (
                 <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
@@ -621,7 +665,7 @@ export default function ComplaintDetail() {
               {c.emails.map((em) => (
                 <tr key={em.id}>
                   <td className="due" style={{ width: 120 }}>
-                    {formatDate((em.received_at || '').slice(0, 10))}
+                    {formatDate(londonDay(em.received_at))}
                   </td>
                   <td>
                     <strong>{em.subject || '(no subject)'}</strong>

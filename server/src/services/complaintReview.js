@@ -2,6 +2,9 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { gatherContext } from './complaintContext.js';
 import { assistComplaint } from './complaintAssistant.js';
+import { reviewSignature, normaliseNextAction } from './complaintRules.js';
+
+export { reviewSignature };
 
 // ---------------------------------------------------------------------------
 // The assistant's standing review of each complaint: where it stands, what the
@@ -19,19 +22,18 @@ const REVIEW_INSTRUCTION =
   '"recommended_action": the single next thing Greenco should do, and by when. In "steps": the next ' +
   'few steps in order. In "email": the email for that next step, ready to check and send — or, if ' +
   'nothing needs sending yet, the email to send if they miss their next deadline, and say so in ' +
-  '"caution". Use the facts and dates in the context only.';
-
-// What the review was written against. When this changes, it is out of date.
-export function reviewSignature(c) {
-  return [c.status, c.stage, c.state, c.acknowledged_on, c.responded_on, c.final_response_on,
-    c.response_due].map((v) => v ?? '').join('|');
-}
+  '"caution". Use the facts and dates in the context only. ALSO add a key "next_action": ' +
+  '{"type": one of "send_email" (the draft should go now), "escalate_stage2", "refer_ombudsman", ' +
+  '"record_acknowledgement" or "record_response" (an email or document on file shows they have, but ' +
+  'it is not recorded), "resolve", "wait" (nothing to do until a date), "by": "YYYY-MM-DD" or null}. ' +
+  'Recommend escalate/refer only when their procedure allows it now.';
 
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
   const ctx = await gatherContext(id);
   try {
-    const review = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION });
+    const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION });
+    const review = { ...raw, next_action: normaliseNextAction(raw.next_action) };
     await query(
       `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
               ai_review_error = NULL WHERE id = $1`,

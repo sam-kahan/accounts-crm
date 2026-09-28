@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, formatDate, todayISO, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const STAGE_LABEL = {
@@ -524,7 +524,7 @@ export default function Complaints() {
               <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
                 <strong>{em.subject || '(no subject)'}</strong>
                 <div className="muted" style={{ fontSize: 12 }}>
-                  {em.sender_name || em.sender_email} · {formatDate((em.received_at || '').slice(0, 10))}
+                  {em.sender_name || em.sender_email} · {formatDate(londonDay(em.received_at))}
                 </div>
                 {em.analysis?.summary && <div style={{ fontSize: 13, marginTop: 4 }}>{em.analysis.summary}</div>}
                 <div className="btn-row" style={{ marginTop: 8 }}>

@@ -79,7 +79,6 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   const lines = [];
   lines.push(`Organisation: ${complaint.org_name} (${rule.label})`);
   if (complaint.property) lines.push(`Property / account: ${complaint.property}`);
-  if (complaint.reference) lines.push(`Their reference: ${complaint.reference}`);
   if (complaint.our_reference) lines.push(`Our reference: ${complaint.our_reference}`);
   lines.push(`Complaint reference: ${complaint.ref_code}`);
   lines.push(`Subject: ${complaint.subject}`);
@@ -116,12 +115,17 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   if (complaint.nextAction) lines.push(`System-suggested next action: ${complaint.nextAction}`);
 
   lines.push('');
-  lines.push('Timeline (most recent first):');
+  // The timeline carries text taken from emails (automatic entries, their
+  // reference), so it is read as data like the emails themselves.
+  lines.push('Timeline (most recent first) and their reference:');
+  lines.push('<untrusted_content>');
+  if (complaint.reference) lines.push(`Their reference: ${complaint.reference}`);
   if (events?.length) {
     for (const e of events) lines.push(`- ${e.event_date} [${e.type}] ${e.note || ''}`.trim());
   } else {
     lines.push('- (no events logged)');
   }
+  lines.push('</untrusted_content>');
 
   lines.push('');
   lines.push('Emails logged against this complaint (most recent first):');
@@ -132,7 +136,7 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
       const when = em.received_at ? londonDateOf(new Date(em.received_at)) : '';
       lines.push(
         `- ${when} from ${em.sender_name || em.sender_email || 'unknown'} — ` +
-          `"${em.subject || '(no subject)'}": ${(em.body_preview || '').slice(0, 500)}`,
+          `"${em.subject || '(no subject)'}": ${(em.body_text || em.body_preview || '').slice(0, 4000)}`,
       );
     }
   } else {

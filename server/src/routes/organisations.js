@@ -240,6 +240,9 @@ router.put(
       [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
     );
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
+    // A linked complaint takes its type from the organisation (the type sets
+    // the defaults for anything the procedure doesn't state).
+    await query('UPDATE complaints SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);
     // Its open complaints are re-dated from the procedure as it now stands.
     const recalculated = await recomputeForOrganisation(req.params.id);
     res.json({ ...rows[0], recalculated });

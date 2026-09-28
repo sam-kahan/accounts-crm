@@ -401,6 +401,13 @@ export const REGIONS = [
 
 export const REGION_LABEL = Object.fromEntries(REGIONS.map((r) => [r.key, r.label]));
 
+// The UK calendar day of a timestamp (an email's arrival). Slicing the ISO
+// string gives the UTC day, which is a day early for anything 00:00–01:00 BST.
+export function londonDay(ts) {
+  if (!ts) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date(ts));
+}
+
 export function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));

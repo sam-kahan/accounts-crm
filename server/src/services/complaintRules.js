@@ -522,3 +522,22 @@ export function describeChanges(before, after) {
   }
   return out;
 }
+
+// What an AI review was written against. When this changes, the review is out
+// of date (the nightly job and the page both use it).
+export function reviewSignature(c) {
+  return [c.status, c.stage, c.state, c.acknowledged_on, c.responded_on, c.final_response_on,
+    c.response_due].map((v) => v ?? '').join('|');
+}
+
+// The one-click actions a review may recommend, each mapped to a button that
+// opens the same confirmation as doing it by hand.
+export const REVIEW_ACTIONS = [
+  'send_email', 'escalate_stage2', 'refer_ombudsman', 'record_acknowledgement',
+  'record_response', 'resolve', 'wait',
+];
+export function normaliseNextAction(a) {
+  if (!a || typeof a !== 'object' || !REVIEW_ACTIONS.includes(a.type)) return null;
+  const by = typeof a.by === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.by) ? a.by : null;
+  return { type: a.type, by };
+}

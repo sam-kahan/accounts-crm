@@ -626,11 +626,27 @@ router.post(
     if (on > todayISO()) throw new HttpError(400, 'That date is in the future');
     const subject = em.subject || '(no subject)';
 
-    await query(
+    // Once only: a double-click, or two people at once, can't record it twice.
+    const marked = await query(
       `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3
-        WHERE id = $1`,
+        WHERE id = $1 AND reviewed_at IS NULL`,
       [em.id, d.as, who(req)],
     );
+    if (!marked.rowCount) throw new HttpError(409, 'This email has already been dealt with.');
+    // Replacing a date already recorded is allowed, but never silently.
+    const replacing =
+      d.as === 'acknowledgement' && complaint.acknowledged_on && complaint.acknowledged_on !== on
+        ? `acknowledged: ${complaint.acknowledged_on} → ${on}`
+        : d.as === 'response' && complaint.responded_on && complaint.responded_on !== on
+          ? `responded: ${complaint.responded_on} → ${on}`
+          : null;
+    if (replacing) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         VALUES ($1,$2,'note',$3,$4)`,
+        [complaint.id, todayISO(), `Details corrected: ${replacing} (from the email "${subject}")`, who(req)],
+      );
+    }
     if (d.as === 'acknowledgement') {
       await query('UPDATE complaints SET acknowledged_on = $2 WHERE id = $1', [complaint.id, on]);
       await query(

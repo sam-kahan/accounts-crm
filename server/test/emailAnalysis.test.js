@@ -98,3 +98,13 @@ test('an email to the general inbox is kept for the AI to file', () => {
   );
   assert.deepEqual(m, { complaintId: null, method: 'inbox' });
 });
+
+test('an uncertain "not from them" is never filed away unseen (could be their acknowledgement)', () => {
+  const plan = planFromAnalysis(complaint(), analysis({ from_organisation: false, confidence: 'low' }), { today: TODAY });
+  assert.equal(plan.auto, false);
+});
+
+test('an uncertain "our own email" also waits for a person', () => {
+  const plan = planFromAnalysis(complaint(), analysis({ kind: 'our_email', confidence: 'low' }), { today: TODAY });
+  assert.equal(plan.auto, false);
+});

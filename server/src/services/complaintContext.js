@@ -6,6 +6,7 @@ import {
   computeOmbudsmanFrom,
   deriveStatus,
   procedureSteps,
+  reviewSignature,
 } from './complaintRules.js';
 import { ruleForComplaint } from './complaintDeadlines.js';
 import { listComplaintEmails } from './emailIngest.js';
@@ -25,6 +26,8 @@ export async function decorate(c) {
   return {
     ...c,
     ...derived,
+    // The review is current when nothing it was written against has moved.
+    ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature({ ...c, ...derived }),
     rule,
     ack_due: computeAckDue(c, rule),
     ombudsman_from: computeOmbudsmanFrom(c, rule),
