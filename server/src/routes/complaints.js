@@ -12,7 +12,7 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
@@ -136,6 +136,10 @@ router.post(
       configured: emailConfigured(), watching: w.mailboxes,
     };
     await setSetting('email_last_check', result).catch(() => {});
+    // Anything found in the past that automatic import hasn't dealt with yet
+    // (one query when there is nothing waiting). In the background: the check
+    // itself is answered now.
+    runAutoImport().catch((err) => console.error('[complaints] automatic import:', err.message));
     res.json({ ...result, inserted: r.inserted, matched: r.matched });
   }),
 );

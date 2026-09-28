@@ -73,7 +73,7 @@ export function unitOf(text) {
 }
 
 // Same postcode AND not two different flat/house numbers.
-function sameProperty(pa, pb) {
+export function sameProperty(pa, pb) {
   if (postcodeOf(pa) !== postcodeOf(pb)) return false;
   const ua = unitOf(pa);
   const ub = unitOf(pb);

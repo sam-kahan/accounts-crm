@@ -553,6 +553,12 @@ the page says how far each date can be trusted.
   re-read): every ombudsman we deal with normally needs a complaint within 12
   months, so older ones aren't worth bringing in. It only ever runs when a
   person presses it (or to finish one a restart interrupted).
+- **Automatic import carries on by itself** (`runAutoImport`): at start-up
+  (so a deploy part-way through doesn't stop it) and after each 5-minute
+  check. It links a found complaint certainly already on file (same
+  organisation, postcode and flat/house number), imports one the AI was sure
+  of, and leaves the rest for a person. A failed import isn't retried on its
+  own, so a failure never repeats a cost.
 - **The 5-minute watcher is cheap by rule.** It reads only mail newer than its
   last check. Mail with an organisation we have an open complaint with reaches
   the AI only if the subject or preview mentions a complaint (the word, a

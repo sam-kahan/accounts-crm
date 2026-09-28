@@ -8,7 +8,7 @@ import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf } from './orgMatch.js';
+import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf, sameProperty } from './orgMatch.js';
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
@@ -619,27 +619,59 @@ export async function resumeInterruptedScan() {
   return true;
 }
 
-// Switch automatic import on or off. Switching it on also imports the ones
-// already waiting that the AI was sure of and that aren't on file already.
+// Switch automatic import on or off. Switching it on also deals with the ones
+// already waiting (see runAutoImport).
 export async function setAutoImport(on, by) {
   await setSetting('past_auto_import', Boolean(on), by);
-  if (!on) return { imported: 0 };
-  const pending = (await query(`SELECT * FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at`)).rows;
+  if (!on) return { imported: 0, linked: 0 };
+  return runAutoImport(by || AUTO_SEARCH);
+}
+
+// With automatic import on, work through what is waiting:
+//   - a found complaint certainly already in the system (same organisation,
+//     same property: postcode and flat/house number) has its emails linked
+//     there, as the search itself would;
+//   - one the AI was sure of, and not on file, is imported (marked To check);
+//   - anything else waits for a person, as does one whose import already
+//     failed (it isn't retried on its own, so a failure never repeats a cost).
+// Runs at start-up (so a deploy part-way through carries on) and after each
+// 5-minute email check; with nothing waiting it is one query.
+let autoRunning = false;
+export async function runAutoImport(by = AUTO_SEARCH) {
+  if (autoRunning || !(await getSetting('past_auto_import'))) return { imported: 0, linked: 0 };
+  if (!config.ms.enabled || !config.anthropic.enabled) return { imported: 0, linked: 0 };
+  autoRunning = true;
   let imported = 0;
-  for (const c of pending) {
-    if (c.extracted?.confidence !== 'high') continue;
-    // eslint-disable-next-line no-await-in-loop
-    await serially(async () => {
-      const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
-      if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
-      const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
-      const orgs = (await query('SELECT id, name FROM organisations')).rows;
-      if (findExistingComplaint(complaints, orgs, c.extracted)) return; // left for a person to link
-      await importCandidate(c.id, by || AUTO_SEARCH);
-      imported += 1;
-    }).catch((err) => {
-      if (err.status !== 409) console.error(`[complaints] auto-import ${c.id} failed:`, err.message);
-    });
+  let linked = 0;
+  try {
+    const pending = (await query(
+      `SELECT * FROM complaint_import_candidates WHERE status = 'pending' AND error IS NULL ORDER BY first_at`,
+    )).rows;
+    for (const c of pending) {
+      // eslint-disable-next-line no-await-in-loop
+      await serially(async () => {
+        if (!(await getSetting('past_auto_import'))) return; // switched off part-way
+        const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
+        if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
+        const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+        const orgs = (await query('SELECT id, name FROM organisations')).rows;
+        const hit = findExistingComplaint(complaints, orgs, c.extracted);
+        if (hit) {
+          if (postcodeOf(c.extracted?.property) && postcodeOf(hit.property) && sameProperty(c.extracted.property, hit.property)) {
+            await linkCandidate(c.id, hit.id, AUTO_SEARCH);
+            linked += 1;
+          }
+          return; // a less certain match is left for a person to link
+        }
+        if (c.extracted?.confidence !== 'high') return;
+        await importCandidate(c.id, by);
+        imported += 1;
+      }).catch((err) => {
+        if (err.status !== 409) console.error(`[complaints] auto-import ${c.id} failed:`, err.message);
+      });
+    }
+  } finally {
+    autoRunning = false;
   }
-  return { imported };
+  return { imported, linked };
 }
