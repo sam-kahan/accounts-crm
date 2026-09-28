@@ -121,6 +121,7 @@ router.get(
     const seeCompanies = can(req.user, 'companies');
     const seeTasks = can(req.user, 'tasks');
     const seeCommission = can(req.user, 'commission');
+    const seeComplaints = can(req.user, 'complaints');
     const items = (await collectDueItems(days)).filter((i) =>
       i.type === 'task' ? seeTasks : seeCompanies,
     );
@@ -168,7 +169,26 @@ router.get(
       `)
     ).rows[0];
 
+    // Complaints at a glance: open, and how many need chasing or have an
+    // email waiting for a person — worked out by the same rules as the page.
+    let complaints = null;
+    if (seeComplaints) {
+      const { rows } = await query(
+        `SELECT c.*, to_jsonb(o) AS org FROM complaints c
+           LEFT JOIN organisations o ON o.id = c.organisation_id WHERE c.state = 'open'`,
+      );
+      const chasing = rows.filter((c) => deriveStatus(c, effectiveRule(c.org, c.org_type)).needs_chasing).length;
+      const waiting = (
+        await query(
+          `SELECT count(*)::int AS n FROM complaint_emails
+            WHERE direction <> 'outbound' AND reviewed_at IS NULL`,
+        )
+      ).rows[0].n;
+      complaints = { open: rows.length, chasing, waiting };
+    }
+
     res.json({
+      complaints,
       window_days: days,
       counts: {
         companies: Number(counts.companies),

@@ -19,8 +19,44 @@ function StatusBadge({ c }) {
   return <span className="badge amber">{c.label}</span>;
 }
 
+// Map the AI's parsed import into the review form's initial values.
+function toInitial(p) {
+  const clean = (v) => v || '';
+  return {
+    org_name: clean(p.org_name),
+    org_type: p.org_type || 'council',
+    subject: clean(p.subject),
+    category: clean(p.category),
+    property: clean(p.property),
+    reference: clean(p.reference),
+    our_reference: clean(p.our_reference),
+    channel: p.channel || 'email',
+    raised_on: p.raised_on || todayISO(),
+    acknowledged_on: clean(p.acknowledged_on),
+    responded_on: clean(p.responded_on),
+    stage: p.stage || 'stage_1',
+    description: clean(p.description),
+    _notes: [p.confidence ? `Confidence: ${p.confidence}.` : '', p.notes || ''].filter(Boolean).join(' '),
+  };
+}
+
+// Match a name the AI read to a saved organisation, through the usual noise
+// (Ltd/Limited, punctuation, "the"). Only an exact match after cleaning counts —
+// a half-right guess would apply another body's procedure.
+function orgKey(name) {
+  return String(name || '').toLowerCase()
+    .replace(/&/g, ' and ').replace(/\blimited\b/g, 'ltd').replace(/\bthe\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function matchOrg(orgs, name) {
+  const k = orgKey(name);
+  if (!k) return null;
+  return orgs.find((o) => orgKey(o.name) === k) || null;
+}
+
 function NewComplaintModal({
   orgs: initialOrgs, researchEnabled, onClose, onCreated, initial, importMode, importNotes,
+  aiEnabled, fromEmailId,
 }) {
   const today = todayISO();
   const [orgs, setOrgs] = useState(initialOrgs);
@@ -46,6 +82,41 @@ function NewComplaintModal({
   const [error, setError] = useState(null);
   const [researching, setResearching] = useState(false);
   const [note, setNote] = useState(null);
+  // Filled in by the AI from the complaint itself.
+  const [filled, setFilled] = useState(false);
+  const [fillNotes, setFillNotes] = useState(null);
+  const [reading, setReading] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+
+  async function fillFrom(src) {
+    setReading(true);
+    setError(null);
+    try {
+      const p = await api.complaints.parseImport(src);
+      const org = matchOrg(orgs, p.org_name);
+      setForm((f) => ({
+        ...f,
+        ...Object.fromEntries(Object.entries(toInitial(p)).filter(([k, v]) => k !== '_notes' && v !== '')),
+        organisation_id: org ? org.id : '',
+        org_name: org ? org.name : p.org_name || f.org_name,
+        org_type: org ? org.type : p.org_type || f.org_type,
+      }));
+      setFilled(true);
+      setFillNotes(
+        [org ? `Matched to “${org.name}”, already saved.` : p.org_name ? `“${p.org_name}” isn’t saved yet. Research it below so the deadlines follow their procedure.` : '',
+          p.confidence ? `Confidence: ${p.confidence}.` : '', p.notes || ''].filter(Boolean).join(' '),
+      );
+      setPasting(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReading(false);
+    }
+  }
+  useEffect(() => {
+    if (fromEmailId) fillFrom({ emailId: fromEmailId });
+  }, [fromEmailId]);
 
   function pickOrg(id) {
     const org = orgs.find((o) => o.id === id);
@@ -99,7 +170,10 @@ function NewComplaintModal({
         acknowledged_on: form.acknowledged_on || null,
         responded_on: form.responded_on || null,
         stage_started_on: form.stage !== 'stage_1' ? form.stage_started_on || null : null,
-        imported: Boolean(importMode),
+        // Brought in from before (rather than made today) when it's past Stage 1
+        // or already has dates from them.
+        imported: Boolean(importMode) ||
+          (filled && (form.stage !== 'stage_1' || Boolean(form.acknowledged_on || form.responded_on))),
       });
       onCreated(created);
     } catch (err) {
@@ -110,6 +184,43 @@ function NewComplaintModal({
 
   return (
     <Modal title={importMode ? 'Review imported complaint' : 'Log a complaint'} onClose={onClose}>
+      {aiEnabled && !importMode && (
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div style={{ fontWeight: 600 }}>Fill this in from the complaint itself</div>
+          <div className="muted" style={{ fontSize: 13, margin: '4px 0 10px' }}>
+            Upload your complaint email or letter (PDF, Word or photo), or paste it. The AI fills in
+            the form for you to check.
+          </div>
+          <div className="btn-row">
+            <label className="btn-navy btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+              {reading ? 'Reading…' : '📄 Upload the email or letter'}
+              <input type="file" style={{ display: 'none' }} disabled={reading}
+                accept=".pdf,.doc,.docx,.txt,.eml,image/*"
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) fillFrom({ file: f }); }} />
+            </label>
+            <button type="button" className="btn btn-sm" onClick={() => setPasting((v) => !v)} disabled={reading}>
+              Paste it instead
+            </button>
+          </div>
+          {pasting && (
+            <div style={{ marginTop: 10 }}>
+              <textarea rows={6} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste the complaint email or letter here…" style={{ width: '100%' }} />
+              <button type="button" className="btn-primary btn-sm" style={{ marginTop: 6 }}
+                disabled={reading || pasteText.trim().length < 20}
+                onClick={() => fillFrom({ text: pasteText })}>
+                {reading ? 'Reading…' : 'Fill in the form'}
+              </button>
+            </div>
+          )}
+          {filled && (
+            <div className="inline-note" style={{ marginTop: 10 }}>
+              <strong>Filled in from the complaint.</strong> Check the organisation, the date it was
+              made and any dates from them before saving. {fillNotes}
+            </div>
+          )}
+        </div>
+      )}
       {importMode && (
         <div className="inline-note" style={{ marginBottom: 14 }}>
           The AI worked these out from what you pasted. <strong>check the date raised, stage and
@@ -233,7 +344,7 @@ function NewComplaintModal({
               onChange={(e) => setForm({ ...form, reference: e.target.value })}
             />
           </label>
-          {importMode && (
+          {(importMode || filled) && (
             <>
               <label className="field">
                 <span className="lbl">Current stage</span>
@@ -277,64 +388,6 @@ function NewComplaintModal({
           </button>
         </div>
       </form>
-    </Modal>
-  );
-}
-
-// Paste an existing complaint (email thread / notes); the AI extracts the
-// fields and hands them to the review form.
-function ImportModal({ onClose, onParsed }) {
-  const [text, setText] = useState('');
-  const [hint, setHint] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-
-  async function analyse() {
-    setBusy(true);
-    setError(null);
-    try {
-      const parsed = await api.complaints.parseImport(text, hint);
-      onParsed(parsed);
-    } catch (e) {
-      setError(e.message);
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      title="Import an existing complaint"
-      onClose={onClose}
-      footer={
-        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={analyse} disabled={busy || text.trim().length < 20}>
-            {busy ? 'Analysing…' : 'Analyse & pre-fill'}
-          </button>
-        </div>
-      }
-    >
-      {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
-      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-        Paste the email thread, letters or notes for a complaint you started before using this
-        system. The AI will work out the organisation, when it was raised, any references, and what
-        stage you’re at, then show it for you to check before saving.
-      </p>
-      <label className="field">
-        <span className="lbl">Anything to note? (optional)</span>
-        <input value={hint} onChange={(e) => setHint(e.target.value)}
-          placeholder="e.g. This is Salford Council, about a missed repair" />
-      </label>
-      <label className="field">
-        <span className="lbl">Paste the complaint material *</span>
-        <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)}
-          placeholder="Paste emails / letters / notes here…" />
-        {text.trim().length < 20 && (
-          <span className="muted" style={{ fontSize: 12 }}>
-            Paste at least 20 characters to analyse.
-          </span>
-        )}
-      </label>
     </Modal>
   );
 }
@@ -406,8 +459,8 @@ export default function Complaints() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
   const [showNew, setShowNew] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [importInitial, setImportInitial] = useState(null);
+  // An email from the general inbox being turned into a new complaint.
+  const [newFromEmail, setNewFromEmail] = useState(null);
   const [showOverdue, setShowOverdue] = useState(false);
   const [err, setErr] = useState(null);
   const [inbox, setInbox] = useState(null);
@@ -451,27 +504,6 @@ export default function Complaints() {
     api.complaints.emailConfig().then((r) => setInbox(r.inbox)).catch(() => {});
     loadUnfiled();
   }, []);
-
-  // Map the AI's parsed import into the review form's initial values.
-  function toInitial(p) {
-    const clean = (v) => v || '';
-    return {
-      org_name: clean(p.org_name),
-      org_type: p.org_type || 'council',
-      subject: clean(p.subject),
-      category: clean(p.category),
-      property: clean(p.property),
-      reference: clean(p.reference),
-      our_reference: clean(p.our_reference),
-      channel: p.channel || 'email',
-      raised_on: p.raised_on || todayISO(),
-      acknowledged_on: clean(p.acknowledged_on),
-      responded_on: clean(p.responded_on),
-      stage: p.stage || 'stage_1',
-      description: clean(p.description),
-      _notes: [p.confidence ? `Confidence: ${p.confidence}.` : '', p.notes || ''].filter(Boolean).join(' '),
-    };
-  }
 
   if (!items) {
     if (err) {
@@ -538,6 +570,11 @@ export default function Complaints() {
                     onClick={() => fileEmail(em.id, document.getElementById(`file-${em.id}`).value)}>
                     File it
                   </button>
+                  {aiEnabled && (
+                    <button className="btn btn-sm" onClick={() => setNewFromEmail(em.id)}>
+                      It’s a new complaint: start it
+                    </button>
+                  )}
                   <button className="btn-ghost btn-sm" onClick={() => dismissEmail(em.id)}>Not about a complaint</button>
                 </div>
               </div>
@@ -579,9 +616,6 @@ export default function Complaints() {
             <button className="btn-navy btn-sm" onClick={() => setShowOverdue(true)}>
               ✨ Draft overdue chasers
             </button>
-          )}
-          {aiEnabled && (
-            <button className="btn btn-sm" onClick={() => setShowImport(true)}>Import existing</button>
           )}
           <button className="btn-primary" onClick={() => setShowNew(true)}>+ Log complaint</button>
         </div>
@@ -645,6 +679,7 @@ export default function Complaints() {
         <NewComplaintModal
           orgs={orgs}
           researchEnabled={researchEnabled}
+          aiEnabled={aiEnabled}
           onClose={() => setShowNew(false)}
           onCreated={(c) => {
             setShowNew(false);
@@ -653,26 +688,22 @@ export default function Complaints() {
         />
       )}
 
-      {showImport && (
-        <ImportModal
-          onClose={() => setShowImport(false)}
-          onParsed={(p) => {
-            setShowImport(false);
-            setImportInitial(toInitial(p));
-          }}
-        />
-      )}
-
-      {importInitial && (
+      {newFromEmail && (
         <NewComplaintModal
           orgs={orgs}
           researchEnabled={researchEnabled}
-          importMode
-          importNotes={importInitial._notes}
-          initial={importInitial}
-          onClose={() => setImportInitial(null)}
-          onCreated={(c) => {
-            setImportInitial(null);
+          aiEnabled={aiEnabled}
+          fromEmailId={newFromEmail}
+          onClose={() => setNewFromEmail(null)}
+          onCreated={async (c) => {
+            // The email the complaint was started from is filed on it.
+            const emailId = newFromEmail;
+            setNewFromEmail(null);
+            try {
+              await api.complaints.fileEmail(emailId, c.id);
+            } catch {
+              /* it stays in "Emails to file" and can be filed from there */
+            }
             navigate(`/complaints/${c.id}`);
           }}
         />

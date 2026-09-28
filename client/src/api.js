@@ -313,8 +313,19 @@ export const api = {
       request(`/complaints/${id}/send-email`, { method: 'POST', body: JSON.stringify(data) }),
     checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
     referralPack: (id) => request(`/complaints/${id}/referral-pack`),
-    parseImport: (text, hint) =>
-      request('/complaints/import/parse', { method: 'POST', body: JSON.stringify({ text, hint }) }),
+    // Fill the log form from the complaint itself: pasted text, an uploaded
+    // email/letter, or an email waiting to be filed. Saves nothing.
+    parseImport: ({ text, file, emailId } = {}) => {
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        return request('/complaints/import/parse', { method: 'POST', body: fd });
+      }
+      return request('/complaints/import/parse', {
+        method: 'POST',
+        body: JSON.stringify({ text: text || null, email_id: emailId || null }),
+      });
+    },
     overdueDrafts: () => request('/complaints/chase/overdue', { method: 'POST' }),
     attachments: (id, files) => {
       const fd = new FormData();

@@ -161,7 +161,7 @@ export default function Dashboard() {
     return <div className="spinner">Loading dashboard…</div>;
   }
 
-  const { counts, overdue, upcoming, mailer, commission } = data;
+  const { counts, overdue, upcoming, mailer, commission, complaints } = data;
 
   return (
     <>
@@ -178,6 +178,16 @@ export default function Dashboard() {
           <div className="label">Overdue</div>
           <div className="value">{counts.overdue}</div>
         </div>
+        {complaints && (
+          <Link to="/complaints" className={`stat ${complaints.chasing || complaints.waiting ? 'alert' : ''}`}>
+            <div className="label">Complaints</div>
+            <div className="value">{complaints.open}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              open{complaints.chasing ? ` · ${complaints.chasing} need chasing` : ''}
+              {complaints.waiting ? ` · ${complaints.waiting} email(s) to check` : ''}
+            </div>
+          </Link>
+        )}
         {commission && (
           <Link
             // Commission left over from a month already gone is the one worth

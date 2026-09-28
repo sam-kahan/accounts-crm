@@ -772,7 +772,11 @@ export default function ComplaintDetail() {
         </div>
       </div>
 
-      {/* AI assistant */}
+      {/* Less-used tools, out of the way until wanted */}
+      <details style={{ marginBottom: 20 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, padding: '8px 0' }}>
+          More: ask the assistant something specific, or build an ombudsman referral pack
+        </summary>
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-head">
           <h2>Ask the assistant</h2>
@@ -931,6 +935,7 @@ export default function ComplaintDetail() {
           )}
         </div>
       </div>
+      </details>
 
       {action && (
         <DatedActionModal action={action} onClose={() => setAction(null)} onSubmit={recordAction} />
