@@ -19,7 +19,7 @@ import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow } 
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
-import { refreshReview, scheduleReview } from '../services/complaintReview.js';
+import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import {
@@ -1033,7 +1033,10 @@ router.post(
   '/:id/review',
   asyncHandler(async (req, res) => {
     if (!config.anthropic.enabled) throw new HttpError(503, 'The AI assistant is not configured.');
+    // Written now, so one already queued would only repeat it (and be paid twice).
+    cancelScheduledReview(req.params.id);
     await refreshReview(req.params.id);
+    cancelScheduledReview(req.params.id);
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     res.json(await decorate(rows[0]));
   }),

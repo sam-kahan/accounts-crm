@@ -212,6 +212,30 @@ export default function ComplaintDetail() {
     copyText(em.body);
     flashCopied('email');
   }
+  // Sent from Outlook (and perhaps without copying this complaint's address
+  // in): record it on the timeline as sent today, then have the next step
+  // worked out again, so it moves on instead of repeating itself.
+  const [markingSent, setMarkingSent] = useState(false);
+  async function markSent(em) {
+    const on = prompt('The date you sent it (YYYY-MM-DD):', todayISO());
+    if (!on) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(on) || on > todayISO()) { setMsg('Enter the date as YYYY-MM-DD, not in the future.'); return; }
+    setMarkingSent(true);
+    setMsg(null);
+    try {
+      await api.complaints.addEvent(id, {
+        event_date: on, type: 'chased',
+        note: `Sent the email "${em.subject || 'the drafted email'}" from Outlook.`,
+      });
+      setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
+      setMsg('Recorded as sent. The next step has been worked out again.');
+    } catch (e) {
+      setMsg(e.message);
+      await load();
+    } finally {
+      setMarkingSent(false);
+    }
+  }
   async function saveDraftToTimeline() {
     if (!ai?.email) return;
     try {
@@ -635,6 +659,9 @@ export default function ComplaintDetail() {
                         </button>
                         <a className="btn btn-sm" href="#ai-email">See the email</a>
                         <button className="btn btn-sm" onClick={() => openSend(draft)}>Send from here…</button>
+                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(draft)}>
+                          {markingSent ? 'Updating…' : '✓ I’ve sent it'}
+                        </button>
                       </>
                     )}
                     {btn}
@@ -784,6 +811,10 @@ export default function ComplaintDetail() {
                           {copied === 'email' ? '✓ Copied' : 'Copy the email'}
                         </button>
                         <button className="btn btn-sm" onClick={() => openSend(em)}>Or send it from here…</button>
+                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(em)}
+                          title="You sent it from Outlook: it's recorded on the timeline and the next step is worked out again">
+                          {markingSent ? 'Updating the next step…' : '✓ I’ve sent it'}
+                        </button>
                       </div>
                     </div>
                   );

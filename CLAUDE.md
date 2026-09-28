@@ -572,6 +572,16 @@ the page says how far each date can be trusted.
   complaint using the address, on the organisation ("Email bounced"), in the
   Complaints page card and the dashboard tile until someone presses "Looked
   into it" with what they found.
+- **The next step moves on once it is done.** Greenco's own email arriving on
+  a complaint (copied in, or forwarded afterwards) is recorded as a `chased`
+  ("Chased / sent") step dated the day it was sent, and the review is told
+  to look at what Greenco last did before recommending anything: a step
+  already taken becomes "wait until <date>" with the follow-up kept ready
+  (`email_now: false`). **I've sent it** on the review's email records the
+  step by hand (sent without copying the complaint in) and refreshes the
+  review at once; `POST /:id/review` cancels any queued review so it is paid
+  for once. The review's `headline` is the one-line instruction the page and
+  the list lead with.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)

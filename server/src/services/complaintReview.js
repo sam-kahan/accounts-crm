@@ -31,7 +31,13 @@ const REVIEW_INSTRUCTION =
   '{"type": one of "send_email" (the draft should go now), "escalate_stage2", "refer_ombudsman", ' +
   '"record_acknowledgement" or "record_response" (an email or document on file shows they have, but ' +
   'it is not recorded), "resolve", "wait" (nothing to do until a date), "by": "YYYY-MM-DD" or null}. ' +
-  'Recommend escalate/refer only when their procedure allows it now.';
+  'Recommend escalate/refer only when their procedure allows it now. ' +
+  'BEFORE recommending anything, look at what Greenco has most recently done — its latest emails and ' +
+  'the "Chased / sent" [chased] entries on the timeline. If Greenco has already done the step you ' +
+  'would recommend (sent the chaser, asked for Stage 2, sent what they asked for), do NOT recommend it ' +
+  'again: the next step is to wait for their reply, so say so in "headline" with the date to wait ' +
+  'until (a reasonable reply date, or their procedure\'s deadline), set next_action to "wait", and ' +
+  'make "email" the follow-up to send only if they don\'t reply by then, with "email_now": false.';
 
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;

@@ -228,7 +228,11 @@ async function applyEmail(em, analysis, skipped = []) {
     const set = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
     await query(`UPDATE ${table} SET ${set} WHERE id = $1`, [target.id, ...cols.map((c) => plan.changes[c])]);
   }
-  const type = plan.event?.type || 'note';
+  // An email Greenco sent (copied in, or forwarded here afterwards) is a step
+  // taken — a chaser, a Stage 2 request, the information they asked for — so
+  // it goes on the timeline as one, dated the day it was sent, and the review
+  // that follows knows it has been done.
+  const type = plan.event?.type || (analysis?.kind === 'our_email' ? 'chased' : 'note');
   const recorded = plan.event
     ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
     : '';
