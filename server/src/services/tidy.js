@@ -4,6 +4,7 @@ import { sameIssue, matchOrgName, sameOrgName } from './orgMatch.js';
 import { recomputeDeadlines, recomputeForOrganisation, recomputePartyDeadlines } from './complaintDeadlines.js';
 import { overallState } from './complaintParties.js';
 import { scheduleReview } from './complaintReview.js';
+import { dropDigitSlips } from './accountNumbers.js';
 
 // ---------------------------------------------------------------------------
 // Keeping the records tidy. Complaints and organisations arrive from several
@@ -244,8 +245,8 @@ export async function mergeComplaints(keepId, mergeId, by) {
       if (!keep[col] && gone[col]) fill[col] = gone[col];
     }
     // The account numbers are the issue's, whichever organisation quoted them.
-    const accounts = [...new Set([...(keep.account_numbers || []), ...(gone.account_numbers || [])])];
-    if (accounts.length !== (keep.account_numbers || []).length) fill.account_numbers = accounts;
+    const accounts = dropDigitSlips([...new Set([...(keep.account_numbers || []), ...(gone.account_numbers || [])])]).kept;
+    if (accounts.join('|') !== (keep.account_numbers || []).join('|')) fill.account_numbers = accounts;
     if (gone.description && gone.description !== keep.description) {
       fill.description = [keep.description, `From ${gone.ref_code}: ${gone.description}`].filter(Boolean).join('\n\n');
     }

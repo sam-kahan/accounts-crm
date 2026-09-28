@@ -15,7 +15,7 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow } from '../services/accountNumbers.js';
+import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
@@ -1236,7 +1236,7 @@ router.put(
       org_type: orgType,
       reference: d.reference,
       our_reference: d.our_reference,
-      account_numbers: d.account_numbers,
+      account_numbers: d.account_numbers && dropDigitSlips(d.account_numbers).kept,
       property: d.property,
       subject: d.subject,
       category: d.category,

@@ -188,6 +188,17 @@ app.listen(config.port, () => {
     .then(() => searchAccountEmails().catch((err) => console.error('  Account search:', err.message)))
     .then(() => runAutoImport())
     .catch((err) => console.error('  Automatic import could not carry on:', err.message));
+  // Emails left as "new" that arrived before their complaint was made, and
+  // account numbers kept beside the same number with a digit missing: both
+  // tidied (no AI), with the timeline saying what was removed.
+  import('./services/complaintEmailProcessor.js')
+    .then(({ settleEarlierEmails }) => settleEarlierEmails())
+    .then((n) => n && console.log(`  Earlier emails marked as background: ${n}`))
+    .catch((err) => console.error('  Earlier emails:', err.message));
+  import('./services/accountNumbers.js')
+    .then(({ removeDigitSlips }) => removeDigitSlips())
+    .then((n) => n && console.log(`  Mistyped account numbers removed on ${n} complaint(s)`))
+    .catch((err) => console.error('  Mistyped account numbers:', err.message));
   // Documents saved before hashes were kept: hashed so duplicates show once
   // (reading files only; no AI).
   import('./services/attachments.js')

@@ -694,6 +694,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-28 — emails from before a complaint aren't "new"; mistyped account numbers dropped
+- **An email that arrived before its complaint was made is background**, not a
+  reply: `applyEmail` marks it correspondence (`reviewed_by` "Automatic (arrived
+  before the complaint was made)") instead of leaving it under "New emails to
+  review", and it can't set "Looks resolved". `settleEarlierEmails()` clears the
+  ones already stuck (start-up, no AI).
+- **A re-check marks every email it read as dealt with** (only when it could
+  act: not on low confidence or more than one organisation); the ids go in
+  `last_recheck.reviewed_emails` so Undo makes them new again.
+- **An account number that is another with one character missing is dropped**
+  (`accountNumbers.js#isDigitSlip` / `dropDigitSlips`, 6+ characters, the full
+  one kept): applied by `cleanAccountNumbers`, create, Edit details, merge,
+  backfill and re-check, with a timeline note ("Account number A4237652
+  removed: it is A42737652 with a digit missing."). `removeDigitSlips()` tidies
+  existing complaints at start-up.
+
 ### 2026-09-28 — two organisations on one complaint; every reference searched; re-check; bounces
 - **A complaint can be against more than one organisation** (LCS and British
   Gas), each with its own reference, procedure, deadlines and steps, sharing

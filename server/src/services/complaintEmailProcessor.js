@@ -202,6 +202,22 @@ export async function processEmail(emailId) {
 // Write the timeline entry for an email and, when the analysis makes it
 // clear-cut, record the step it represents — keeping the values it replaced so
 // Undo can put them back exactly.
+const EARLIER_BY = 'Automatic (arrived before the complaint was made)';
+
+// Emails already waiting as "new" that arrived before their complaint was
+// made: background, not replies, so marked as correspondence (no AI; runs at
+// start-up, and is harmless to run again).
+export async function settleEarlierEmails() {
+  const r = await query(
+    `UPDATE complaint_emails e SET reviewed_at = now(), reviewed_as = 'correspondence', reviewed_by = $1
+       FROM complaints c
+      WHERE e.complaint_id = c.id AND e.reviewed_at IS NULL AND e.direction <> 'outbound'
+        AND (e.received_at AT TIME ZONE 'Europe/London')::date < c.raised_on`,
+    [EARLIER_BY],
+  );
+  return r.rowCount;
+}
+
 async function applyEmail(em, analysis, skipped = []) {
   const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [em.complaint_id])).rows[0];
   const arrived = londonDateOf(new Date(em.received_at));
@@ -260,7 +276,9 @@ async function applyEmail(em, analysis, skipped = []) {
   // It says it's been put right: flagged "Looks resolved" for a person to
   // confirm (never closed by itself), on whichever track it is about.
   const resolved = resolutionSuggestion(analysis, { arrived });
-  if (resolved && trackOpen(target)) {
+  // (An email from before the complaint was made can't be saying it's resolved.)
+  const beforeComplaint = Boolean(complaint.raised_on && arrived < complaint.raised_on);
+  if (resolved && trackOpen(target) && !beforeComplaint) {
     await query('UPDATE complaints SET resolution_suggested = $2 WHERE id = $1', [
       complaint.id,
       JSON.stringify({
@@ -279,6 +297,23 @@ async function applyEmail(em, analysis, skipped = []) {
         AUTO_BY,
       ],
     );
+  }
+
+  if (!plan.auto && beforeComplaint) {
+    // It arrived before the complaint was made (found later by its account
+    // number, say): background to the complaint, not a reply to it, so it is
+    // never left waiting as "new" for a person to review.
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1,$2,'note',$3,$4)`,
+      [complaint.id, noteDate, `${kind} from ${who}${summary}${skippedNote}. Kept as background: it arrived before the complaint was made.`, AUTO_BY],
+    );
+    await query(
+      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = 'correspondence', reviewed_by = $2
+        WHERE id = $1 AND reviewed_at IS NULL`,
+      [em.id, EARLIER_BY],
+    );
+    return;
   }
 
   if (!plan.auto) {

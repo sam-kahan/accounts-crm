@@ -5,7 +5,7 @@ import { ukDate, trackOpen } from './complaintRules.js';
 import { overallState } from './complaintParties.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { reconstructComplaint } from './complaintReconstruct.js';
-import { cleanAccountNumbers, searchComplaintEmails, withSearchLock } from './accountNumbers.js';
+import { cleanAccountNumbers, dropDigitSlips, slipNote, searchComplaintEmails, withSearchLock } from './accountNumbers.js';
 import { getSetting, setSetting } from './settings.js';
 
 // ---------------------------------------------------------------------------
@@ -162,10 +162,10 @@ async function emailSignature(id) {
 
 async function emailsOf(id) {
   return (await query(
-    `SELECT message_id, graph_id, subject, sender_name, sender_email, to_addresses, body_text, body_preview, received_at
+    `SELECT id, message_id, graph_id, subject, sender_name, sender_email, to_addresses, body_text, body_preview, received_at
        FROM complaint_emails WHERE complaint_id = $1 ORDER BY received_at`, [id],
   )).rows.map((e) => ({
-    messageId: e.message_id, graphId: e.graph_id, subject: e.subject, senderName: e.sender_name,
+    id: e.id, messageId: e.message_id, graphId: e.graph_id, subject: e.subject, senderName: e.sender_name,
     senderEmail: e.sender_email, toAddresses: e.to_addresses || [], bodyText: e.body_text,
     bodyPreview: e.body_preview, receivedAt: e.received_at,
   }));
@@ -220,11 +220,26 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
 
   // Account numbers the emails give that weren't on file: kept, and searched
   // for too. If that finds more emails, they are read once more with the rest.
+  // A number that is one on file with a digit missing (or the other way
+  // round) is the same account mistyped: the full one is kept, never both.
   const known = new Set((c.account_numbers || []).map((a) => a.toUpperCase().replace(/[^A-Z0-9]/g, '')));
-  const fresh = cleanAccountNumbers(x.account_numbers).filter((a) => !known.has(a.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+  const read = cleanAccountNumbers(x.account_numbers).filter((a) => !known.has(a.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+  const { kept, removed } = dropDigitSlips([...(c.account_numbers || []), ...read]);
+  const accounts = kept.slice(0, 6);
+  const fresh = read.filter((a) => accounts.includes(a));
+  const dropped = removed.filter((r) => (c.account_numbers || []).includes(r.value));
+  if (dropped.length) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [id, todayISO(), slipNote(dropped), by],
+    );
+  }
   let added = s1.added || 0;
+  if (dropped.length && !fresh.length) {
+    await query('UPDATE complaints SET account_numbers = $2 WHERE id = $1', [id, accounts]);
+    c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
+  }
   if (fresh.length) {
-    const accounts = [...(c.account_numbers || []), ...fresh].slice(0, 6);
     await query('UPDATE complaints SET account_numbers = $2 WHERE id = $1', [id, accounts]);
     c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
     const s2 = config.ms.enabled
@@ -264,6 +279,20 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
       (cols.length ? `Changed: ${plan.notes.join('; ')}.` : plan.skip ? `Not changed: ${plan.skip}.` : 'Already right.') +
       (plan.differs.length ? ` Please check: ${plan.differs.join('; ')}.` : '') +
       (x.uncertain?.length ? ` Unclear in the emails: ${x.uncertain.slice(0, 4).join('; ')}.` : '');
+    // Every email it read has now been taken into account, so none of them
+    // is left sitting as "new" for a person to review. Not when it couldn't
+    // act (low confidence, more than one organisation): then those emails
+    // still need a person's reading.
+    let readIds = [];
+    if (!plan.skip) {
+      readIds = (await client.query(
+        `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = 'correspondence', reviewed_by = $3
+          WHERE complaint_id = $1 AND id = ANY($2::uuid[]) AND reviewed_at IS NULL AND direction <> 'outbound'
+          RETURNING id`,
+        [id, msgs.map((m) => m.id), `${by} (read with all its emails)`],
+      )).rows.map((r) => r.id);
+      if (readIds.length) text += ` ${readIds.length} new email${readIds.length === 1 ? '' : 's'} read and marked as dealt with.`;
+    }
     const flag = cols.length > 0 || plan.differs.length > 0;
     // The change, its timeline entry and its Undo record: all or nothing, so a
     // change is never left standing without the record that undoes it.
@@ -296,7 +325,7 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
         cols.length
           ? JSON.stringify({
             at: new Date().toISOString(), by, before, after: plan.changes,
-            before_deadlines: beforeDeadlines, event_id: ev.rows[0].id,
+            before_deadlines: beforeDeadlines, event_id: ev.rows[0].id, reviewed_emails: readIds,
           })
           : null,
         flag,
@@ -350,6 +379,15 @@ export async function undoRecheck(id, by) {
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
     [id, todayISO(), `Changes from the re-check on ${londonDateOf(new Date(r.at))} undone (${cols.map((k) => `${k.replace(/_/g, ' ')} back to ${r.before[k] ?? 'blank'}`).join('; ')}).`, by],
   );
+  // The emails it marked as dealt with are new again: what they said is no
+  // longer recorded, so a person should see them.
+  if (Array.isArray(r.reviewed_emails) && r.reviewed_emails.length) {
+    await query(
+      `UPDATE complaint_emails SET reviewed_at = NULL, reviewed_as = NULL, reviewed_by = NULL
+        WHERE complaint_id = $1 AND id = ANY($2::uuid[]) AND reviewed_by LIKE '%(read with all its emails)'`,
+      [id, r.reviewed_emails],
+    );
+  }
   await query('UPDATE complaints SET last_recheck = NULL WHERE id = $1', [id]);
   await recomputeDeadlines(id);
   const { scheduleReview } = await import('./complaintReview.js');

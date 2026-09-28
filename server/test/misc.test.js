@@ -44,3 +44,20 @@ test('every email sent to someone outside copies in utilities@ (once)', () => {
   // already a recipient: not added twice
   assert.deepEqual(withExternalCc(['Utilities@greenco.co.uk'], []), []);
 });
+
+import { isDigitSlip, dropDigitSlips, cleanAccountNumbers, slipNote } from '../src/services/accountNumbers.js';
+
+test('an account number with a digit missing is the same account mistyped, and is dropped', () => {
+  assert.equal(isDigitSlip('A4237652', 'A42737652'), true);
+  assert.equal(isDigitSlip('A4237652', 'A42737611'), false);
+  assert.equal(isDigitSlip('A42737652', 'A4237652'), false); // the full one is never the slip
+  assert.equal(isDigitSlip('8500 1234 567', '8500-1234-5678'), true); // separators don't matter
+  assert.equal(isDigitSlip('12345', '123456'), false); // too short to be sure
+  const { kept, removed } = dropDigitSlips(['A4237652', 'A42737611', 'A42737652']);
+  assert.deepEqual(kept, ['A42737611', 'A42737652']);
+  assert.deepEqual(removed, [{ value: 'A4237652', of: 'A42737652' }]);
+  assert.equal(slipNote(removed), 'Account number A4237652 removed: it is A42737652 with a digit missing.');
+  assert.deepEqual(cleanAccountNumbers(['A42737652', 'A4237652']), ['A42737652']);
+  // Two genuinely different accounts are both kept.
+  assert.deepEqual(dropDigitSlips(['A42737611', 'A42737652']).kept, ['A42737611', 'A42737652']);
+});

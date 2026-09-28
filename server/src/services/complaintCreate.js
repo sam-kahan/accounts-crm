@@ -1,6 +1,7 @@
 import { query, pool } from '../db/pool.js';
 import { HttpError } from '../lib/http.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
+import { dropDigitSlips } from './accountNumbers.js';
 
 // ---------------------------------------------------------------------------
 // Creating a complaint — one definition, used by the Log form, by a complaint
@@ -59,8 +60,8 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           d.acknowledged_on || null, d.responded_on || null, d.imported || false,
           d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
           d.final_response_on || null,
-          (Array.isArray(d.account_numbers) ? d.account_numbers : [])
-            .map((a) => String(a || '').trim().slice(0, 40)).filter(Boolean).slice(0, 6),
+          dropDigitSlips((Array.isArray(d.account_numbers) ? d.account_numbers : [])
+            .map((a) => String(a || '').trim().slice(0, 40)).filter(Boolean)).kept.slice(0, 6),
         ],
       );
       await client.query(
