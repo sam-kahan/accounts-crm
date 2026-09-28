@@ -582,6 +582,24 @@ the page says how far each date can be trusted.
   review at once; `POST /:id/review` cancels any queued review so it is paid
   for once. The review's `headline` is the one-line instruction the page and
   the list lead with.
+- **Never "chase" what isn't due** (`services/reviewGuard.js`, pure, tested).
+  The review is given TODAY and each deadline marked "not yet due /
+  OVERDUE" as authoritative, and `guardReview()` then checks it against the
+  system's own dates: advice to chase / follow up is replaced by "Nothing to
+  send yet: wait for …, due …" when nothing is overdue, or when Greenco wrote
+  to them in the last 5 working days (`CHASE_GAP_WORKING_DAYS`). Applied when
+  the review is written AND when it is shown (`decorateMany`), so an older
+  review can't say otherwise. When the step is to wait the drafted email is
+  folded away as the follow-up for if they miss the date.
+- **Filing by number** (`services/numberMatch.js`): any email (any sender)
+  quoting one open complaint's account number or reference is filed on it
+  with certainty, from the watched mailboxes and from waiting emails; whole
+  numbers only, separators allowed; two complaints' numbers → the AI decides.
+- **"Looks resolved"** (migration `033`): the email analysis reads `resolved`
+  + `outcome`; a resolving email sets `complaints.resolution_suggested`
+  (never closes it), shown on the complaint (Yes, mark it resolved / Not
+  resolved yet), in the list ("Needs attention" / "Looks resolved" filters,
+  with `new_emails` counts), the dashboard tile and the morning email.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)

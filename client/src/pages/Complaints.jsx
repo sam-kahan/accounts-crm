@@ -527,6 +527,10 @@ export default function Complaints() {
   // Any organisation on a complaint needing chasing counts (a complaint can be
   // with more than one: the debt collector and the supplier).
   const overdue = items.filter((c) => c.any_needs_chasing ?? c.needs_chasing);
+  // What needs a person: an email says it's resolved, emails waiting to be
+  // checked, needs chasing, or created by the system and not yet checked.
+  const attention = items.filter((c) => c.state === 'open' &&
+    (c.resolution_suggested || c.new_emails > 0 || (c.any_needs_chasing ?? c.needs_chasing) || c.needs_check));
   function copyAccount(a) {
     navigator.clipboard?.writeText(a).catch(() => {});
     setCopiedAccount(a);
@@ -534,6 +538,8 @@ export default function Complaints() {
   }
   const open = items.filter((c) => c.state === 'open');
   const byFilter =
+    filter === 'attention' ? attention :
+    filter === 'looks_resolved' ? items.filter((c) => c.state === 'open' && c.resolution_suggested) :
     filter === 'overdue' ? overdue :
     filter === 'open' ? open :
     filter === 'resolved' ? items.filter((c) => c.state === 'resolved') :
@@ -628,14 +634,21 @@ export default function Complaints() {
 
       <div className="toolbar flex-between">
         <div className="btn-row">
-          {['open', 'overdue', 'check', 'resolved', 'all'].map((f) => (f === 'check' && !items.some((c) => c.needs_check) ? null :
+          {['attention', 'open', 'looks_resolved', 'overdue', 'check', 'resolved', 'all'].map((f) => (
+            (f === 'check' && !items.some((c) => c.needs_check)) ||
+            (f === 'looks_resolved' && !items.some((c) => c.state === 'open' && c.resolution_suggested)) ? null :
             <button
               key={f}
               className={filter === f ? 'btn-primary btn-sm' : 'btn-sm'}
               aria-pressed={filter === f}
               onClick={() => setFilter(f)}
             >
-              {{ open: 'Open', overdue: 'Need chasing', check: `To check (${items.filter((c) => c.needs_check).length})`, resolved: 'Resolved', all: 'All' }[f]}
+              {{
+                attention: `Needs attention (${attention.length})`,
+                open: 'Open',
+                looks_resolved: `Looks resolved (${items.filter((c) => c.state === 'open' && c.resolution_suggested).length})`,
+                overdue: 'Need chasing', check: `To check (${items.filter((c) => c.needs_check).length})`, resolved: 'Resolved', all: 'All',
+              }[f]}
             </button>
           ))}
         </div>
@@ -684,6 +697,8 @@ export default function Complaints() {
                   <td>
                     <strong>{c.subject}</strong>
                     {c.needs_check && <span className="badge amber" style={{ marginLeft: 6 }}>To check</span>}
+                    {c.state === 'open' && c.resolution_suggested && <span className="badge ok" style={{ marginLeft: 6 }}>Looks resolved: confirm</span>}
+                    {c.new_emails > 0 && <span className="badge amber" style={{ marginLeft: 6 }}>{c.new_emails} new email{c.new_emails === 1 ? '' : 's'} to check</span>}
                     {c.state === 'open' && (c.ai_review?.headline || c.ai_review?.recommended_action) && (
                       <div style={{ fontSize: 12, marginTop: 2 }}>
                         <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.headline || c.ai_review.recommended_action}

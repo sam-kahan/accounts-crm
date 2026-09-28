@@ -87,6 +87,17 @@ function headlineOf(r) {
   return first.length > 180 ? `${first.slice(0, 177)}…` : first;
 }
 
+// Is the review's email to be sent NOW? Not when the step is to wait: then
+// it is the follow-up kept ready for if they miss their date. Reviews written
+// before "email_now" existed are read from their next action and headline.
+function emailIsForNow(r) {
+  if (!r?.email?.body) return false;
+  if (r.email_now === false) return false;
+  if (r.next_action?.type === 'wait') return false;
+  if (/^\s*(do not send|don['’]t send|nothing to (do|send)|no action|wait\b)/i.test(r.headline || '')) return false;
+  return true;
+}
+
 // The email to reply to so a follow-up stays in the same thread: their most
 // recent one (not ours, not sent from here).
 function replyTarget(c) {
@@ -643,7 +654,9 @@ export default function ComplaintDetail() {
               : c.nextAction);
             if (!text) return null;
             const live = aiStep && c.state === 'open';
-            const draft = live && c.ai_review?.email?.body ? c.ai_review.email : null;
+            // The email is offered here only when it is to be sent now; while
+            // the step is to wait, it stays folded in the review below.
+            const draft = live && emailIsForNow(c.ai_review) ? c.ai_review.email : null;
             // The email is offered right here whenever there is one; a step
             // that isn't an email gets its own button too.
             const btn = live && c.ai_review.next_action?.type !== 'send_email' ? actionButton(c.ai_review.next_action) : null;
@@ -696,6 +709,43 @@ export default function ComplaintDetail() {
       </div>
 
       <BounceWarning list={c.bounces} onDone={load} />
+
+      {/* An email says it has been put right: confirm, or say it isn't yet.
+          Never closed without a person. */}
+      {c.resolution_suggested && (() => {
+        const r = c.resolution_suggested;
+        const onTrack = r.party_id ? parties.find((p) => p.id === r.party_id) : null;
+        const choices = onTrack ? [onTrack] : multi ? tracks.filter(trackOpen) : [c];
+        return (
+          <div className="inline-note" style={{ marginBottom: 20, borderLeft: '4px solid var(--green, #a2c533)' }}>
+            <div style={{ fontSize: 16 }}>
+              <strong>✅ Looks resolved{onTrack ? ` with ${onTrack.org_name}` : ''}.</strong>{' '}
+              {r.by_us ? 'Our' : 'Their'} email{r.subject ? <> “{r.subject}”</> : null}
+              {r.on ? <> of {formatDate(r.on)}</> : null} says{' '}
+              {r.outcome ? <strong>{r.outcome}</strong> : 'it has been put right'}.
+            </div>
+            <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+              Check it did what was asked, then confirm. Nothing is closed until you do.
+            </div>
+            <div className="btn-row">
+              {choices.map((t) => (
+                <button key={t.id} className="btn-primary btn-sm" onClick={() => setAction({
+                  ...RESOLVE(t, multi), date: r.on && r.on <= todayISO() ? r.on : todayISO(), noteValue: r.outcome || '',
+                })}>
+                  {multi ? `Mark ${t.org_name}’s part resolved…` : 'Yes, mark it resolved…'}
+                </button>
+              ))}
+              <button className="btn btn-sm" onClick={async () => {
+                const why = prompt('Not resolved yet. What is still outstanding? (optional)', '');
+                if (why === null) return;
+                try { setC(await api.complaints.notResolved(id, why)); } catch (e) { setMsg(e.message); }
+              }}>
+                Not resolved yet
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* What the last re-check against the emails changed, with Undo. */}
       {c.last_recheck?.after && (
@@ -770,12 +820,13 @@ export default function ComplaintDetail() {
 
                 {c.ai_review.email?.body && (() => {
                   const em = c.ai_review.email;
-                  const later = c.ai_review.email_now === false;
+                  const later = !emailIsForNow(c.ai_review);
                   const reply = replyTarget(c);
-                  return (
+                  const by = c.ai_review.next_action?.by;
+                  const inner = (
                     <div id="ai-email" style={{ marginTop: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, padding: 14 }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                        {later ? 'Keep this ready: send it only if they miss their date' : 'The email to send'}
+                        {later ? 'Nothing to send now. This is the follow-up for if they miss their date' : 'The email to send'}
                       </div>
                       <ol style={{ margin: '0 0 10px', paddingLeft: 20, fontSize: 14 }}>
                         {reply ? (
@@ -818,6 +869,16 @@ export default function ComplaintDetail() {
                       </div>
                     </div>
                   );
+                  // Waiting: the follow-up is kept ready but folded away, so
+                  // nothing on the page suggests sending it today.
+                  return later ? (
+                    <details style={{ marginTop: 14 }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                        Kept ready: the follow-up to send only if they miss {by ? formatDate(by) : 'their date'}
+                      </summary>
+                      {inner}
+                    </details>
+                  ) : inner;
                 })()}
 
                 <details style={{ marginTop: 14 }}>
@@ -1518,8 +1579,9 @@ function ProcedureCard({ c, title, head }) {
 
 // Record a step with the date it actually happened.
 function DatedActionModal({ action, onClose, onSubmit }) {
-  const [date, setDate] = useState(todayISO());
-  const [note, setNote] = useState('');
+  // Filled in when the step came from an email (e.g. "Looks resolved").
+  const [date, setDate] = useState(action.date || todayISO());
+  const [note, setNote] = useState(action.noteValue || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 

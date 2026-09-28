@@ -70,6 +70,13 @@ Work out, from the evidence only:
 - account_numbers: every customer or account number the email gives for that property or customer
   (energy/water account, council tax account, service-charge or ground-rent account), exactly as
   written. Not phone, invoice or bill numbers, amounts or case references. Empty list if none.
+- resolved: true only if the email shows the matter complained about has been PUT RIGHT or settled —
+  the organisation confirming the fee has been removed, the refund made, the bill issued as asked, the
+  account corrected, or the complaint upheld and closed; or Greenco confirming it is now happy that it
+  is sorted. A promise to do it later, an apology alone, or a complaint closed WITHOUT putting it right
+  is NOT resolved. Otherwise false.
+- outcome: when resolved, one plain sentence of what was done (e.g. "Late payment fee of £25 removed
+  and final bill issued"), else null.
 - new_complaint: true only if this is Greenco MAKING a new formal complaint to an organisation
   (its first complaint email/letter about the matter), not a reply within a complaint already made.
 - confidence: "high" only if the kind, the author and the date are all unambiguous; otherwise
@@ -87,6 +94,7 @@ Return ONLY a JSON object with exactly these keys:
  "kind": string, "their_reference": string|null, "promised_by": string|null, "summary": string,
  "action_needed": string|null, "evidence": string|null, "confidence": "high"|"medium"|"low",
  "complaint_id": string|null, "new_complaint": boolean, "org_name": string|null, "author_org": string|null,
+ "resolved": boolean, "outcome": string|null,
  "property": string|null, "account_numbers": [string]}`;
 
 function extractJson(text) {
@@ -136,10 +144,27 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
     new_complaint: Boolean(r?.new_complaint),
     org_name: str(r?.org_name, 200),
     author_org: kind === 'our_email' ? null : str(r?.author_org, 200),
+    resolved: r?.resolved === true,
+    outcome: r?.resolved === true ? str(r?.outcome, 500) : null,
     property: str(r?.property, 300),
     account_numbers: Array.isArray(r?.account_numbers)
       ? [...new Set(r.account_numbers.map((a) => str(a, 40)).filter(Boolean))].slice(0, 6)
       : [],
+  };
+}
+
+// Does this email say the complaint has been put right? Never closes it: it
+// flags "Looks resolved" for a person to confirm with one click. A low-
+// confidence reading, or an email from someone who is neither the
+// organisation nor Greenco, flags nothing.
+export function resolutionSuggestion(a, { arrived = null } = {}) {
+  if (!a?.resolved || a.confidence === 'low') return null;
+  if (!a.from_organisation && a.kind !== 'our_email') return null;
+  return {
+    on: a.sent_on || arrived || null,
+    outcome: a.outcome || null,
+    by_us: a.kind === 'our_email',
+    confidence: a.confidence,
   };
 }
 

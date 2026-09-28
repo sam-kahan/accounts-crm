@@ -10,6 +10,7 @@ import {
   effectiveRule,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
+import { guardReview, nextDueFromThem } from './reviewGuard.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
 // ---------------------------------------------------------------------------
@@ -38,10 +39,35 @@ export async function decorateMany(rows) {
     ? new Map((await query('SELECT * FROM organisations WHERE id = ANY($1::uuid[])', [ids])).rows.map((o) => [o.id, o]))
     : new Map();
   const orgOf = (r) => (r.organisation_id ? orgs.get(r.organisation_id) || null : null);
-  return rows.map((r) => withParties(
-    decorateWithOrg(r, orgOf(r)),
-    parties.filter((p) => p.complaint_id === r.id).map((p) => decorateTrack(p, orgOf(p))),
-  ));
+  // When Greenco last wrote to them (a chaser logged, or an email of ours), so
+  // a stored review is checked against it as it is shown (reviewGuard.js).
+  const lastSent = new Map((await query(
+    `SELECT complaint_id, max(d) AS d FROM (
+        SELECT complaint_id, event_date AS d FROM complaint_events
+         WHERE type = 'chased' AND complaint_id = ANY($1::uuid[])
+        UNION ALL
+        SELECT complaint_id, (received_at AT TIME ZONE 'Europe/London')::date FROM complaint_emails
+         WHERE direction = 'outbound' AND complaint_id = ANY($1::uuid[])
+      ) x GROUP BY complaint_id`,
+    [rows.map((r) => r.id)],
+  )).rows.map((x) => [x.complaint_id, x.d]));
+  return rows.map((r) => {
+    const c = withParties(
+      decorateWithOrg(r, orgOf(r)),
+      parties.filter((p) => p.complaint_id === r.id).map((p) => decorateTrack(p, orgOf(p))),
+    );
+    // Never "chase" what isn't due, or straight after writing to them —
+    // applied to the review as shown, so one written before this rule (or
+    // before the dates moved) can't say otherwise.
+    if (c.ai_review) {
+      c.ai_review = guardReview(c.ai_review, {
+        anyOverdue: c.any_needs_chasing,
+        nextDue: nextDueFromThem([c, ...c.parties]),
+        lastSentOn: lastSent.get(r.id) || null,
+      });
+    }
+    return c;
+  });
 }
 
 // The further organisations on a complaint, and what the list, the digest and

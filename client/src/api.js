@@ -302,6 +302,9 @@ export const api = {
       request(`/complaints/${id}/parties/${partyId}`, { method: 'PUT', body: JSON.stringify(data) }),
     removeParty: (id, partyId) =>
       request(`/complaints/${id}/parties/${partyId}`, { method: 'DELETE' }),
+    // "Looks resolved" answered no.
+    notResolved: (id, note) =>
+      request(`/complaints/${id}/resolution-suggestion/dismiss`, { method: 'POST', body: JSON.stringify({ note: note || null }) }),
     // Re-check complaints against their emails: every open one, or one now.
     recheckStatus: () => request('/complaints/recheck'),
     recheckAll: (force = false) => request('/complaints/recheck', { method: 'POST', body: JSON.stringify({ force }) }),

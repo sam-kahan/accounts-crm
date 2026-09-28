@@ -551,8 +551,13 @@ router.get(
       params.push(req.query.state);
       where = 'WHERE state = $1';
     }
+    // With how many emails are waiting for a person on each, so the list can
+    // say which complaints need someone without opening them.
     const { rows } = await query(
-      `SELECT * FROM complaints ${where} ORDER BY (state <> 'open'), raised_on DESC`,
+      `SELECT c.*,
+              (SELECT count(*)::int FROM complaint_emails e
+                WHERE e.complaint_id = c.id AND e.direction <> 'outbound' AND e.reviewed_at IS NULL) AS new_emails
+         FROM complaints c ${where.replace('state', 'c.state')} ORDER BY (c.state <> 'open'), c.raised_on DESC`,
       params,
     );
     res.json(await decorateMany(rows));
@@ -1097,6 +1102,12 @@ router.post(
         ]);
       }
       await settleOverall(req.params.id);
+      // A "Looks resolved" prompt about this organisation's part is answered.
+      await query(
+        `UPDATE complaints SET resolution_suggested = NULL
+          WHERE id = $1 AND (COALESCE(resolution_suggested->>'party_id', '') = COALESCE($2::text, '') OR state <> 'open')`,
+        [req.params.id, partyId],
+      );
     }
 
     // An acknowledgement can move the Stage 1 date (where their clock runs
@@ -1444,6 +1455,28 @@ router.post(
       await undoRecheck(req.params.id, who(req));
     } catch (err) {
       throw new HttpError(err.status || 500, err.message);
+    }
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// "Looks resolved" answered no: the prompt goes, and why goes on the timeline.
+const notResolvedInput = z.object({ note: z.string().trim().max(1000).optional().nullable() });
+router.post(
+  '/:id/resolution-suggestion/dismiss',
+  asyncHandler(async (req, res) => {
+    const d = parse(notResolvedInput, req.body || {});
+    const { rows } = await query(
+      `UPDATE complaints SET resolution_suggested = NULL WHERE id = $1 AND resolution_suggested IS NOT NULL
+        RETURNING id`,
+      [req.params.id],
+    );
+    if (rows[0]) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [req.params.id, todayISO(), `Not resolved yet${d.note ? `: ${d.note}` : '.'}`, who(req)],
+      );
+      scheduleReview(req.params.id);
     }
     res.json(await decoratedById(req.params.id));
   }),

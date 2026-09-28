@@ -2,9 +2,9 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { ukDate } from './complaintRules.js';
+import { ukDate, trackOpen } from './complaintRules.js';
 import { fetchMessageDetail } from './graphMail.js';
-import { analyseEmail, planFromAnalysis } from './emailAnalysis.js';
+import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
 import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
 import { trackForEmail } from './complaintParties.js';
@@ -240,6 +240,30 @@ async function applyEmail(em, analysis, skipped = []) {
   const target = party || complaint;
   const table = party ? 'complaint_parties' : 'complaints';
   const fromWhom = party ? ` (${party.org_name})` : '';
+
+  // It says it's been put right: flagged "Looks resolved" for a person to
+  // confirm (never closed by itself), on whichever track it is about.
+  const resolved = resolutionSuggestion(analysis, { arrived });
+  if (resolved && trackOpen(target)) {
+    await query('UPDATE complaints SET resolution_suggested = $2 WHERE id = $1', [
+      complaint.id,
+      JSON.stringify({
+        ...resolved, email_id: em.id, subject: em.subject || null, party_id: party?.id || null,
+        org_name: party?.org_name || null, at: new Date().toISOString(),
+      }),
+    ]);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+       VALUES ($1,$2,$3,'note',$4,$5)`,
+      [
+        complaint.id, party?.id || null, resolved.on || arrived,
+        `Looks resolved: ${resolved.by_us ? 'our' : 'their'} email "${em.subject || '(no subject)'}" says ` +
+          `${resolved.outcome ? `"${resolved.outcome.replace(/[.\s]+$/, '')}"` : 'it has been put right'}. ` +
+          'Confirm on the complaint (Mark resolved, or Not resolved yet).',
+        AUTO_BY,
+      ],
+    );
+  }
 
   if (!plan.auto) {
     // Waits for a person, with the suggestion on the email.

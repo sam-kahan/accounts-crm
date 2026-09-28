@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
-import { londonDateOf } from '../lib/dates.js';
+import { londonDateOf, todayISO } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -77,6 +77,13 @@ export function extractJson(text) {
 // Compact the timeline + emails into a readable block for the prompt.
 function contextBlock({ complaint, rule, events, emails, extraContext, instruction }) {
   const lines = [];
+  // Today, and where each deadline stands, as the system has worked them out.
+  // These are facts, not for the model to re-derive: without today's date it
+  // guessed, and called deadlines "overdue" that were days away.
+  const today = todayISO();
+  const due = (d) => (!d ? 'n/a' : d < today ? `${d} (OVERDUE)` : d === today ? `${d} (due TODAY)` : `${d} (not yet due)`);
+  lines.push(`TODAY is ${today} (UK). The status and the due dates below are worked out by the system from their procedure and are authoritative: never call a deadline missed or overdue unless it says OVERDUE, and never recommend chasing anything that is not yet due.`);
+  lines.push('');
   lines.push(`Organisation: ${complaint.org_name} (${rule.label})`);
   if (complaint.property) lines.push(`Property / account: ${complaint.property}`);
   if (complaint.our_reference) lines.push(`Our reference: ${complaint.our_reference}`);
@@ -87,10 +94,10 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   lines.push(`Status: ${complaint.label}${complaint.overdue ? ' (OVERDUE)' : ''}`);
   lines.push(`Raised on: ${complaint.raised_on}`);
   if (complaint.acknowledged_on) lines.push(`Acknowledged on: ${complaint.acknowledged_on}`);
-  lines.push(`Response due: ${complaint.response_due || 'n/a'}`);
+  lines.push(`Response due: ${due(complaint.response_due)}`);
   if (complaint.responded_on) lines.push(`Responded on: ${complaint.responded_on}`);
   lines.push(`Ombudsman referral by: ${complaint.ombudsman_deadline || 'n/a'}`);
-  if (complaint.ack_due && !complaint.acknowledged_on) lines.push(`Acknowledgement due: ${complaint.ack_due}`);
+  if (complaint.ack_due && !complaint.acknowledged_on) lines.push(`Acknowledgement due: ${due(complaint.ack_due)}`);
   if (complaint.ombudsman_from) lines.push(`Can refer to the ombudsman from: ${complaint.ombudsman_from}`);
   if (complaint.final_response_on) lines.push(`Their final response: ${complaint.final_response_on}`);
   lines.push('');
@@ -132,8 +139,8 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
       lines.push(`  Their reference: ${p.reference || 'not known yet'}`);
       lines.push(`  Complaint made to them: ${p.raised_on}; stage: ${p.stage}; status: ${p.label}${p.overdue ? ' (OVERDUE)' : ''}`);
       if (p.acknowledged_on) lines.push(`  Acknowledged on: ${p.acknowledged_on}`);
-      else if (p.ack_due) lines.push(`  Acknowledgement due: ${p.ack_due}`);
-      lines.push(`  Response due: ${p.response_due || 'n/a'}`);
+      else if (p.ack_due) lines.push(`  Acknowledgement due: ${due(p.ack_due)}`);
+      lines.push(`  Response due: ${due(p.response_due)}`);
       if (p.responded_on) lines.push(`  Responded on: ${p.responded_on}`);
       if (p.final_response_on) lines.push(`  Their final response: ${p.final_response_on}`);
       if (p.ombudsman_from) lines.push(`  Can refer to ${r.ombudsman} from: ${p.ombudsman_from}`);

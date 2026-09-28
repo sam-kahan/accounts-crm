@@ -108,3 +108,17 @@ test('an uncertain "our own email" also waits for a person', () => {
   const plan = planFromAnalysis(complaint(), analysis({ kind: 'our_email', confidence: 'low' }), { today: TODAY });
   assert.equal(plan.auto, false);
 });
+
+import { resolutionSuggestion } from '../src/services/emailAnalysis.js';
+
+test('an email saying it has been put right is flagged to confirm, never closed', () => {
+  const r = resolutionSuggestion(analysis({ kind: 'stage1_response', resolved: true, outcome: 'Late fee removed and final bill issued' }));
+  assert.equal(r.outcome, 'Late fee removed and final bill issued');
+  assert.equal(r.on, '2026-09-30');
+  assert.equal(resolutionSuggestion(analysis({ resolved: false })), null);
+  assert.equal(resolutionSuggestion(analysis({ resolved: true, confidence: 'low' })), null);
+  // someone who is neither them nor us (a tenant, say) can't resolve it
+  assert.equal(resolutionSuggestion(analysis({ resolved: true, from_organisation: false, kind: 'other' })), null);
+  // Greenco confirming it is sorted counts
+  assert.equal(resolutionSuggestion(analysis({ resolved: true, from_organisation: false, kind: 'our_email' })).by_us, true);
+});

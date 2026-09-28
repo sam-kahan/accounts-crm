@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { gatherContext } from './complaintContext.js';
 import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction } from './complaintRules.js';
+import { guardReview, nextDueFromThem } from './reviewGuard.js';
 
 export { reviewSignature };
 
@@ -49,7 +50,22 @@ export async function refreshReview(id) {
     const headline = typeof raw.headline === 'string' && raw.headline.trim()
       ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
       : null;
-    const review = { ...raw, headline, next_action: normaliseNextAction(raw.next_action) };
+    // Checked against the system's own dates: never "chase" what isn't due,
+    // or chase again straight after writing to them (reviewGuard.js).
+    const c = ctx.complaint;
+    const londonDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+    const sent = [
+      ...(ctx.events || []).filter((e) => e.type === 'chased').map((e) => e.event_date),
+      ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at).map((e) => londonDay(e.received_at)),
+    ].filter(Boolean).sort();
+    const review = guardReview(
+      { ...raw, headline, next_action: normaliseNextAction(raw.next_action) },
+      {
+        anyOverdue: Boolean(c.any_needs_chasing),
+        nextDue: nextDueFromThem([c, ...(c.parties || [])]),
+        lastSentOn: sent[sent.length - 1] || null,
+      },
+    );
     await query(
       `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
               ai_review_error = NULL WHERE id = $1`,

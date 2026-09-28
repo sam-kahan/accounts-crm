@@ -187,6 +187,7 @@ export default function Dashboard() {
               {complaints.waiting ? ` · ${complaints.waiting} email(s) to check` : ''}
               {complaints.to_check ? ` · ${complaints.to_check} imported to check` : ''}
               {complaints.bounced ? ` · ${complaints.bounced} bounced email(s) to look into` : ''}
+              {complaints.looks_resolved ? ` · ${complaints.looks_resolved} look resolved (confirm)` : ''}
             </div>
           </Link>
         )}

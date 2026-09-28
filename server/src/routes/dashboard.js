@@ -86,8 +86,19 @@ async function collectComplaintDueItems(days = 30) {
   for (const c of decorated) {
     // What to do about it, and a link straight to it: the AI's next step when
     // its review is up to date, otherwise the one worked out from the dates.
-    const aiStep = (c.ai_review_current && c.ai_review?.recommended_action) || null;
+    const aiStep = (c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action)) || null;
     const link = `${config.appUrl.replace(/\/+$/, '')}/complaints/${c.id}`;
+    // An email says it has been put right: confirm it (top of the list).
+    if (c.resolution_suggested) {
+      const r = c.resolution_suggested;
+      items.push({
+        type: 'complaint', id: c.id,
+        label: `Complaint LOOKS RESOLVED${r.org_name ? ` (${r.org_name})` : ''}: ${c.subject}`,
+        due_date: r.on || todayISO(), company_name: r.org_name || c.org_name, overdue: true,
+        detail: `${r.outcome || 'An email says it has been put right'}. Confirm it on the complaint.`,
+        link,
+      });
+    }
     for (const t of [c, ...(c.parties || [])]) {
       const main = t === c;
       const detail = (main ? aiStep : null) || t.nextAction || null;
@@ -198,7 +209,8 @@ router.get(
       ).rows[0].n;
       const toCheck = (await query('SELECT count(*)::int AS n FROM complaints WHERE needs_check')).rows[0].n;
       const bounced = (await query('SELECT count(*)::int AS n FROM email_bounces WHERE resolved_at IS NULL')).rows[0].n;
-      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced };
+      const looksResolved = rows.filter((c) => c.resolution_suggested).length;
+      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced, looks_resolved: looksResolved };
     }
 
     res.json({
