@@ -4,7 +4,8 @@ import { fetchMailboxSince, fetchMessageText } from './graphMail.js';
 import { bounceFromMailbox } from './bounces.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting, watchedMailboxes } from './settings.js';
-import { postcodeOf } from './orgMatch.js';
+import { postcodeOf, PARTY_COLS } from './orgMatch.js';
+import { buildNumberIndex, complaintsQuoted } from './numberMatch.js';
 
 // ---------------------------------------------------------------------------
 // Watching a mailbox people already copy (accounts@), so nothing has to be
@@ -13,6 +14,9 @@ import { postcodeOf } from './orgMatch.js';
 // left alone and never stored:
 //   thread  a reply in the same email thread as one already on a complaint:
 //           filed on that complaint with certainty
+//   account quoting an open complaint's account number or reference (from
+//           anyone — the supplier, a debt collector, a solicitor): filed on
+//           that complaint with certainty (numberMatch.js), then read
 //   watch   to or from an organisation we have an open complaint with AND
 //           mentioning a complaint (the word, a stage, an ombudsman, a final
 //           response) or one of its references or its property's postcode:
@@ -39,10 +43,15 @@ export const domainOf = (addr) => String(addr || '').toLowerCase().split('@')[1]
 // costs nothing.
 const COMPLAINT_WORDS = /complain|ombudsman|stage\s*(?:1|2|one|two)\b|final\s+(?:response|viewpoint|decision)|deadlock|escalat|redress/i;
 
-export function routeWatchedEmail(e, { ourDomain, threads, orgDomains, markers = [] }) {
+export function routeWatchedEmail(e, { ourDomain, threads, orgDomains, markers = [], numbers = [] }) {
   if (e.conversationId && threads.has(e.conversationId)) {
     return { method: 'thread', complaintId: threads.get(e.conversationId) };
   }
+  // Quoting an open complaint's account number or reference: that complaint,
+  // whoever sent it. Numbers of two complaints: the AI decides between them.
+  const quoted = complaintsQuoted(`${e.subject || ''} ${e.bodyPreview || ''}`, numbers);
+  if (quoted.size === 1) return { method: 'account', complaintId: [...quoted][0] };
+  if (quoted.size > 1) return { method: 'watch', complaintId: null };
   const people = [e.senderEmail, ...(e.toAddresses || [])].filter(Boolean);
   const text = `${e.subject || ''} ${e.bodyPreview || ''}`;
   if (people.some((a) => orgDomains.has(domainOf(a)))) {
@@ -102,7 +111,10 @@ async function watchContext() {
   const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, ...(c.party_refs || []), postcodeOf(c.property), ...(c.account_numbers || [])])
     .filter((m) => m && String(m).trim().length >= 5)
     .map((m) => String(m).trim().toLowerCase()))];
-  return { ourDomain, threads, orgDomains, markers };
+  const numbers = buildNumberIndex((await query(
+    `SELECT c.id, c.account_numbers, c.reference, c.ref_code, ${PARTY_COLS} FROM complaints c WHERE c.state = 'open'`,
+  )).rows);
+  return { ourDomain, threads, orgDomains, markers, numbers };
 }
 
 // Look at the new mail in every watched mailbox. Returns the ids stored, for

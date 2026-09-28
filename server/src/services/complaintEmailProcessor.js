@@ -8,6 +8,7 @@ import { analyseEmail, planFromAnalysis } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
 import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
 import { trackForEmail } from './complaintParties.js';
+import { buildNumberIndex, complaintByNumber } from './numberMatch.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
 import { createComplaint } from './complaintCreate.js';
@@ -33,6 +34,12 @@ const KIND_LABEL = {
   our_email: 'Our email',
   other: 'Email',
 };
+
+async function openNumberIndex() {
+  return buildNumberIndex((await query(
+    `SELECT c.id, c.account_numbers, c.reference, c.ref_code, ${PARTY_COLS} FROM complaints c WHERE c.state = 'open'`,
+  )).rows);
+}
 
 async function openCandidates() {
   const { rows } = await query(
@@ -81,6 +88,18 @@ export async function processEmail(emailId) {
     await query('UPDATE complaint_emails SET analysis_error = $2 WHERE id = $1', [em.id, readNote]);
   }
 
+  // 1b. Not on a complaint yet, but quoting an open complaint's account
+  // number or reference in its full text: that complaint, with certainty and
+  // no AI (numberMatch.js). Numbers of two complaints: left to the reading.
+  if (!em.complaint_id) {
+    const byNumber = complaintByNumber(`${em.subject || ''}\n${detail.bodyText || em.body_text || em.body_preview || ''}`, await openNumberIndex());
+    if (byNumber) {
+      await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'account' WHERE id = $1`, [em.id, byNumber]);
+      em.complaint_id = byNumber;
+      em.match_method = 'account';
+    }
+  }
+
   // 2. Work out what it is (and, from the general inbox, which complaint).
   let analysis = em.analysis || null;
   if (config.anthropic.enabled && !em.analysed_at) {
@@ -104,6 +123,17 @@ export async function processEmail(emailId) {
         `UPDATE complaint_emails SET analysis = $2, analysed_at = now(), analysis_error = $3 WHERE id = $1`,
         [em.id, JSON.stringify(analysis), readNote],
       );
+      // The account numbers / reference the reading found (in an attachment,
+      // say) that belong to exactly one open complaint: filed there, certain.
+      if (!em.complaint_id) {
+        const byNumber = complaintByNumber(
+          [...(analysis.account_numbers || []), analysis.their_reference || ''].join(' ; '), await openNumberIndex(),
+        );
+        if (byNumber) {
+          await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'account' WHERE id = $1`, [em.id, byNumber]);
+          em.complaint_id = byNumber;
+        }
+      }
       // Filed from the general inbox only on a confident match.
       if (!em.complaint_id && analysis.complaint_id && analysis.confidence === 'high') {
         await query(
@@ -232,7 +262,15 @@ async function applyEmail(em, analysis, skipped = []) {
   // taken — a chaser, a Stage 2 request, the information they asked for — so
   // it goes on the timeline as one, dated the day it was sent, and the review
   // that follows knows it has been done.
-  const type = plan.event?.type || (analysis?.kind === 'our_email' ? 'chased' : 'note');
+  // Only one that went outside Greenco (or was forwarded here after being
+  // sent): colleagues emailing each other about the account is a note.
+  const ours = String(config.complaintEmail.domain || '').toLowerCase();
+  const wentOutside = (em.to_addresses || []).some((a) => {
+    const d = String(a).toLowerCase().split('@')[1];
+    return d && d !== ours;
+  });
+  const sentStep = analysis?.kind === 'our_email' && (wentOutside || analysis.forwarded);
+  const type = plan.event?.type || (sentStep ? 'chased' : 'note');
   const recorded = plan.event
     ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
     : '';

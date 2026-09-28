@@ -234,3 +234,36 @@ test('the same address written with and without its postcode is the same propert
   const b = { org_name: 'CDER Group', property: 'Apartment 326, 2 Moorfields, Liverpool, L2 2BT', raised_on: '2026-08-12' };
   assert.deepEqual(issueMatch(a, b), { same: true, certain: true });
 });
+
+import { buildNumberIndex, complaintByNumber, complaintsQuoted } from '../src/services/numberMatch.js';
+
+const nIndex = buildNumberIndex([
+  { id: 'eon', account_numbers: ['A-49ED9909'], reference: null, ref_code: 'GC-C-8UD28A', party_refs: [] },
+  { id: 'bg', account_numbers: ['8500 1234 5678'], reference: 'BG-778812', ref_code: 'GC-C-XNAQHC', party_refs: ['LCS-55120'] },
+  { id: 'short', account_numbers: ['12345'], reference: 'ABCDEF', ref_code: null, party_refs: [] },
+]);
+
+test('an email quoting an open complaint’s account number is filed on it, however the number is written', () => {
+  assert.equal(complaintByNumber('RE: A-49ED9909 final bill', nIndex), 'eon');
+  assert.equal(complaintByNumber('Account a49ed9909', nIndex), 'eon');
+  assert.equal(complaintByNumber('Your account 8500-1234-5678 is overdue', nIndex), 'bg');
+  assert.equal(complaintByNumber('Ref 850012345678', nIndex), 'bg');
+  assert.equal(complaintByNumber('Our client ref LCS 55120', nIndex), 'bg'); // the debt collector’s own reference
+  assert.equal(complaintByNumber('Re complaint GC-C-8UD28A', nIndex), 'eon');
+});
+
+test('a number inside a longer one, or a short/plain reference, never files an email', () => {
+  assert.equal(complaintByNumber('Call 0850012345678 today', nIndex), null);
+  assert.equal(complaintByNumber('Invoice 9A-49ED99091', nIndex), null);
+  assert.equal(complaintByNumber('Order 12345, ref ABCDEF', nIndex), null);
+});
+
+test('numbers of two complaints: not filed by number (the reading decides)', () => {
+  assert.equal(complaintsQuoted('A-49ED9909 and 8500 1234 5678', nIndex).size, 2);
+  assert.equal(complaintByNumber('A-49ED9909 and 8500 1234 5678', nIndex), null);
+});
+
+test('watching: any sender quoting an open complaint’s number is filed on it', () => {
+  const r = routeWatchedEmail(email({ senderEmail: 'agent@lcs-collections.co.uk', subject: 'Balance due A-49ED9909' }), { ...ctx, numbers: nIndex });
+  assert.deepEqual(r, { method: 'account', complaintId: 'eon' });
+});
