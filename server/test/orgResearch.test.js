@@ -49,3 +49,20 @@ test('always returns the full shape with safe defaults', () => {
   assert.deepEqual(p.sources, []);
   assert.equal(p.complaints_email, null);
 });
+
+test('procedure fields: enums checked, weeks clamped, evidence and unconfirmed filtered', () => {
+  const p = normaliseProfile({
+    procedure_ref: 'PRO39 V7',
+    stage1_clock: 'acknowledgement',
+    referral_from: 'whenever',
+    ombudsman_after_weeks: 500,
+    evidence: { ack_days: 'within 3 working days of receiving it', bogus: 'x', stage1_clock: 42 },
+    unconfirmed: ['stage2_response_days', 'not_a_field', 'stage2_response_days'],
+  });
+  assert.equal(p.procedure_ref, 'PRO39 V7');
+  assert.equal(p.stage1_clock, 'acknowledgement');
+  assert.equal(p.referral_from, null);
+  assert.equal(p.ombudsman_after_weeks, 104);
+  assert.deepEqual(p.evidence, { ack_days: 'within 3 working days of receiving it' });
+  assert.deepEqual(p.unconfirmed, ['stage2_response_days']);
+});

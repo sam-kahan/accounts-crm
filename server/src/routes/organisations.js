@@ -4,7 +4,17 @@ import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
 import { ruleFor } from '../services/complaintRules.js';
-import { researchOrganisation } from '../services/orgResearch.js';
+import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
+import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
+import {
+  orgDocumentUpload,
+  procedureMemoryUpload,
+  listOrgDocuments,
+  saveOrgDocument,
+  getOrgDocument,
+  deleteOrgDocument,
+  removeOrgDocumentFiles,
+} from '../services/attachments.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -16,6 +26,7 @@ const ORG_TYPES = [
   'housing_association',
   'water',
   'energy',
+  'managing_agent',
   'supplier',
   'other',
 ];
@@ -29,21 +40,51 @@ const input = z.object({
   phone: z.string().optional().nullable(),
   ombudsman_name: z.string().optional().nullable(),
   ombudsman_url: z.string().optional().nullable(),
-  ombudsman_referral_months: z.number().int().optional().nullable(),
-  stage1_response_days: z.number().int().optional().nullable(),
-  stage2_response_days: z.number().int().optional().nullable(),
-  ack_days: z.number().int().optional().nullable(),
+  ombudsman_referral_months: z.number().int().min(0).max(120).optional().nullable(),
+  stage1_response_days: z.number().int().min(0).max(400).optional().nullable(),
+  stage2_response_days: z.number().int().min(0).max(400).optional().nullable(),
+  ack_days: z.number().int().min(0).max(400).optional().nullable(),
+  procedure_ref: z.string().max(200).optional().nullable(),
+  stage1_clock: z.enum(['receipt', 'acknowledgement']).optional().nullable(),
+  ombudsman_after_weeks: z.number().int().min(0).max(104).optional().nullable(),
+  referral_from: z.enum(['raised', 'final_response']).optional().nullable(),
   procedure_summary: z.string().optional().nullable(),
   legal_basis: z.string().optional().nullable(),
   sources: z.array(z.object({ title: z.string(), url: z.string() })).optional().nullable(),
-  research_status: z.enum(['none', 'researched', 'manual']).optional(),
+  unconfirmed: z.array(z.string()).optional().nullable(),
+  procedure_evidence: z.record(z.string()).optional().nullable(),
+  research_status: z.enum(['none', 'researched', 'document', 'manual']).optional(),
+  // "I have checked these against their published procedure." Sent on every
+  // save: ticking it stamps who and when; saving without it clears the stamp,
+  // so an edit to a checked procedure has to be checked again.
+  verified: z.boolean().optional(),
   notes: z.string().optional().nullable(),
 });
 
 const COLS = `id, name, type, location, complaints_email, complaints_url, phone,
   ombudsman_name, ombudsman_url, ombudsman_referral_months, stage1_response_days,
-  stage2_response_days, ack_days, procedure_summary, legal_basis, sources,
-  research_status, researched_at, notes, created_at, updated_at`;
+  stage2_response_days, ack_days, procedure_ref, stage1_clock, ombudsman_after_weeks,
+  referral_from, procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence,
+  research_status, researched_at, verified_at, verified_by, notes, created_at, updated_at`;
+
+const who = (req) => req.user?.name || req.user?.email || null;
+
+// The column values shared by create and update, in COLS-free order.
+function values(d) {
+  return [
+    d.name, d.type || 'council', d.location || null, d.complaints_email || null,
+    d.complaints_url || null, d.phone || null, d.ombudsman_name || null,
+    d.ombudsman_url || null, d.ombudsman_referral_months ?? null,
+    d.stage1_response_days ?? null, d.stage2_response_days ?? null, d.ack_days ?? null,
+    d.procedure_ref || null, d.stage1_clock || null, d.ombudsman_after_weeks ?? null,
+    d.referral_from || null, d.procedure_summary || null, d.legal_basis || null,
+    d.sources ? JSON.stringify(d.sources) : null, d.unconfirmed?.length ? d.unconfirmed : null,
+    d.procedure_evidence && Object.keys(d.procedure_evidence).length
+      ? JSON.stringify(d.procedure_evidence)
+      : null,
+    d.notes || null,
+  ];
+}
 
 // Is AI research available?
 router.get(
@@ -66,8 +107,22 @@ router.post(
   }),
 );
 
+// Read the organisation's own procedure document WITHOUT saving. The values
+// come back for the user to check; the file is stored when they save.
+router.post(
+  '/procedure/read',
+  procedureMemoryUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new HttpError(400, 'Attach the procedure document');
+    const type = ORG_TYPES.includes(req.body?.type) ? req.body.type : null;
+    const profile = await readProcedureDocument(req.file, { name: req.body?.name, type });
+    res.json(profile);
+  }),
+);
+
 // Research a provider AND save it as an organisation in one step. If one with
-// the same name already exists, return that instead of duplicating.
+// the same name already exists, return that instead of duplicating. Saved as
+// researched but NOT checked — the complaint page says so until someone has.
 router.post(
   '/research-and-create',
   asyncHandler(async (req, res) => {
@@ -90,17 +145,13 @@ router.post(
         (name, type, location, complaints_email, complaints_url, phone,
          ombudsman_name, ombudsman_url, ombudsman_referral_months,
          stage1_response_days, stage2_response_days, ack_days,
-         procedure_summary, legal_basis, sources, research_status, researched_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'researched',now())
+         procedure_ref, stage1_clock, ombudsman_after_weeks, referral_from,
+         procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence, notes,
+         research_status, researched_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+               'researched', now())
        RETURNING ${COLS}`,
-      [
-        name, type, location, p.complaints_email || null, p.complaints_url || null,
-        p.phone || null, p.ombudsman_name || null, p.ombudsman_url || null,
-        p.ombudsman_referral_months ?? null, p.stage1_response_days ?? null,
-        p.stage2_response_days ?? null, p.ack_days ?? null,
-        p.procedure_summary || null, p.legal_basis || null,
-        p.sources ? JSON.stringify(p.sources) : null,
-      ],
+      values({ ...p, name, type, location, procedure_evidence: p.evidence }),
     );
     res.status(201).json(rows[0]);
   }),
@@ -118,7 +169,9 @@ router.get(
   '/',
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
-      `SELECT o.*, (SELECT count(*) FROM complaints c WHERE c.organisation_id = o.id) AS complaint_count
+      `SELECT o.*,
+              (SELECT count(*) FROM complaints c WHERE c.organisation_id = o.id) AS complaint_count,
+              (SELECT count(*) FROM organisation_documents d WHERE d.organisation_id = o.id) AS document_count
          FROM organisations o ORDER BY name ASC`,
     );
     res.json(rows);
@@ -132,7 +185,7 @@ router.get(
       req.params.id,
     ]);
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
-    res.json(rows[0]);
+    res.json({ ...rows[0], documents: await listOrgDocuments(req.params.id) });
   }),
 );
 
@@ -140,24 +193,20 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
+    const status = d.research_status || 'none';
     const { rows } = await query(
       `INSERT INTO organisations
         (name, type, location, complaints_email, complaints_url, phone,
          ombudsman_name, ombudsman_url, ombudsman_referral_months,
          stage1_response_days, stage2_response_days, ack_days,
-         procedure_summary, legal_basis, sources, research_status, researched_at, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-         ${d.research_status === 'researched' ? 'now()' : 'NULL'}, $17)
+         procedure_ref, stage1_clock, ombudsman_after_weeks, referral_from,
+         procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence, notes,
+         research_status, researched_at, verified_at, verified_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+               $23, ${status === 'researched' || status === 'document' ? 'now()' : 'NULL'},
+               ${d.verified ? 'now()' : 'NULL'}, $24)
        RETURNING ${COLS}`,
-      [
-        d.name, d.type || 'council', d.location || null, d.complaints_email || null,
-        d.complaints_url || null, d.phone || null, d.ombudsman_name || null,
-        d.ombudsman_url || null, d.ombudsman_referral_months ?? null,
-        d.stage1_response_days ?? null, d.stage2_response_days ?? null,
-        d.ack_days ?? null, d.procedure_summary || null, d.legal_basis || null,
-        d.sources ? JSON.stringify(d.sources) : null, d.research_status || 'none',
-        d.notes || null,
-      ],
+      [...values(d), status, d.verified ? who(req) : null],
     );
     res.status(201).json(rows[0]);
   }),
@@ -172,37 +221,98 @@ router.put(
         name=$2, type=$3, location=$4, complaints_email=$5, complaints_url=$6, phone=$7,
         ombudsman_name=$8, ombudsman_url=$9, ombudsman_referral_months=$10,
         stage1_response_days=$11, stage2_response_days=$12, ack_days=$13,
-        procedure_summary=$14, legal_basis=$15, sources=$16,
-        research_status=COALESCE($17, research_status),
-        -- Only stamp researched_at the first time an org becomes 'researched';
-        -- an ordinary edit re-sends research_status='researched' and must not
-        -- reset the "researched N days ago" timestamp.
-        researched_at=CASE WHEN $17='researched' AND researched_at IS NULL THEN now()
+        procedure_ref=$14, stage1_clock=$15, ombudsman_after_weeks=$16, referral_from=$17,
+        procedure_summary=$18, legal_basis=$19, sources=$20, unconfirmed=$21,
+        procedure_evidence=$22, notes=$23,
+        research_status=COALESCE($24, research_status),
+        -- Stamp researched_at whenever fresh research or a document is applied
+        -- (the client sends the status it arrived at); a plain edit re-sends
+        -- the same status and must not move the date.
+        researched_at=CASE WHEN $24 IN ('researched','document') AND $24 IS DISTINCT FROM research_status
+                           THEN now()
+                           WHEN $24 IN ('researched','document') AND researched_at IS NULL THEN now()
                            ELSE researched_at END,
-        notes=$18
+        verified_at=CASE WHEN $25 THEN now() ELSE NULL END,
+        verified_by=CASE WHEN $25 THEN $26 ELSE NULL END
        WHERE id=$1 RETURNING ${COLS}`,
-      [
-        req.params.id, d.name, d.type || 'council', d.location || null,
-        d.complaints_email || null, d.complaints_url || null, d.phone || null,
-        d.ombudsman_name || null, d.ombudsman_url || null, d.ombudsman_referral_months ?? null,
-        d.stage1_response_days ?? null, d.stage2_response_days ?? null, d.ack_days ?? null,
-        d.procedure_summary || null, d.legal_basis || null,
-        d.sources ? JSON.stringify(d.sources) : null, d.research_status || null,
-        d.notes || null,
-      ],
+      [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
     );
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
-    res.json(rows[0]);
+    // Its open complaints are re-dated from the procedure as it now stands.
+    const recalculated = await recomputeForOrganisation(req.params.id);
+    res.json({ ...rows[0], recalculated });
   }),
 );
 
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
+    // Complaints against it keep their snapshot of its name and fall back to
+    // the type defaults, so re-date the open ones once it's gone.
+    const linked = (
+      await query(`SELECT id FROM complaints WHERE organisation_id = $1 AND state = 'open'`, [
+        req.params.id,
+      ])
+    ).rows.map((r) => r.id);
+    await removeOrgDocumentFiles(req.params.id);
     const { rowCount } = await query('DELETE FROM organisations WHERE id = $1', [
       req.params.id,
     ]);
     if (!rowCount) throw new HttpError(404, 'Organisation not found');
+    if (linked.length) await recomputeForOrganisation(req.params.id, linked);
+    res.status(204).end();
+  }),
+);
+
+// --- Procedure documents ----------------------------------------------------
+const requireOrgId = asyncHandler(async (req, _res, next) => {
+  const { rows } = await query('SELECT id FROM organisations WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw new HttpError(404, 'Organisation not found');
+  next();
+});
+
+router.get(
+  '/:id/documents',
+  asyncHandler(async (req, res) => {
+    res.json(await listOrgDocuments(req.params.id));
+  }),
+);
+
+router.post(
+  '/:id/documents',
+  requireOrgId,
+  orgDocumentUpload.array('files', 5),
+  asyncHandler(async (req, res) => {
+    const saved = [];
+    for (const f of req.files || []) saved.push(await saveOrgDocument(req.params.id, f));
+    res.status(201).json(saved);
+  }),
+);
+
+router.get(
+  '/documents/:docId/download',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.docId).success) {
+      throw new HttpError(400, 'Invalid document id');
+    }
+    const doc = await getOrgDocument(req.params.docId);
+    if (!doc) throw new HttpError(404, 'Document not found');
+    // Always a download, never rendered inline on our origin (see complaints).
+    res.setHeader('Content-Type', doc.mimetype || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
+    doc.stream().pipe(res);
+  }),
+);
+
+router.delete(
+  '/documents/:docId',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.docId).success) {
+      throw new HttpError(400, 'Invalid document id');
+    }
+    const ok = await deleteOrgDocument(req.params.docId);
+    if (!ok) throw new HttpError(404, 'Document not found');
     res.status(204).end();
   }),
 );

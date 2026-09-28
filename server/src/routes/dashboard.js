@@ -9,10 +9,11 @@ import {
   mailerStatus,
 } from '../services/mailer.js';
 import { carriedLineSql } from '../services/commission.js';
-import { effectiveRule, deriveStatus } from '../services/complaintRules.js';
+import { effectiveRule, deriveStatus, computeAckDue } from '../services/complaintRules.js';
 import { syncAllCompanies } from '../services/companySync.js';
 import { syncInvoicing } from '../services/invoicingSync.js';
 import { withNumbers } from '../lib/money.js';
+import { todayISO, addDays } from '../lib/dates.js';
 
 const router = Router();
 
@@ -67,38 +68,35 @@ async function collectDueItems(days = 30) {
   );
 }
 
-// Collect open complaints whose response is overdue or falls due within `days`,
-// as digest items. Uses the rules engine to derive live status so a missed
-// statutory deadline shows up as OVERDUE in the reminder.
+// Collect open complaints whose response is overdue or falls due within `days`
+// — plus any not acknowledged in time — as digest items. Uses the rules engine
+// to derive live status so a missed deadline shows up as OVERDUE in the reminder.
 async function collectComplaintDueItems(days = 30) {
   const { rows } = await query(
-    `SELECT c.*, o.type AS org_type_override,
-            o.stage1_response_days, o.stage2_response_days, o.ack_days,
-            o.ombudsman_name, o.ombudsman_url, o.ombudsman_referral_months, o.legal_basis
+    `SELECT c.*, to_jsonb(o) AS org
        FROM complaints c
        LEFT JOIN organisations o ON o.id = c.organisation_id
-      WHERE c.state = 'open' AND c.response_due IS NOT NULL
-        AND c.response_due <= CURRENT_DATE + ($1 || ' days')::interval`,
-    [days],
+      WHERE c.state = 'open'`,
   );
+  const horizon = addDays(todayISO(), days);
 
   const items = [];
   for (const c of rows) {
-    const org = c.organisation_id
-      ? {
-          type: c.org_type_override,
-          stage1_response_days: c.stage1_response_days,
-          stage2_response_days: c.stage2_response_days,
-          ack_days: c.ack_days,
-          ombudsman_name: c.ombudsman_name,
-          ombudsman_url: c.ombudsman_url,
-          ombudsman_referral_months: c.ombudsman_referral_months,
-          legal_basis: c.legal_basis,
-        }
-      : null;
-    const rule = effectiveRule(org, c.org_type);
+    const rule = effectiveRule(c.org, c.org_type);
     const { status, overdue } = deriveStatus(c, rule);
-    if (status === 'responded' || status === 'resolved') continue; // already handled
+    if (status === 'responded' || status === 'with_ombudsman') continue; // nothing due from them
+    if (status === 'ack_overdue') {
+      items.push({
+        type: 'complaint',
+        id: c.id,
+        label: `Complaint NOT ACKNOWLEDGED — ${c.subject}`,
+        due_date: computeAckDue(c, rule),
+        company_name: c.org_name,
+        overdue: true,
+      });
+      continue;
+    }
+    if (!c.response_due || c.response_due > horizon) continue;
     items.push({
       type: 'complaint',
       id: c.id,

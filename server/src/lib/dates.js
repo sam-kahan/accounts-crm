@@ -9,6 +9,13 @@ export function todayISO() {
   );
 }
 
+// The Europe/London calendar date of an instant (e.g. when an email arrived).
+// An email at 00:30 BST is on the London day, not the UTC day before — and that
+// date can decide whether an acknowledgement was on time.
+export function londonDateOf(date) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(date);
+}
+
 // Add N calendar days to a YYYY-MM-DD string (used for payment terms, which
 // are calendar days — unlike complaint deadlines, which are working days).
 // The maths is done in UTC so a DST change can never shift the day.

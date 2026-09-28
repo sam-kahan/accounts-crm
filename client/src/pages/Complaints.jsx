@@ -12,7 +12,7 @@ const STAGE_LABEL = {
 };
 
 function StatusBadge({ c }) {
-  if (c.status === 'response_overdue') return <span className="badge red">{c.label}</span>;
+  if (c.needs_chasing) return <span className="badge red">{c.label}</span>;
   if (c.status === 'responded') return <span className="badge ok">Response received</span>;
   if (c.status === 'resolved') return <span className="badge ok">Resolved</span>;
   if (c.status === 'closed') return <span className="badge grey">Closed</span>;
@@ -73,8 +73,13 @@ function NewComplaintModal({
       setForm((f) => ({ ...f, organisation_id: org.id, org_name: org.name, org_type: org.type }));
       setNote(
         org.existed
-          ? `Linked to existing organisation “${org.name}”.`
-          : `Researched “${org.name}” — ${org.ombudsman_name || 'procedure'} and deadlines tailored.`,
+          ? `Linked to “${org.name}”, already saved — its procedure will set the deadlines.`
+          : `Found and saved “${org.name}”${org.procedure_ref ? ` (${org.procedure_ref})` : ''}: ` +
+            `acknowledge ${org.ack_days ?? '?'} · Stage 1 ${org.stage1_response_days ?? '?'} · ` +
+            `Stage 2 ${org.stage2_response_days ?? '?'} working days` +
+            (org.unconfirmed?.length ? ` — not confirmed: ${org.unconfirmed.join(', ')}` : '') +
+            '. This is AI research: check it against their procedure on the Organisations page ' +
+            'before relying on the dates. If you have their procedure document, upload it there instead.',
       );
     } catch (err) {
       setError(err.message);
@@ -93,6 +98,7 @@ function NewComplaintModal({
         organisation_id: form.organisation_id || null,
         acknowledged_on: form.acknowledged_on || null,
         responded_on: form.responded_on || null,
+        stage_started_on: form.stage !== 'stage_1' ? form.stage_started_on || null : null,
         imported: Boolean(importMode),
       });
       onCreated(created);
@@ -163,9 +169,15 @@ function NewComplaintModal({
             </div>
           )}
           {note && <div className="inline-note full" style={{ marginBottom: 12 }}>{note}</div>}
-          {form.organisation_id && (
+          {form.organisation_id && !note && (
             <div className="inline-note full" style={{ marginBottom: 12 }}>
-              ✓ Linked to a saved organisation — its tailored deadlines will apply.
+              ✓ Linked to a saved organisation — its procedure sets the deadlines.
+            </div>
+          )}
+          {!form.organisation_id && (
+            <div className="muted full" style={{ fontSize: 12, marginBottom: 12 }}>
+              Not linked to a saved organisation, so general timescales for this type apply. Pick
+              one above, or research it, so the deadlines follow their own procedure.
             </div>
           )}
           <label className="field full">
@@ -231,6 +243,13 @@ function NewComplaintModal({
                   <option value="ombudsman">Ombudsman</option>
                 </select>
               </label>
+              {form.stage !== 'stage_1' && (
+                <label className="field">
+                  <span className="lbl">Stage 2 requested on</span>
+                  <input type="date" value={form.stage_started_on || ''}
+                    onChange={(e) => setForm({ ...form, stage_started_on: e.target.value })} />
+                </label>
+              )}
               <label className="field">
                 <span className="lbl">Acknowledged on</span>
                 <input type="date" value={form.acknowledged_on || ''}
@@ -442,7 +461,7 @@ export default function Complaints() {
     return <div className="spinner">Loading complaints…</div>;
   }
 
-  const overdue = items.filter((c) => c.status === 'response_overdue');
+  const overdue = items.filter((c) => c.needs_chasing);
   const open = items.filter((c) => c.state === 'open');
   const shown =
     filter === 'overdue' ? overdue :
@@ -458,7 +477,7 @@ export default function Complaints() {
           <div className="value">{open.length}</div>
         </div>
         <div className={`stat ${overdue.length ? 'alert' : ''}`}>
-          <div className="label">Ignored / overdue</div>
+          <div className="label">Need chasing</div>
           <div className="value">{overdue.length}</div>
         </div>
         <div className="stat">
@@ -476,7 +495,7 @@ export default function Complaints() {
               aria-pressed={filter === f}
               onClick={() => setFilter(f)}
             >
-              {f[0].toUpperCase() + f.slice(1)}
+              {{ open: 'Open', overdue: 'Need chasing', resolved: 'Resolved', all: 'All' }[f]}
             </button>
           ))}
         </div>
@@ -503,7 +522,7 @@ export default function Complaints() {
                 <th>Subject</th>
                 <th>Organisation</th>
                 <th>Stage</th>
-                <th>Response due</th>
+                <th>Next deadline</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -529,7 +548,11 @@ export default function Complaints() {
                   </td>
                   <td className="muted">{c.org_name}</td>
                   <td><span className="badge navy">{STAGE_LABEL[c.stage] || c.stage}</span></td>
-                  <td className={`due ${c.overdue ? 'overdue' : ''}`}>{formatDate(c.response_due)}</td>
+                  <td className={`due ${c.needs_chasing ? 'overdue' : ''}`}>
+                    {c.status === 'ack_overdue' || c.status === 'awaiting_ack'
+                      ? <>{formatDate(c.ack_due)}<div className="muted" style={{ fontSize: 11 }}>acknowledgement</div></>
+                      : formatDate(c.response_due)}
+                  </td>
                   <td><StatusBadge c={c} /></td>
                 </tr>
               ))}

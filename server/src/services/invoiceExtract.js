@@ -286,8 +286,9 @@ function wrapUntrusted(text) {
   return `<untrusted_content>\n${text.slice(0, 40000)}\n</untrusted_content>`;
 }
 
-// Build the content block for whatever kind of file was uploaded.
-function contentFor({ buffer, mimetype, originalname }) {
+// Build the content block for whatever kind of file was uploaded. Also used to
+// read an organisation's complaints procedure (orgResearch.js).
+export function contentFor({ buffer, mimetype, originalname }) {
   const isPdf = mimetype === 'application/pdf' || /\.pdf$/i.test(originalname || '');
   if (isPdf) {
     return {

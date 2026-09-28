@@ -129,6 +129,23 @@ export const api = {
         body: JSON.stringify(data),
       }),
     defaults: (type) => request(`/organisations/defaults/${type}`),
+    // Read their own procedure document; returns values to check, saves nothing.
+    readProcedure: (file, { name, type } = {}) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (name) fd.append('name', name);
+      if (type) fd.append('type', type);
+      return request('/organisations/procedure/read', { method: 'POST', body: fd });
+    },
+    documents: (id) => request(`/organisations/${id}/documents`),
+    uploadDocuments: (id, files) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      return request(`/organisations/${id}/documents`, { method: 'POST', body: fd });
+    },
+    documentUrl: (docId) => `/api/organisations/documents/${docId}/download`,
+    removeDocument: (docId) =>
+      request(`/organisations/documents/${docId}`, { method: 'DELETE' }),
   },
 
   users: {
@@ -270,6 +287,12 @@ export const api = {
       request(`/complaints/${id}/events`, { method: 'POST', body: JSON.stringify(data) }),
     escalate: (id, date) =>
       request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
+    // Say what an email that arrived was: acknowledgement | response | correspondence.
+    reviewEmail: (id, emailId, as) =>
+      request(`/complaints/${id}/emails/${emailId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ as }),
+      }),
     emailConfig: () => request('/complaints/email/config'),
     fetchEmails: () => request('/complaints/email/fetch', { method: 'POST' }),
     aiConfig: () => request('/complaints/ai/config'),
@@ -298,6 +321,7 @@ export const ORG_TYPE_LABEL = {
   housing_association: 'Housing association',
   water: 'Water supplier',
   energy: 'Energy supplier',
+  managing_agent: 'Managing agent / freeholder',
   supplier: 'Supplier',
   other: 'Other',
 };

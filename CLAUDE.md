@@ -354,6 +354,66 @@ contractor at month end.
   over there), their payment date wins over ours (payments are recorded there),
   and an invoice **voided here is never resurrected** by anything arriving.
 
+## Complaints (how a complaint is followed)
+
+A complaint is held to the **organisation's own procedure**, step by step, and
+the page says how far each date can be trusted.
+
+- **The procedure lives on the organisation** (migration `019`): timescales
+  plus the three things "N working days" can't say — `stage1_clock` (some count
+  the Stage 1 outcome from their *acknowledgement*, e.g. LivingCity's PRO39),
+  `ombudsman_after_weeks` (may refer early, e.g. TPO after 8 weeks) and
+  `referral_from` (the window runs from their *final response*, not the day it
+  was raised). `procedure_ref` names their document. NULL on any field means
+  "not stated" and the type default applies — `effectiveRule().defaulted` lists
+  which, and every message says "the usual timescale — not confirmed from their
+  own procedure" rather than passing a default off as their rule.
+- **Getting it in**: upload their procedure document (`POST
+  /organisations/procedure/read`, read by Claude as untrusted data, kept in
+  `organisation_documents` on save) or research the website. Both return ONLY
+  what the source states, with the sentence each value came from
+  (`procedure_evidence`) and what couldn't be confirmed (`unconfirmed`) — never
+  a sector default dressed up as theirs. Nothing counts until a person ticks
+  "checked against their procedure" (`verified_at/_by`); saving without the tick
+  clears it, so an edited procedure has to be checked again. The complaint page
+  says "checked by X on date" or "not checked yet".
+- **`complaintRules.js` is the whole engine, pure and tested**:
+  `computeAckDue`, `computeResponseDue`, `computeOmbudsmanFrom`,
+  `computeOmbudsmanDeadline`, `deriveStatus` (adds `ack_overdue` and
+  `needs_chasing` — use `needs_chasing` for "needs chasing" lists, not
+  `status === 'response_overdue'`) and `procedureSteps` (the checklist the page
+  shows). `addMonths` clamps to month end — an overflowing 31 Jan + 1 month
+  would state a referral deadline later than the real one.
+- **Stored deadlines are recalculated, never left stale.** `response_due` and
+  `ombudsman_deadline` are stored for SQL (lists, digest), so
+  `services/complaintDeadlines.js#recomputeDeadlines` runs after anything that
+  changes an input: create, a correction, an acknowledgement (it moves Stage 1
+  on an acknowledgement clock), a response, an escalation, and an edit to the
+  organisation's procedure (all its open complaints). A due date typed in by
+  hand sets `response_due_manual` and is left alone. `stage_started_on` is when
+  the current stage's clock started (the Stage 2 request date for Stage 2);
+  `final_response_on` is kept through escalation because the referral window
+  counts from it.
+- **Nothing changes silently.** Every timeline entry records `created_by`; a
+  correction (`PUT`) writes "Details corrected — field: old → new" via
+  `describeChanges`. Dated steps (acknowledged, response, escalate, resolved)
+  always ask for the date — it moves deadlines — defaulting to today.
+- **Incoming email** is matched only by the complaint's own address or ref (the
+  mailbox is a shared catch-all), and matching changes nothing by itself: it is
+  flagged **New** until a person says whether it is their acknowledgement, their
+  response or just correspondence (`POST /:id/emails/:emailId/review`), which
+  dates it on the UK day it arrived (`londonDateOf`). Only the preview is
+  captured, and a reply that didn't copy in the complaint address never arrives
+  — the page says both, and to upload the letter under Documents.
+- **The AI reads the evidence**: PDFs and photos on a complaint go to the model
+  as document/image blocks (`attachmentBlocks`, capped at 10 files / 20 MB, and
+  it's told by name which it didn't get), with the same untrusted-content rule.
+  It is told which timescales are defaults so it doesn't quote them as theirs.
+- New type **`managing_agent`** (managing agent / freeholder): TPO or the
+  Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
+  after 8 weeks, within 12 months of the final response; FTT (Property Chamber)
+  for whether a charge is payable.
+
 ## Verify before committing
 
 - `npm test` (unit tests in `server/test/`, Node's built-in `node:test` — no
@@ -367,6 +427,23 @@ contractor at month end.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-09-28 — complaints follow the organisation's own procedure, step by step
+- **A checklist per complaint** — acknowledgement, Stage 1, Stage 2, when a
+  referral opens, the last day to refer — each dated from their procedure and
+  marked done / due / overdue / missed. Reasoning in "Complaints" above.
+- **Their procedure document is read and kept** on the organisation, each figure
+  shown with the sentence it came from; research returns only what it can
+  confirm. A "checked against their procedure" tick records who and when.
+- **Unacknowledged complaints are chased** (`ack_overdue`), in the lists, the
+  "Need chasing" filter, the chaser drafts and the nightly digest.
+- **Incoming emails are reviewed, not assumed**; corrections, dated steps and
+  who did what all land on the timeline; PDFs and photos reach the AI.
+- **Edit details** on a complaint (link the organisation, fix any date) — the
+  PUT existed but had no screen, and it now re-dates the complaint.
+- Fixed: a new complaint linked to an organisation kept the form's type rather
+  than the organisation's; escalation dates weren't validated; email timeline
+  dates used the UTC day.
 
 ### 2026-09-01 — voiding an invoice withdraws it in Greenco Invoicing too
 - **Reversing a month end is one action again.** Void released the lines here

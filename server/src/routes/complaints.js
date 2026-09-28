@@ -3,15 +3,18 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config, complaintEmailAddress } from '../config.js';
-import { todayISO } from '../lib/dates.js';
+import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
 import {
-  effectiveRule,
-  computeResponseDue,
-  computeOmbudsmanDeadline,
+  computeAckDue,
+  computeOmbudsmanFrom,
   deriveStatus,
+  procedureSteps,
+  describeChanges,
+  theOmbudsman,
 } from '../services/complaintRules.js';
+import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import {
   ingestEmails,
@@ -32,6 +35,7 @@ import {
   getAttachment,
   deleteAttachment,
   attachmentUpload,
+  attachmentBlocks,
 } from '../services/attachments.js';
 
 const router = Router();
@@ -41,6 +45,9 @@ const router = Router();
 // this doesn't cover those.)
 router.param('id', requireUuidParam);
 
+// Who did it, for the record kept on the timeline.
+const who = (req) => req.user?.name || req.user?.email || null;
+
 // Unambiguous characters only (no 0/O/1/I).
 function makeRefCode() {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -49,7 +56,13 @@ function makeRefCode() {
   return `GC-C-${s}`;
 }
 
-const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'supplier', 'other'];
+const ORG_TYPES = [
+  'council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other',
+];
+
+// A calendar date as the app stores it. Checked here so a malformed value is a
+// clean 400 rather than a Postgres error.
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date');
 
 const input = z.object({
   organisation_id: z.string().uuid().optional().nullable(),
@@ -62,40 +75,46 @@ const input = z.object({
   category: z.string().optional().nullable(),
   description: z.string().optional().nullable(),
   channel: z.enum(['email', 'phone', 'portal', 'letter', 'other']).optional(),
-  raised_on: z.string().min(1),
-  response_due: z.string().optional().nullable(), // override
+  raised_on: isoDate,
+  response_due: isoDate.optional().nullable(), // override
   // Set when importing an existing complaint at a known stage.
   stage: z.enum(['stage_1', 'stage_2', 'ombudsman']).optional(),
-  acknowledged_on: z.string().optional().nullable(),
-  responded_on: z.string().optional().nullable(),
+  // When the current stage's clock started (the Stage 2 request date).
+  stage_started_on: isoDate.optional().nullable(),
+  acknowledged_on: isoDate.optional().nullable(),
+  responded_on: isoDate.optional().nullable(),
+  final_response_on: isoDate.optional().nullable(),
   imported: z.boolean().optional(),
 });
 
-async function getRuleForComplaint(c) {
-  let org = null;
-  if (c.organisation_id) {
-    const r = await query('SELECT * FROM organisations WHERE id = $1', [c.organisation_id]);
-    org = r.rows[0] || null;
-  }
-  return effectiveRule(org, c.org_type);
-}
-
-// Attach derived status + rule + org contact context to a complaint row.
+// Attach derived status + rule + procedure checklist + org context to a row.
 async function decorate(c) {
-  let org = null;
-  if (c.organisation_id) {
-    const r = await query('SELECT * FROM organisations WHERE id = $1', [c.organisation_id]);
-    org = r.rows[0] || null;
-  }
-  const rule = effectiveRule(org, c.org_type);
+  const { org, rule } = await ruleForComplaint(c);
   const derived = deriveStatus(c, rule);
   return {
     ...c,
     ...derived,
     rule,
+    ack_due: computeAckDue(c, rule),
+    ombudsman_from: computeOmbudsmanFrom(c, rule),
+    steps: procedureSteps(c, rule),
     email_address: complaintEmailAddress(c.ref_code),
     org_email: org?.complaints_email || null,
     org_complaints_url: org?.complaints_url || null,
+    // What the deadlines rest on, so the page can say how far to trust them.
+    procedure: org
+      ? {
+          organisation_id: org.id,
+          name: org.name,
+          procedure_ref: org.procedure_ref,
+          procedure_summary: org.procedure_summary,
+          sources: org.sources || [],
+          evidence: org.procedure_evidence || {},
+          research_status: org.research_status,
+          verified_at: org.verified_at,
+          verified_by: org.verified_by,
+        }
+      : null,
   };
 }
 
@@ -148,7 +167,10 @@ async function gatherContext(id, extraContext) {
     ? docs.map((a) => `--- Attached document: ${a.filename} ---\n${a.extracted_text}`).join('\n\n')
     : '';
   const merged = [extraContext, docText].filter(Boolean).join('\n\n');
-  return { complaint, rule: complaint.rule, events, emails, extraContext: merged };
+  // PDFs and photos can't be turned into text here, so they go to the model
+  // as documents in their own right — letters and statements are mostly PDFs.
+  const blocks = await attachmentBlocks(id);
+  return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks };
 }
 
 // AI assistant: analyse the complaint + logged emails (+ pasted context) and
@@ -213,6 +235,7 @@ router.post(
       cc,
       subject: d.subject,
       body: d.body,
+      sentBy: who(req),
     });
     const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
     res.json({ sent: true, complaint: await decorate(updated) });
@@ -251,7 +274,9 @@ router.get(
     lines.push(`Raised: ${c.raised_on}   Stage: ${c.stage}   Status: ${c.label}`);
     if (c.acknowledged_on) lines.push(`Acknowledged: ${c.acknowledged_on}`);
     if (c.responded_on) lines.push(`Their response: ${c.responded_on}`);
+    if (c.ombudsman_from) lines.push(`Can refer from: ${c.ombudsman_from}`);
     lines.push(`Refer by: ${c.ombudsman_deadline || 'n/a'}`);
+    if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
     lines.push('');
     lines.push('GROUNDS FOR REFERRAL');
     lines.push('-'.repeat(48));
@@ -304,7 +329,7 @@ router.post(
       await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY response_due ASC NULLS LAST`)
     ).rows;
     const decorated = await Promise.all(open.map(decorate));
-    const overdue = decorated.filter((c) => c.status === 'response_overdue').slice(0, 12);
+    const overdue = decorated.filter((c) => c.needs_chasing).slice(0, 12);
 
     const drafts = [];
     for (const c of overdue) {
@@ -313,8 +338,12 @@ router.post(
         const r = await assistComplaint({
           ...ctx,
           instruction:
-            'Draft a firm chaser email pressing for the overdue response and noting that the ' +
-            'missed statutory deadline is itself a complaint-handling failure.',
+            c.status === 'ack_overdue'
+              ? 'Draft a polite but firm chaser: the complaint has not been acknowledged within ' +
+                'the time their own procedure sets. Ask them to acknowledge it, name who is ' +
+                'handling it, and confirm when the outcome will be sent.'
+              : 'Draft a firm chaser email pressing for the overdue response and noting that the ' +
+                'missed deadline is itself a complaint-handling failure.',
         });
         drafts.push({
           id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject,
@@ -393,8 +422,8 @@ router.get(
     ).rows;
     const decorated = await Promise.all(open.map(decorate));
 
-    const overdue = decorated.filter((c) => c.status === 'response_overdue');
-    const awaiting = decorated.filter((c) => c.status !== 'response_overdue');
+    const overdue = decorated.filter((c) => c.needs_chasing);
+    const awaiting = decorated.filter((c) => !c.needs_chasing);
 
     const counts = (
       await query(`
@@ -457,24 +486,22 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
-    const rule = effectiveRule(
-      d.organisation_id
-        ? (await query('SELECT * FROM organisations WHERE id = $1', [d.organisation_id])).rows[0]
-        : null,
-      d.org_type,
-    );
     const stage = d.stage || 'stage_1';
-    const base = { ...d, stage };
-    // Response-due date. Computing it from raised_on only makes sense for a
-    // Stage 1 clock; for an imported complaint already at Stage 2/ombudsman the
-    // original stage clock can't be reconstructed from raised_on, so leave it
-    // null (unless the user supplied an override) rather than showing it as
-    // spuriously overdue the moment it's imported.
-    let responseDue = d.response_due || null;
-    if (!responseDue && !(d.imported && stage !== 'stage_1')) {
-      responseDue = computeResponseDue(base, rule);
+    // A linked organisation brings its type: the type decides the default for
+    // anything its procedure doesn't state.
+    if (d.organisation_id) {
+      const org = (await query('SELECT type FROM organisations WHERE id = $1', [d.organisation_id]))
+        .rows[0];
+      if (!org) throw new HttpError(400, 'That organisation no longer exists');
+      d.org_type = org.type;
     }
-    const ombudsmanDeadline = computeOmbudsmanDeadline(base, rule);
+    // An imported complaint already past Stage 1 has a clock that started on
+    // its Stage 2 request, not on raised_on. Without that date there is no
+    // honest due date to show, so none is stored (marked as set by hand, so
+    // recalculating leaves it empty) until someone enters the request date.
+    const unknownClock =
+      d.imported && stage !== 'stage_1' && !d.stage_started_on && !d.response_due;
+    const manual = Boolean(d.response_due || unknownClock);
 
     // Retry on the (astronomically unlikely) ref_code collision rather than
     // surfacing a 500 from the unique index.
@@ -487,29 +514,33 @@ router.post(
           `INSERT INTO complaints
             (organisation_id, org_name, org_type, reference, our_reference, property,
              subject, category, description, channel, raised_on, stage, state,
-             response_due, ombudsman_deadline, ref_code, acknowledged_on, responded_on, imported)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18)
+             response_due, response_due_manual, ref_code, acknowledged_on, responded_on,
+             imported, stage_started_on, final_response_on)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20)
            RETURNING *`,
           [
             d.organisation_id || null, d.org_name, d.org_type || 'council',
             d.reference || null, d.our_reference || null, d.property || null,
             d.subject, d.category || null, d.description || null, d.channel || 'email',
-            d.raised_on, stage, responseDue, ombudsmanDeadline, makeRefCode(),
+            d.raised_on, stage, d.response_due || null, manual, makeRefCode(),
             d.acknowledged_on || null, d.responded_on || null, d.imported || false,
+            d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
+            d.final_response_on || null,
           ],
         );
         await client.query(
-          `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-           VALUES ($1, $2, 'raised', $3)`,
+          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+           VALUES ($1, $2, 'raised', $3, $4)`,
           [
             rows[0].id, d.raised_on,
             d.imported
               ? `Existing complaint imported (raised via ${d.channel || 'email'})`
               : `Complaint raised via ${d.channel || 'email'}`,
+            who(req),
           ],
         );
+        created = await recomputeDeadlines(rows[0].id, client);
         await client.query('COMMIT');
-        created = rows[0];
       } catch (err) {
         await client.query('ROLLBACK');
         // Unique violation on the ref_code index — try a fresh code.
@@ -526,9 +557,69 @@ router.post(
   }),
 );
 
+// Say what an email that arrived actually was. Logging an email changes
+// nothing by itself — a person decides whether it is their acknowledgement or
+// their response, and the complaint's dates follow from that, dated the day it
+// arrived (UK time).
+const reviewInput = z.object({
+  as: z.enum(['acknowledgement', 'response', 'correspondence']),
+});
+
+router.post(
+  '/:id/emails/:emailId/review',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) {
+      throw new HttpError(400, 'Invalid email id');
+    }
+    const d = parse(reviewInput, req.body);
+    const em = (
+      await query('SELECT * FROM complaint_emails WHERE id = $1 AND complaint_id = $2', [
+        req.params.emailId, req.params.id,
+      ])
+    ).rows[0];
+    if (!em) throw new HttpError(404, 'Email not found on this complaint');
+    const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]))
+      .rows[0];
+    const on = londonDateOf(new Date(em.received_at));
+    const subject = em.subject || '(no subject)';
+
+    await query(
+      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3
+        WHERE id = $1`,
+      [em.id, d.as, who(req)],
+    );
+    if (d.as === 'acknowledgement') {
+      await query('UPDATE complaints SET acknowledged_on = $2 WHERE id = $1', [complaint.id, on]);
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         VALUES ($1,$2,'acknowledged',$3,$4)`,
+        [complaint.id, on, `Acknowledged by email: ${subject}`, who(req)],
+      );
+    } else if (d.as === 'response') {
+      await query(
+        `UPDATE complaints SET responded_on = $2,
+                final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
+          WHERE id = $1`,
+        [complaint.id, on],
+      );
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         VALUES ($1,$2,'response_received',$3,$4)`,
+        [
+          complaint.id, on,
+          `${complaint.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`,
+          who(req),
+        ],
+      );
+    }
+    const updated = await recomputeDeadlines(complaint.id);
+    res.json(await decorate(updated));
+  }),
+);
+
 // Add a timeline event (chase, acknowledged, response received, note, …).
 const eventInput = z.object({
-  event_date: z.string().min(1),
+  event_date: isoDate,
   type: z.enum([
     'raised', 'acknowledged', 'chased', 'response_received', 'escalated',
     'resolved', 'deadline_missed', 'note',
@@ -545,9 +636,9 @@ router.post(
     if (!complaint) throw new HttpError(404, 'Complaint not found');
 
     await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-       VALUES ($1,$2,$3,$4)`,
-      [req.params.id, d.event_date, d.type, d.note || null],
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [req.params.id, d.event_date, d.type, d.note || null, who(req)],
     );
 
     // Side effects: certain event types update the complaint's own fields.
@@ -556,9 +647,14 @@ router.post(
         req.params.id, d.event_date,
       ]);
     } else if (d.type === 'response_received') {
-      await query('UPDATE complaints SET responded_on = $2 WHERE id = $1', [
-        req.params.id, d.event_date,
-      ]);
+      // A Stage 2 response is their final one — the date many schemes count
+      // the referral window from.
+      await query(
+        `UPDATE complaints SET responded_on = $2,
+                final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
+          WHERE id = $1`,
+        [req.params.id, d.event_date],
+      );
     } else if (d.type === 'resolved') {
       await query(
         `UPDATE complaints SET state = 'resolved', stage = 'resolved', closed_on = $2 WHERE id = $1`,
@@ -566,15 +662,21 @@ router.post(
       );
     }
 
-    const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
-    res.status(201).json(await decorate(rows[0]));
+    // An acknowledgement can move the Stage 1 date (where their clock runs
+    // from it) and a final response starts the referral window.
+    const updated = await recomputeDeadlines(req.params.id);
+    res.status(201).json(await decorate(updated));
   }),
 );
 
-// Escalate to the next stage; recomputes the response deadline for that stage.
+// Escalate to the next stage. The new stage's clock starts on the date given
+// (the day the Stage 2 request went in), and its deadline is worked out again.
+const escalateInput = z.object({ date: isoDate.optional().nullable() });
+
 router.post(
   '/:id/escalate',
   asyncHandler(async (req, res) => {
+    const d = parse(escalateInput, req.body || {});
     const existing = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     const complaint = existing.rows[0];
     if (!complaint) throw new HttpError(404, 'Complaint not found');
@@ -584,34 +686,34 @@ router.post(
       complaint.stage === 'stage_2' ? 'ombudsman' : null;
     if (!next) throw new HttpError(400, 'Complaint cannot be escalated further');
 
-    const escalatedOn = req.body?.date || todayISO();
-    const rule = await getRuleForComplaint(complaint);
+    const escalatedOn = d.date || todayISO();
+    const { rule } = await ruleForComplaint(complaint);
 
-    let responseDue = complaint.response_due;
-    if (next === 'stage_2') {
-      // New Stage 2 clock from the escalation date.
-      responseDue = computeResponseDue(
-        { raised_on: escalatedOn, stage: 'stage_2' }, rule,
-      );
-    }
-
+    // Assignments read the row as it was, so a Stage 2 response recorded as
+    // responded_on is kept as the final response before it is cleared.
     await query(
-      `UPDATE complaints SET stage = $2, responded_on = NULL, response_due = $3 WHERE id = $1`,
-      [req.params.id, next, next === 'ombudsman' ? null : responseDue],
+      `UPDATE complaints
+          SET final_response_on = COALESCE(final_response_on,
+                CASE WHEN stage = 'stage_2' THEN responded_on END),
+              stage = $2, stage_started_on = $3, responded_on = NULL,
+              response_due_manual = false
+        WHERE id = $1`,
+      [req.params.id, next, escalatedOn],
     );
     await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-       VALUES ($1,$2,'escalated',$3)`,
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1,$2,'escalated',$3,$4)`,
       [
         req.params.id, escalatedOn,
         next === 'ombudsman'
-          ? `Referred to the ${rule.ombudsman}`
+          ? `Referred to ${theOmbudsman(rule.ombudsman)}`
           : 'Escalated to Stage 2',
+        who(req),
       ],
     );
 
-    const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
-    res.json(await decorate(rows[0]));
+    const updated = await recomputeDeadlines(req.params.id);
+    res.json(await decorate(updated));
   }),
 );
 
@@ -619,26 +721,70 @@ router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const d = parse(input.partial(), req.body);
+    const existing = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]))
+      .rows[0];
+    if (!existing) throw new HttpError(404, 'Complaint not found');
+
+    // Linking an organisation brings its type with it: the type decides the
+    // default for anything its procedure doesn't state.
+    let orgType = d.org_type;
+    if (d.organisation_id) {
+      const org = (await query('SELECT type FROM organisations WHERE id = $1', [d.organisation_id]))
+        .rows[0];
+      if (!org) throw new HttpError(400, 'That organisation no longer exists');
+      orgType = org.type;
+    }
+
+    // A due date typed in is kept through recalculation; clearing it hands the
+    // date back to the procedure. Entering the Stage 2 request date on an
+    // import that had none lets the procedure date it from then on.
+    let manual;
+    if (d.response_due !== undefined) manual = d.response_due !== null;
+    else if (d.stage_started_on && existing.response_due_manual && !existing.response_due) {
+      manual = false;
+    }
+
+    // At Stage 1 the clock starts the day the complaint was made, so correcting
+    // that date moves the start with it.
+    const stageStarted =
+      existing.stage === 'stage_1' && d.raised_on ? d.raised_on : d.stage_started_on;
+
     // Update only the sent fields; an explicit null clears a nullable column
-    // (reference, our_reference, property, category, description, response_due)
-    // instead of being ignored. org_name/subject are NOT NULL in the schema.
+    // instead of being ignored. org_name/subject/raised_on are NOT NULL.
     const { clause, values } = buildUpdateSet({
+      organisation_id: d.organisation_id,
       org_name: d.org_name,
+      org_type: orgType,
       reference: d.reference,
       our_reference: d.our_reference,
       property: d.property,
       subject: d.subject,
       category: d.category,
       description: d.description,
+      channel: d.channel,
+      raised_on: d.raised_on,
+      stage_started_on: stageStarted,
+      acknowledged_on: d.acknowledged_on,
+      responded_on: d.responded_on,
+      final_response_on: d.final_response_on,
       response_due: d.response_due,
+      response_due_manual: manual,
     });
     if (!clause) throw new HttpError(400, 'No fields to update');
-    const { rows } = await query(
-      `UPDATE complaints SET ${clause} WHERE id = $1 RETURNING *`,
-      [req.params.id, ...values],
-    );
-    if (!rows[0]) throw new HttpError(404, 'Complaint not found');
-    res.json(await decorate(rows[0]));
+    await query(`UPDATE complaints SET ${clause} WHERE id = $1`, [req.params.id, ...values]);
+    const updated = await recomputeDeadlines(req.params.id);
+
+    // Nothing changes silently: every corrected field goes on the timeline
+    // with what it was and what it is now, and who changed it.
+    const changes = describeChanges(existing, updated);
+    if (changes.length) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         VALUES ($1, $2, 'note', $3, $4)`,
+        [req.params.id, todayISO(), `Details corrected — ${changes.join('; ')}`, who(req)],
+      );
+    }
+    res.json(await decorate(updated));
   }),
 );
 

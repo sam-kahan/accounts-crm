@@ -1,51 +1,120 @@
 import { useEffect, useState } from 'react';
-import { api, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
 const EMPTY = {
   name: '', type: 'council', location: '', complaints_email: '', complaints_url: '',
   phone: '', ombudsman_name: '', ombudsman_url: '', ombudsman_referral_months: '',
   stage1_response_days: '', stage2_response_days: '', ack_days: '',
-  procedure_summary: '', legal_basis: '', sources: [], research_status: 'none', notes: '',
+  procedure_ref: '', stage1_clock: '', ombudsman_after_weeks: '', referral_from: '',
+  procedure_summary: '', legal_basis: '', sources: [], unconfirmed: [], procedure_evidence: {},
+  research_status: 'none', notes: '', verified: false,
 };
 
 function num(v) { return v === '' || v == null ? null : Number(v); }
 
+// Fill the form from a researched / read profile. Values the source didn't
+// state come back null and are cleared rather than keeping an old guess —
+// the type default then applies and is labelled as a default.
+function applyProfile(f, p, status) {
+  const v = (x) => (x === null || x === undefined ? '' : x);
+  return {
+    ...f,
+    procedure_ref: v(p.procedure_ref),
+    complaints_email: p.complaints_email || f.complaints_email,
+    complaints_url: p.complaints_url || f.complaints_url,
+    phone: p.phone || f.phone,
+    ombudsman_name: v(p.ombudsman_name),
+    ombudsman_url: v(p.ombudsman_url),
+    ombudsman_referral_months: v(p.ombudsman_referral_months),
+    referral_from: v(p.referral_from),
+    ombudsman_after_weeks: v(p.ombudsman_after_weeks),
+    ack_days: v(p.ack_days),
+    stage1_response_days: v(p.stage1_response_days),
+    stage1_clock: v(p.stage1_clock),
+    stage2_response_days: v(p.stage2_response_days),
+    procedure_summary: p.procedure_summary || '',
+    legal_basis: p.legal_basis || '',
+    sources: p.sources?.length ? p.sources : status === 'document' ? [] : f.sources,
+    unconfirmed: p.unconfirmed || [],
+    procedure_evidence: p.evidence || {},
+    research_status: status,
+    verified: false, // new values have not been checked by anyone yet
+  };
+}
+
 function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
-  const [form, setForm] = useState(initial || EMPTY);
+  const [form, setForm] = useState(() =>
+    initial
+      ? {
+          ...EMPTY,
+          ...Object.fromEntries(Object.entries(initial).map(([k, v]) => [k, v ?? EMPTY[k] ?? ''])),
+          procedure_evidence: initial.procedure_evidence || {},
+          unconfirmed: initial.unconfirmed || [],
+          sources: initial.sources || [],
+          verified: Boolean(initial.verified_at),
+        }
+      : EMPTY,
+  );
+  const [defaults, setDefaults] = useState(null);
+  const [docs, setDocs] = useState([]);
+  const [pendingDoc, setPendingDoc] = useState(null); // file read, stored on save
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
+  const [reading, setReading] = useState(false);
   const [error, setError] = useState(null);
+  const [info, setInfo] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    api.organisations.defaults(form.type).then(setDefaults).catch(() => setDefaults(null));
+  }, [form.type]);
+  useEffect(() => {
+    if (initial?.id) api.organisations.documents(initial.id).then(setDocs).catch(() => setDocs([]));
+  }, [initial?.id]);
 
   async function research() {
     if (!form.name.trim()) { setError('Enter the organisation name first.'); return; }
     setResearching(true);
     setError(null);
+    setInfo(null);
     try {
       const p = await api.organisations.research({
         name: form.name, type: form.type, location: form.location,
       });
-      setForm((f) => ({
-        ...f,
-        complaints_email: p.complaints_email || f.complaints_email,
-        complaints_url: p.complaints_url || f.complaints_url,
-        phone: p.phone || f.phone,
-        ombudsman_name: p.ombudsman_name || f.ombudsman_name,
-        ombudsman_url: p.ombudsman_url || f.ombudsman_url,
-        ombudsman_referral_months: p.ombudsman_referral_months ?? f.ombudsman_referral_months,
-        stage1_response_days: p.stage1_response_days ?? f.stage1_response_days,
-        stage2_response_days: p.stage2_response_days ?? f.stage2_response_days,
-        ack_days: p.ack_days ?? f.ack_days,
-        procedure_summary: p.procedure_summary || f.procedure_summary,
-        legal_basis: p.legal_basis || f.legal_basis,
-        sources: p.sources || f.sources,
-        research_status: 'researched',
-      }));
+      setForm((f) => applyProfile(f, p, 'researched'));
+      setInfo('Researched from their website. Check each figure against the quoted source before ticking “checked”.');
     } catch (err) {
       setError(err.message);
     } finally {
       setResearching(false);
+    }
+  }
+
+  async function readDocument(file) {
+    if (!file) return;
+    setReading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const p = await api.organisations.readProcedure(file, { name: form.name, type: form.type });
+      setForm((f) => applyProfile(f, p, 'document'));
+      setPendingDoc(file);
+      setInfo(`Read from “${file.name}”. The document will be kept on this organisation when you save. Check each figure against the quote under it.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReading(false);
+    }
+  }
+
+  async function removeDoc(doc) {
+    if (!confirm(`Remove “${doc.filename}” from this organisation?`)) return;
+    try {
+      await api.organisations.removeDocument(doc.id);
+      setDocs((d) => d.filter((x) => x.id !== doc.id));
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -54,22 +123,63 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
     setBusy(true);
     setError(null);
     const payload = {
-      ...form,
+      name: form.name,
+      type: form.type,
+      location: form.location || null,
+      complaints_email: form.complaints_email || null,
+      complaints_url: form.complaints_url || null,
+      phone: form.phone || null,
+      ombudsman_name: form.ombudsman_name || null,
+      ombudsman_url: form.ombudsman_url || null,
       ombudsman_referral_months: num(form.ombudsman_referral_months),
       stage1_response_days: num(form.stage1_response_days),
       stage2_response_days: num(form.stage2_response_days),
       ack_days: num(form.ack_days),
+      procedure_ref: form.procedure_ref || null,
+      stage1_clock: form.stage1_clock || null,
+      ombudsman_after_weeks: num(form.ombudsman_after_weeks),
+      referral_from: form.referral_from || null,
+      procedure_summary: form.procedure_summary || null,
+      legal_basis: form.legal_basis || null,
+      sources: form.sources || [],
+      unconfirmed: form.unconfirmed || [],
+      procedure_evidence: form.procedure_evidence || {},
+      // Typing any timescale in by hand makes it a procedure someone entered.
+      research_status:
+        form.research_status === 'none' &&
+        [form.ack_days, form.stage1_response_days, form.stage2_response_days, form.procedure_ref]
+          .some((x) => x !== '' && x !== null && x !== undefined)
+          ? 'manual'
+          : form.research_status,
+      verified: Boolean(form.verified),
+      notes: form.notes || null,
     };
     try {
       const saved = initial?.id
         ? await api.organisations.update(initial.id, payload)
         : await api.organisations.create(payload);
+      if (pendingDoc) await api.organisations.uploadDocuments(saved.id, [pendingDoc]);
       onSaved(saved);
     } catch (err) {
       setError(err.message);
       setBusy(false);
     }
   }
+
+  // A figure's source: the quote it came from, or a plain statement that the
+  // general default applies because their procedure doesn't say.
+  const Evidence = ({ k, dflt }) => {
+    const q = form.procedure_evidence?.[k];
+    if (q) return <span className="muted" style={{ fontSize: 12, fontStyle: 'italic' }}>“{q}”</span>;
+    const empty = form[k] === '' || form[k] === null || form[k] === undefined;
+    if (empty && dflt !== undefined && dflt !== null) {
+      return <span className="muted" style={{ fontSize: 12 }}>Blank — the general default ({String(dflt)}) will be used.</span>;
+    }
+    if (form.unconfirmed?.includes(k)) {
+      return <span style={{ fontSize: 12, color: 'var(--warn)' }}>Not stated in the source — check.</span>;
+    }
+    return null;
+  };
 
   return (
     <Modal title={initial?.id ? 'Edit organisation' : 'Add organisation'} onClose={onClose}>
@@ -92,47 +202,98 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
           </label>
         </div>
 
-        <div className="flex-between" style={{ margin: '6px 0 14px' }}>
-          <div className="muted" style={{ fontSize: 13 }}>
-            {form.research_status === 'researched' ? '✓ Procedure researched — review below' : 'Research this body’s complaints procedure & deadlines'}
+        <div className="card" style={{ margin: '4px 0 16px', padding: 14 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Their complaints procedure</div>
+          <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+            Best: upload their own procedure document. Otherwise research their website. Either
+            way, the figures are filled in for you to check.
           </div>
-          <button
-            type="button"
-            className="btn-navy btn-sm"
-            onClick={research}
-            disabled={researching || !researchEnabled}
-            title={researchEnabled ? '' : 'Set ANTHROPIC_API_KEY on the server to enable'}
-          >
-            {researching ? 'Researching…' : '🔎 Research procedure'}
-          </button>
+          <div className="btn-row">
+            <label className="btn-navy btn-sm" style={{ cursor: researchEnabled ? 'pointer' : 'not-allowed', margin: 0, opacity: researchEnabled ? 1 : 0.6 }}>
+              {reading ? 'Reading…' : '📄 Upload their procedure document'}
+              <input type="file" style={{ display: 'none' }} disabled={reading || !researchEnabled}
+                accept=".pdf,.doc,.docx,.txt,image/*"
+                onChange={(e) => { readDocument(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            <button type="button" className="btn btn-sm" onClick={research}
+              disabled={researching || !researchEnabled}
+              title={researchEnabled ? '' : 'Set ANTHROPIC_API_KEY on the server to enable'}>
+              {researching ? 'Researching…' : '🔎 Research their website'}
+            </button>
+          </div>
+          {!researchEnabled && (
+            <div className="inline-note warn" style={{ marginTop: 10 }}>
+              Reading and research need <code>ANTHROPIC_API_KEY</code> on the server. You can still
+              type the procedure in by hand.
+            </div>
+          )}
+          {info && <div className="inline-note" style={{ marginTop: 10 }}>{info}</div>}
+          {docs.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 13 }}>
+              <div className="lbl">Documents on file</div>
+              {docs.map((d) => (
+                <div key={d.id} className="flex-between" style={{ gap: 8 }}>
+                  <a href={api.organisations.documentUrl(d.id)} target="_blank" rel="noreferrer">{d.filename}</a>
+                  <span className="muted">{formatDate(String(d.uploaded_at).slice(0, 10))}
+                    <button type="button" className="btn-ghost btn-sm" onClick={() => removeDoc(d)}
+                      aria-label={`Remove ${d.filename}`}>✕</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        {!researchEnabled && (
-          <div className="inline-note warn" style={{ marginBottom: 14 }}>
-            AI research is off. Add <code>ANTHROPIC_API_KEY</code> to the server .env to enable it;
-            you can still fill the procedure in manually.
-          </div>
-        )}
 
         <div className="form-grid">
+          <label className="field full"><span className="lbl">Procedure name / version</span>
+            <input value={form.procedure_ref || ''} onChange={(e) => set('procedure_ref', e.target.value)}
+              placeholder="e.g. PRO39 V7 (Jul 2025)" />
+            <Evidence k="procedure_ref" /></label>
           <label className="field"><span className="lbl">Complaints email</span>
-            <input value={form.complaints_email || ''} onChange={(e) => set('complaints_email', e.target.value)} /></label>
+            <input value={form.complaints_email || ''} onChange={(e) => set('complaints_email', e.target.value)} />
+            <Evidence k="complaints_email" /></label>
           <label className="field"><span className="lbl">Complaints page URL</span>
             <input value={form.complaints_url || ''} onChange={(e) => set('complaints_url', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Ombudsman</span>
-            <input value={form.ombudsman_name || ''} onChange={(e) => set('ombudsman_name', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Ombudsman URL</span>
+
+          <label className="field"><span className="lbl">Acknowledge within (working days)</span>
+            <input type="number" min="0" value={form.ack_days ?? ''} onChange={(e) => set('ack_days', e.target.value)} />
+            <Evidence k="ack_days" dflt={defaults?.ackDays} /></label>
+          <label className="field"><span className="lbl">Stage 1 outcome within (working days)</span>
+            <input type="number" min="0" value={form.stage1_response_days ?? ''} onChange={(e) => set('stage1_response_days', e.target.value)} />
+            <Evidence k="stage1_response_days" dflt={defaults?.stage1Days} /></label>
+          <label className="field"><span className="lbl">Stage 1 counted from</span>
+            <select value={form.stage1_clock || ''} onChange={(e) => set('stage1_clock', e.target.value)}>
+              <option value="">Not stated — use when they receive it</option>
+              <option value="receipt">When they receive it</option>
+              <option value="acknowledgement">When they acknowledge it</option>
+            </select>
+            <Evidence k="stage1_clock" /></label>
+          <label className="field"><span className="lbl">Stage 2 response within (working days)</span>
+            <input type="number" min="0" value={form.stage2_response_days ?? ''} onChange={(e) => set('stage2_response_days', e.target.value)} />
+            <Evidence k="stage2_response_days" dflt={defaults?.stage2Days} /></label>
+
+          <label className="field"><span className="lbl">Ombudsman / redress scheme</span>
+            <input value={form.ombudsman_name || ''} onChange={(e) => set('ombudsman_name', e.target.value)} />
+            <Evidence k="ombudsman_name" dflt={defaults?.ombudsman} /></label>
+          <label className="field"><span className="lbl">Ombudsman website</span>
             <input value={form.ombudsman_url || ''} onChange={(e) => set('ombudsman_url', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Acknowledge (working days)</span>
-            <input type="number" value={form.ack_days ?? ''} onChange={(e) => set('ack_days', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Referral window (months)</span>
-            <input type="number" value={form.ombudsman_referral_months ?? ''} onChange={(e) => set('ombudsman_referral_months', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Stage 1 response (working days)</span>
-            <input type="number" value={form.stage1_response_days ?? ''} onChange={(e) => set('stage1_response_days', e.target.value)} /></label>
-          <label className="field"><span className="lbl">Stage 2 response (working days)</span>
-            <input type="number" value={form.stage2_response_days ?? ''} onChange={(e) => set('stage2_response_days', e.target.value)} /></label>
-          <label className="field full"><span className="lbl">Procedure summary</span>
-            <textarea value={form.procedure_summary || ''} onChange={(e) => set('procedure_summary', e.target.value)} /></label>
-          <label className="field full"><span className="lbl">Legal basis</span>
+          <label className="field"><span className="lbl">Can refer after (weeks, if unresolved)</span>
+            <input type="number" min="0" value={form.ombudsman_after_weeks ?? ''} onChange={(e) => set('ombudsman_after_weeks', e.target.value)} />
+            <Evidence k="ombudsman_after_weeks" dflt={defaults?.ombudsmanAfterWeeks ?? undefined} /></label>
+          <label className="field"><span className="lbl">Must refer within (months)</span>
+            <input type="number" min="0" value={form.ombudsman_referral_months ?? ''} onChange={(e) => set('ombudsman_referral_months', e.target.value)} />
+            <Evidence k="ombudsman_referral_months" dflt={defaults?.referralMonths} /></label>
+          <label className="field full"><span className="lbl">…counted from</span>
+            <select value={form.referral_from || ''} onChange={(e) => set('referral_from', e.target.value)}>
+              <option value="">Default for this type{defaults?.referralFrom === 'final_response' ? ' (their final response)' : ' (when the complaint was made)'}</option>
+              <option value="raised">When the complaint was made</option>
+              <option value="final_response">Their final response</option>
+            </select>
+            <Evidence k="referral_from" /></label>
+
+          <label className="field full"><span className="lbl">How their procedure works</span>
+            <textarea rows={4} value={form.procedure_summary || ''} onChange={(e) => set('procedure_summary', e.target.value)} /></label>
+          <label className="field full"><span className="lbl">Ombudsman and the law</span>
             <textarea value={form.legal_basis || ''} onChange={(e) => set('legal_basis', e.target.value)} /></label>
         </div>
 
@@ -147,6 +308,18 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
           </div>
         )}
 
+        <label className="inline-note" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={Boolean(form.verified)} onChange={(e) => set('verified', e.target.checked)}
+            style={{ marginTop: 3 }} />
+          <span>
+            <strong>I have checked these figures against their published procedure.</strong>
+            <span style={{ display: 'block', fontSize: 12 }}>
+              Complaints show the procedure as checked, with your name and the date. Leave it
+              unticked if you haven’t — they will say it still needs checking.
+            </span>
+          </span>
+        </label>
+
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
@@ -156,11 +329,20 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   );
 }
 
+function ProcedureBadge({ o }) {
+  if (o.verified_at) return <span className="badge ok" title={`Checked by ${o.verified_by || '—'}`}>Checked</span>;
+  if (o.research_status === 'document') return <span className="badge amber">From document — not checked</span>;
+  if (o.research_status === 'researched') return <span className="badge amber">Researched — not checked</span>;
+  if (o.research_status === 'manual') return <span className="badge amber">Entered — not checked</span>;
+  return <span className="badge grey">Not set</span>;
+}
+
 export default function Organisations() {
   const [orgs, setOrgs] = useState(null);
   const [editing, setEditing] = useState(null); // org object or 'new'
   const [researchEnabled, setResearchEnabled] = useState(false);
   const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);
 
   const load = () => {
     setErr(null);
@@ -178,7 +360,11 @@ export default function Organisations() {
   }, []);
 
   async function remove(o) {
-    if (!confirm(`Delete ${o.name}?`)) return;
+    const n = Number(o.complaint_count || 0);
+    if (!confirm(
+      `Delete ${o.name}?` +
+        (n ? `\n\n${n} complaint(s) against it will fall back to general timescales.` : ''),
+    )) return;
     try {
       await api.organisations.remove(o.id);
       await load();
@@ -190,7 +376,7 @@ export default function Organisations() {
   return (
     <>
       <div className="toolbar flex-between">
-        <div className="muted">Bodies you complain to, with their researched procedures.</div>
+        <div className="muted">Bodies you complain to, and the procedure each one must follow.</div>
         <button className="btn-primary" onClick={() => setEditing('new')}>+ Add organisation</button>
       </div>
 
@@ -199,6 +385,7 @@ export default function Organisations() {
           {err} <button className="linkish" onClick={load}>Retry</button>
         </div>
       )}
+      {note && <div className="inline-note" style={{ marginBottom: 12 }}>{note}</div>}
 
       <div className="card">
         {!orgs ? (
@@ -212,7 +399,7 @@ export default function Organisations() {
         ) : (
           <table>
             <thead>
-              <tr><th>Name</th><th>Type</th><th>Ombudsman</th><th>Procedure</th><th>Complaints</th><th></th></tr>
+              <tr><th>Name</th><th>Type</th><th>Procedure</th><th>Complaints</th><th></th></tr>
             </thead>
             <tbody>
               {orgs.map((o) => (
@@ -231,14 +418,12 @@ export default function Organisations() {
                     }}
                   >
                     <strong>{o.name}</strong>
-                    {o.location && <div className="muted" style={{ fontSize: 12 }}>{o.location}</div>}</td>
-                  <td><span className="badge navy">{ORG_TYPE_LABEL[o.type] || o.type}</span></td>
-                  <td className="muted">{o.ombudsman_name || '—'}</td>
-                  <td>
-                    <span className={`badge ${o.research_status === 'researched' ? 'green' : o.research_status === 'manual' ? 'ok' : 'grey'}`}>
-                      {o.research_status === 'researched' ? 'Researched' : o.research_status === 'manual' ? 'Set' : 'Not set'}
-                    </span>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {[o.procedure_ref, o.location].filter(Boolean).join(' · ') || o.ombudsman_name || ''}
+                    </div>
                   </td>
+                  <td><span className="badge navy">{ORG_TYPE_LABEL[o.type] || o.type}</span></td>
+                  <td><ProcedureBadge o={o} /></td>
                   <td className="muted">{o.complaint_count || 0}</td>
                   <td style={{ textAlign: 'right' }}>
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(o)}>Edit</button>
@@ -256,7 +441,15 @@ export default function Organisations() {
           initial={editing === 'new' ? null : editing}
           researchEnabled={researchEnabled}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={(saved) => {
+            setEditing(null);
+            setNote(
+              saved?.recalculated
+                ? `Saved. The deadlines on ${saved.recalculated} open complaint(s) were recalculated from this procedure.`
+                : 'Saved.',
+            );
+            load();
+          }}
         />
       )}
     </>

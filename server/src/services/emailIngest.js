@@ -1,5 +1,6 @@
 import { query, pool } from '../db/pool.js';
 import { complaintEmailAddress } from '../config.js';
+import { londonDateOf, todayISO } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // Email-to-complaint ingestion. The mailbox we poll is a shared, domain-wide
@@ -72,11 +73,11 @@ export async function ingestEmails(emails) {
         inserted += 1;
         // Reflect it on the complaint timeline too (only on first insert).
         await client.query(
-          `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-           VALUES ($1, $2, 'note', $3)`,
+          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+           VALUES ($1, $2, 'note', $3, 'Email sync')`,
           [
             m.complaintId,
-            e.receivedAt.toISOString().slice(0, 10),
+            londonDateOf(e.receivedAt),
             `Email logged: ${e.subject || '(no subject)'} — from ${e.senderName || e.senderEmail || 'unknown'}`,
           ],
         );
@@ -102,7 +103,7 @@ export function listComplaintEmails(complaintId) {
 
 // Record an email the user sent from the app against a complaint, and add a
 // timeline entry. Stored as direction 'outbound' / match_method 'sent'.
-export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body }) {
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy }) {
   const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
   const graphId = `out-${globalThis.crypto.randomUUID()}`;
   const client = await pool.connect();
@@ -111,17 +112,22 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
     await client.query(
       `INSERT INTO complaint_emails
          (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
-          to_addresses, body_preview, received_at, direction, match_method)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent')`,
+          to_addresses, body_preview, received_at, direction, match_method,
+          reviewed_at, reviewed_as, reviewed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent',now(),'sent',$9)`,
       [
         complaintId, graphId, graphId, subject, 'You (sent from CRM)', fromEmail,
-        recipients, (body || '').slice(0, 2000),
+        recipients, (body || '').slice(0, 2000), sentBy || null,
       ],
     );
     await client.query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note)
-       VALUES ($1, CURRENT_DATE, 'chased', $2)`,
-      [complaintId, `Email sent: ${subject || '(no subject)'} — to ${recipients.join(', ')}`],
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1, $2, 'chased', $3, $4)`,
+      [
+        complaintId, todayISO(),
+        `Email sent: ${subject || '(no subject)'} — to ${recipients.join(', ')}`,
+        sentBy || null,
+      ],
     );
     await client.query('COMMIT');
   } catch (err) {
