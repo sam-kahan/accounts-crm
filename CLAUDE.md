@@ -557,8 +557,13 @@ the page says how far each date can be trusted.
   (so a deploy part-way through doesn't stop it) and after each 5-minute
   check. It links a found complaint certainly already on file (same
   organisation, postcode and flat/house number), imports one the AI was sure
-  of, and leaves the rest for a person. A failed import isn't retried on its
-  own, so a failure never repeats a cost.
+  of, and leaves the rest for a person. A failed import is tried again
+  automatically, up to `AUTO_TRIES` (3) tries in all and 30 minutes apart
+  (`import_attempts`/`last_attempt_at`, migration `024`), since most failures
+  are passing; a restart doesn't count as a try. The list says, per complaint,
+  what automatic import will do with it (`auto.note`) or why it waits.
+  Migration `024` also cleared the old "interrupted by a restart" note, which
+  had made auto-import pass those rows by for good.
 - **Duplicates guarded at the group, not the thread** (from a review): the
   auto paths check every thread of a group and the merged record for a
   complaint already on file (`onFileFor`), exactly as the list does; a claim

@@ -12,7 +12,7 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, AUTO_TRIES } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
@@ -542,7 +542,8 @@ router.get(
   '/past/candidates',
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
-      `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status, error
+      `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status, error,
+              import_attempts, last_attempt_at
          FROM complaint_import_candidates WHERE status IN ('pending', 'importing') ORDER BY first_at DESC`,
     );
     // Say when one is already in the system, so it is linked, not duplicated.
@@ -555,10 +556,23 @@ router.get(
     // they are neither offered again nor grouped with pending ones.
     const busyGroups = groupCandidates(rows.filter((r) => r.status === 'importing'));
     const pendingRows = rows.filter((r) => r.status === 'pending');
-    res.json([...busyGroups, ...groupCandidates(pendingRows)].map((group) => {
+    const autoOn = Boolean(await getSetting('past_auto_import'));
+    res.json(await Promise.all([...busyGroups, ...groupCandidates(pendingRows)].map(async (group) => {
       const merged = mergeExtracted(group);
-      const hit = group.map((c) => findExistingComplaint(complaints, orgs, c.extracted)).find(Boolean)
-        || findExistingComplaint(complaints, orgs, merged);
+      const { hit, certain } = await onFileFor(group, { complaints, orgs });
+      // What automatic import will do with it (the same rules runAutoImport
+      // applies), so nothing sits on the list without saying why.
+      let auto = null;
+      if (autoOn && group[0].status === 'pending') {
+        const tries = Math.max(...group.map((c) => c.import_attempts || 0));
+        const failed = group.some((c) => c.error);
+        if (hit && certain) auto = { will: 'link', note: `Its emails will be added to ${hit.ref_code} automatically.` };
+        else if (hit) auto = { will: null, note: 'May already be in the system: check it and Link, or Import if it’s a different complaint.' };
+        else if (failed && tries >= AUTO_TRIES) auto = { will: null, note: `Tried ${tries} times without success: press Import to try again, or Skip.` };
+        else if (failed) auto = { will: 'import', note: 'Will be tried again automatically within the hour.' };
+        else if (group.some((c) => c.extracted?.confidence === 'high')) auto = { will: 'import', note: 'Will be imported automatically in the next few minutes.' };
+        else auto = { will: null, note: 'Waiting for you: the AI was less sure this is a complaint to track.' };
+      }
       return {
         ...group[0],
         extracted: merged,
@@ -567,8 +581,9 @@ router.get(
         error: group.map((c) => c.error).find(Boolean) || null,
         members: group.map((c) => ({ id: c.id, subject: c.subject, first_at: c.first_at, message_count: c.message_count })),
         existing: hit ? { id: hit.id, ref_code: hit.ref_code, subject: hit.subject } : null,
+        auto,
       };
-    }));
+    })));
   }),
 );
 

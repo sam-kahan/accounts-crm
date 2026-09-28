@@ -246,6 +246,11 @@ export default function EmailAutomation({ onChanged }) {
                       {c.error && c.status !== 'importing' && (
                         <div className="inline-note warn" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>{c.error}</div>
                       )}
+                      {c.auto?.note && (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          {c.auto.will ? '⏳ ' : '👤 '}{c.auto.note}
+                        </div>
+                      )}
                       <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                         Raised {formatDate(x.raised_on) } · {x.state === 'resolved' ? `resolved ${formatDate(x.resolved_on)}` : `open, at ${String(x.stage || 'stage_1').replace('_', ' ')}`}
                         {' '}· {c.message_count} email{c.message_count === 1 ? '' : 's'} · {x.confidence ? `${x.confidence} confidence` : ''}

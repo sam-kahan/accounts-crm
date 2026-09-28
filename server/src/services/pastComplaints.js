@@ -321,9 +321,10 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
 //   certain  the match is by the property itself (same organisation,
 //            postcode and flat/house number), so its emails can be linked
 //            without asking
-export async function onFileFor(group) {
-  const complaints = (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints')).rows;
-  const orgs = (await query('SELECT id, name FROM organisations')).rows;
+export async function onFileFor(group, preloaded = null) {
+  const complaints = preloaded?.complaints
+    || (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+  const orgs = preloaded?.orgs || (await query('SELECT id, name FROM organisations')).rows;
   const xs = group.map((c) => c.extracted || {});
   if (group.length > 1) xs.push(mergeExtracted(group));
   const hit = xs.map((x) => findExistingComplaint(complaints, orgs, x)).find(Boolean) || null;
@@ -353,13 +354,19 @@ async function claimGroup(id, by) {
   }
   const ids = (group.length ? group : [{ id }]).map((c) => c.id);
   const { rows } = await query(
-    `UPDATE complaint_import_candidates SET status = 'importing', error = NULL, decided_by = $2
+    `UPDATE complaint_import_candidates
+        SET status = 'importing', error = NULL, decided_by = $2,
+            import_attempts = import_attempts + 1, last_attempt_at = now()
       WHERE id = ANY($1::uuid[]) AND status = 'pending' RETURNING *`,
     [ids, by],
   );
   if (!rows.some((r) => r.id === id)) {
     // Someone else has it; hand back anything of the group this call did take.
-    if (rows.length) await releaseGroup(rows.map((r) => r.id));
+    if (rows.length) {
+      await releaseGroup(rows.map((r) => r.id));
+      await query('UPDATE complaint_import_candidates SET import_attempts = GREATEST(import_attempts - 1, 0) WHERE id = ANY($1::uuid[])',
+        [rows.map((r) => r.id)]);
+    }
     const now = (await query('SELECT status FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
     if (!now) throw Object.assign(new Error('Not found'), { status: 404 });
     throw Object.assign(new Error(now.status === 'importing'
@@ -411,7 +418,8 @@ export async function releaseStuckImports() {
   // restart isn't a failure of this complaint), so automatic import, if on,
   // takes it up again.
   const { rowCount } = await query(
-    `UPDATE complaint_import_candidates SET status = 'pending', error = NULL
+    `UPDATE complaint_import_candidates
+        SET status = 'pending', error = NULL, import_attempts = GREATEST(import_attempts - 1, 0)
       WHERE status = 'importing' AND complaint_id IS NULL`,
   );
   return rowCount + made.length;
@@ -698,6 +706,7 @@ export async function setAutoImport(on, by) {
 // Runs at start-up (so a deploy part-way through carries on) and after each
 // 5-minute email check; with nothing waiting it is one query.
 let autoRunning = false;
+export const AUTO_TRIES = 3;
 export async function runAutoImport(by = AUTO_SEARCH) {
   if (autoRunning || !(await getSetting('past_auto_import'))) return { imported: 0, linked: 0 };
   if (!config.ms.enabled || !config.anthropic.enabled) return { imported: 0, linked: 0 };
@@ -705,8 +714,13 @@ export async function runAutoImport(by = AUTO_SEARCH) {
   let imported = 0;
   let linked = 0;
   try {
+    // A failed one is tried again, up to three tries in all, half an hour
+    // apart: most failures are passing (the mailbox or the AI busy).
     const pending = (await query(
-      `SELECT * FROM complaint_import_candidates WHERE status = 'pending' AND error IS NULL ORDER BY first_at`,
+      `SELECT * FROM complaint_import_candidates
+        WHERE status = 'pending'
+          AND (error IS NULL OR (import_attempts < ${AUTO_TRIES} AND last_attempt_at < now() - interval '30 minutes'))
+        ORDER BY first_at`,
     )).rows;
     for (const c of pending) {
       // eslint-disable-next-line no-await-in-loop
