@@ -559,6 +559,18 @@ the page says how far each date can be trusted.
   organisation, postcode and flat/house number), imports one the AI was sure
   of, and leaves the rest for a person. A failed import isn't retried on its
   own, so a failure never repeats a cost.
+- **Duplicates guarded at the group, not the thread** (from a review): the
+  auto paths check every thread of a group and the merged record for a
+  complaint already on file (`onFileFor`), exactly as the list does; a claim
+  is refused while a related import is still running (its complaint doesn't
+  exist yet); Skip skips the whole group, so auto-import can't bring it back
+  from a second thread. A property is the same when one address's numbers are
+  all in the other (`sameProperty`/`addressNumbers`: "Flat 2, 10 X Road" is
+  "10 X Road"; Apartments 309 and 326 at 2 Moorfields are not), and a bare
+  place ("Liverpool") never matches its council.
+- **An email moved to another folder is still read in full** (found again by
+  its Internet message id); one deleted, or refused six times, is read from
+  what we have and says so, rather than never being read.
 - **The 5-minute watcher is cheap by rule.** It reads only mail newer than its
   last check. Mail with an organisation we have an open complaint with reaches
   the AI only if the subject or preview mentions a complaint (the word, a

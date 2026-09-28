@@ -8,7 +8,7 @@ import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf, sameProperty } from './orgMatch.js';
+import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf, sameProperty, sameIssue } from './orgMatch.js';
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
@@ -164,12 +164,23 @@ async function runScan({ mailboxes, months, carry = null }) {
       // recognise it by its emails, and don't read or list it twice.
       const ids = msgs.map((m) => m.messageId).filter(Boolean);
       if (ids.length) {
+        // Only an email filed ON a complaint counts: one merely stored (an
+        // unfiled email) mustn't hide a complaint thread from the search.
         const dup = await query(
           `SELECT 1 FROM complaint_import_candidates WHERE message_ids && $1::text[]
-           UNION ALL SELECT 1 FROM complaint_emails WHERE message_id = ANY($1::text[]) LIMIT 1`,
+           UNION ALL SELECT 1 FROM complaint_emails WHERE message_id = ANY($1::text[]) AND complaint_id IS NOT NULL LIMIT 1`,
           [ids],
         );
-        if (dup.rows.length) return;
+        if (dup.rows.length) {
+          // Remembered, so the next search doesn't fetch it again.
+          await query(
+            `INSERT INTO complaint_import_candidates (mailbox, conversation_id, subject, message_count, status, message_ids, extracted)
+             VALUES ($1,$2,$3,$4,'duplicate',$5,$6) ON CONFLICT (mailbox, conversation_id) DO NOTHING`,
+            [t.mailbox, t.conversationId, msgs[0].subject, msgs.length, ids,
+              JSON.stringify({ is_complaint: false, why: 'already listed or already on a complaint' })],
+          );
+          return;
+        }
       }
       let extracted;
       const text = threadText(msgs);
@@ -218,11 +229,10 @@ async function runScan({ mailboxes, months, carry = null }) {
             [t.mailbox, t.conversationId],
           )).rows[0];
           if (!cand) return;
-          const pc = postcodeOf(extracted.property);
-          const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
-          const orgs = (await query('SELECT id, name FROM organisations')).rows;
-          const hit = findExistingComplaint(complaints, orgs, extracted);
-          if (hit && pc && postcodeOf(hit.property) === pc) {
+          const group = await groupOf(cand.id);
+          if (await relatedImportRunning(group)) return; // picked up once that one is on file
+          const { hit, certain } = await onFileFor(group);
+          if (hit && certain) {
             await linkCandidate(cand.id, hit.id, AUTO_SEARCH);
             found -= 1; // not a new one to look at
           } else if (!hit && extracted.confidence === 'high' && (await getSetting('past_auto_import'))) {
@@ -305,12 +315,42 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
 // every thread found with it, plus any others gathered by reference and
 // postcode — read together, the complaint filled in from the whole story with
 // its timeline rebuilt, and every email and attachment filed on it.
+// What is already on file for a group of found threads, checked the way the
+// list checks it: every thread and the merged record, not just one of them.
+//   hit      the complaint it matches, if any
+//   certain  the match is by the property itself (same organisation,
+//            postcode and flat/house number), so its emails can be linked
+//            without asking
+export async function onFileFor(group) {
+  const complaints = (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+  const orgs = (await query('SELECT id, name FROM organisations')).rows;
+  const xs = group.map((c) => c.extracted || {});
+  if (group.length > 1) xs.push(mergeExtracted(group));
+  const hit = xs.map((x) => findExistingComplaint(complaints, orgs, x)).find(Boolean) || null;
+  const certain = Boolean(hit && postcodeOf(hit.property) &&
+    xs.some((x) => postcodeOf(x.property) && sameProperty(x.property, hit.property)));
+  return { hit, certain };
+}
+
+// A related import still running has no complaint on file yet, so nothing
+// above can see it; this can. Rows being imported that are the same issue.
+async function relatedImportRunning(group) {
+  const busy = (await query(`SELECT extracted FROM complaint_import_candidates WHERE status = 'importing'`)).rows;
+  return busy.some((b) => group.some((c) => sameIssue(c.extracted, b.extracted)));
+}
+
 // Claim a found complaint (and the threads grouped with it) for one import or
 // link, so a second click, a second person, or automatic import can't bring it
 // in twice. The claim is a single UPDATE ... WHERE status = 'pending': exactly
 // one caller gets the rows. Returns the claimed group, or throws 409.
 async function claimGroup(id, by) {
   const group = await groupOf(id);
+  // The same issue being imported right now would be created twice.
+  if (group.length && (await relatedImportRunning(group))) {
+    throw Object.assign(new Error(
+      'A related complaint is being imported right now. When it has finished, this one will show as already in the system, to link.',
+    ), { status: 409 });
+  }
   const ids = (group.length ? group : [{ id }]).map((c) => c.id);
   const { rows } = await query(
     `UPDATE complaint_import_candidates SET status = 'importing', error = NULL, decided_by = $2
@@ -367,9 +407,11 @@ export async function releaseStuckImports() {
     );
     await query('UPDATE complaints SET needs_check = true, checked_at = NULL, checked_by = NULL WHERE id = $1', [id]);
   }
+  // Nothing was created: simply back on the list, with no error recorded (a
+  // restart isn't a failure of this complaint), so automatic import, if on,
+  // takes it up again.
   const { rowCount } = await query(
-    `UPDATE complaint_import_candidates SET status = 'pending',
-            error = 'The import was interrupted by a restart before anything was created. Please press Import again.'
+    `UPDATE complaint_import_candidates SET status = 'pending', error = NULL
       WHERE status = 'importing' AND complaint_id IS NULL`,
   );
   return rowCount + made.length;
@@ -398,6 +440,7 @@ function inTurn(fn) {
 }
 
 export async function importInBackground(id, by) {
+  id = String(id).toLowerCase();
   const group = await claimGroup(id, by);
   inTurn(() => importClaimed(id, group, by)).catch(async (err) => {
     console.error(`[complaints] import ${id} failed:`, err.message);
@@ -407,6 +450,7 @@ export async function importInBackground(id, by) {
 }
 
 export async function linkInBackground(id, complaintId, by) {
+  id = String(id).toLowerCase();
   const c = (await query('SELECT id FROM complaints WHERE id = $1', [complaintId])).rows[0];
   if (!c) throw Object.assign(new Error('Complaint not found'), { status: 404 });
   const group = await claimGroup(id, by);
@@ -418,6 +462,7 @@ export async function linkInBackground(id, complaintId, by) {
 }
 
 export async function importCandidate(id, by) {
+  id = String(id).toLowerCase();
   const group = await claimGroup(id, by);
   try {
     return await importClaimed(id, group, by);
@@ -559,6 +604,7 @@ async function importClaimed(id, group, by) {
 // acknowledgement or response in the thread is recorded (with Undo), and
 // future replies in the thread are filed there automatically.
 export async function linkCandidate(id, complaintId, by, { historical = false } = {}) {
+  id = String(id).toLowerCase();
   const c = (await query('SELECT id FROM complaints WHERE id = $1', [complaintId])).rows[0];
   if (!c) throw Object.assign(new Error('Complaint not found'), { status: 404 });
   const group = await claimGroup(id, by);
@@ -619,6 +665,21 @@ export async function resumeInterruptedScan() {
   return true;
 }
 
+// Skip a found complaint: every thread grouped with it, so automatic import
+// doesn't bring back from its second thread what a person just skipped.
+export async function skipCandidate(id, by) {
+  id = String(id).toLowerCase();
+  const group = await groupOf(id);
+  const ids = [...new Set([id, ...group.map((c) => c.id)])];
+  const { rows } = await query(
+    `UPDATE complaint_import_candidates SET status = 'skipped', decided_by = $2
+      WHERE id = ANY($1::uuid[]) AND status = 'pending' RETURNING id`,
+    [ids, by],
+  );
+  if (!rows.some((r) => r.id === id)) throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
+  return rows.length;
+}
+
 // Switch automatic import on or off. Switching it on also deals with the ones
 // already waiting (see runAutoImport).
 export async function setAutoImport(on, by) {
@@ -653,11 +714,11 @@ export async function runAutoImport(by = AUTO_SEARCH) {
         if (!(await getSetting('past_auto_import'))) return; // switched off part-way
         const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
         if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
-        const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
-        const orgs = (await query('SELECT id, name FROM organisations')).rows;
-        const hit = findExistingComplaint(complaints, orgs, c.extracted);
+        const group = await groupOf(c.id);
+        if (await relatedImportRunning(group)) return; // next time, it will be on file
+        const { hit, certain } = await onFileFor(group);
         if (hit) {
-          if (postcodeOf(c.extracted?.property) && postcodeOf(hit.property) && sameProperty(c.extracted.property, hit.property)) {
+          if (certain) {
             await linkCandidate(c.id, hit.id, AUTO_SEARCH);
             linked += 1;
           }

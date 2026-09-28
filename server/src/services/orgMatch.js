@@ -21,8 +21,10 @@ const compact = (name) => orgKey(name).replace(/\s+/g, '');
 // Words that say what kind of body it is rather than which one. A shortened
 // name matches a longer one only if all it leaves off is words like these:
 // "LivingCity" is "Livingcity Asset Management Ltd", but "Liverpool" is not
-// "Liverpool Mutual Homes".
-const GENERIC = /^(?:ltd|plc|llp|uk|group|holdings|asset|management|services|service|property|properties|estates|council|city|borough|metropolitan|district|county|the|and|company|co|limited)*$/;
+// "Liverpool Mutual Homes". Council words are NOT generic: a bare place
+// ("Liverpool") must never be taken for its council ("Liverpool City
+// Council"), since the place name turns up in every address.
+const GENERIC = /^(?:ltd|plc|llp|uk|group|holdings|asset|management|services|service|property|properties|estates|the|and|company|co|limited)*$/;
 
 // Are two names the same organisation? Exact after cleaning, or one is the
 // other with only generic words added (at least 5 letters in common).
@@ -59,11 +61,20 @@ export function postcodeOf(text) {
   return m ? `${m[1]} ${m[2]}` : null;
 }
 
-// The flat or house number of an address: "Apartment 309, 2 Moorfields" is
-// 309, "84 Waverley Crescent" is 84, "Flat 3B" is 3B. One postcode covers a
-// whole block or a stretch of street, so two addresses in it with different
-// numbers are different properties (Apartment 309 and Apartment 326 at
-// 2 Moorfields are two complaints, not one). Null when there isn't one.
+// The numbers that identify a property in an address — flat and house (or
+// building) numbers, with the postcode taken out: "Apartment 309, 2
+// Moorfields, L2 2BT" is {309, 2}; "A08 and A09 Bateson Building" is {A8, A9}.
+// Leading zeros are dropped so A08 and A8 agree.
+export function addressNumbers(text) {
+  const t = String(text || '').toUpperCase()
+    .replace(/\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/g, ' '); // the postcode
+  const out = new Set();
+  for (const m of t.matchAll(/\b([A-Z]?)0*(\d+)([A-Z]?)\b/g)) out.add(`${m[1]}${m[2]}${m[3]}`);
+  return out;
+}
+
+// Kept for callers that want the single most specific number: the flat
+// number if it's marked as one, else the first number.
 export function unitOf(text) {
   const t = String(text || '').toUpperCase();
   const flat = t.match(/\b(?:APARTMENT|APT|FLAT|UNIT|SUITE|ROOM)\.?\s*(?:NO\.?\s*)?([A-Z]?\d+[A-Z]?)\b/);
@@ -72,12 +83,18 @@ export function unitOf(text) {
   return u ? u.replace(/^([A-Z]?)0+(\d)/, '$1$2') : null;
 }
 
-// Same postcode AND not two different flat/house numbers.
+// Same postcode, and the numbers of one address are all found in the other:
+// "Flat 2, 10 X Road" and "10 X Road" are the same property written more and
+// less fully, but "Apartment 309, 2 Moorfields" and "Apartment 326,
+// 2 Moorfields" are two flats in one block. An address with no numbers
+// doesn't decide it either way.
 export function sameProperty(pa, pb) {
   if (postcodeOf(pa) !== postcodeOf(pb)) return false;
-  const ua = unitOf(pa);
-  const ub = unitOf(pb);
-  return !ua || !ub || ua === ub;
+  const a = addressNumbers(pa);
+  const b = addressNumbers(pb);
+  if (!a.size || !b.size) return true;
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
+  return [...small].every((n) => big.has(n));
 }
 
 // Is a found past complaint one already in the system? Same organisation (by

@@ -12,7 +12,7 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
@@ -653,12 +653,11 @@ router.post(
   '/past/candidates/:candId/skip',
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
-    const { rowCount } = await query(
-      `UPDATE complaint_import_candidates SET status = 'skipped', decided_by = $2
-        WHERE id = $1 AND status = 'pending'`,
-      [req.params.candId, who(req)],
-    );
-    if (!rowCount) throw new HttpError(409, 'This one has already been dealt with.');
+    try {
+      await skipCandidate(req.params.candId, who(req)); // with the threads grouped with it
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
     res.status(204).end();
   }),
 );
@@ -851,6 +850,7 @@ router.post(
 router.post(
   '/:id/checked',
   asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.id).success) throw new HttpError(400, 'Invalid id');
     const { rows } = await query(
       `UPDATE complaints SET needs_check = false, checked_at = now(), checked_by = $2
         WHERE id = $1 AND needs_check RETURNING id`,

@@ -107,7 +107,7 @@ const messagesUrl = (mailbox) =>
 export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
   if (!config.ms.enabled) return { items: [], complete: true };
   let url =
-    `${messagesUrl(mailbox)}?$top=50&$orderby=receivedDateTime desc` +
+    `${messagesUrl(mailbox)}?$top=50&$orderby=receivedDateTime asc` +
     `&$filter=receivedDateTime ge ${new Date(since).toISOString()}` +
     `&$select=${SELECT}`;
   const items = [];
@@ -116,7 +116,10 @@ export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
     for (const m of json.value ?? []) if (!m.isDraft) items.push(normalise(m));
     url = json['@odata.nextLink'] || null;
   }
-  return { items, complete: !url };
+  // Oldest first, so a window too big for one read is worked through in
+  // order: the caller moves on to the last one read, and the next look
+  // carries on from there instead of re-reading the same newest mail.
+  return { items, complete: !url, readTo: items.length ? items[items.length - 1].receivedAt : null };
 }
 
 // Search a mailbox (Outlook's own search) for words, within a date window.
@@ -125,6 +128,7 @@ export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
 // with AND (no quote characters reach the query, so an odd reference can't
 // break it). If the date restriction is refused, the search is repeated
 // without it and filtered here.
+const undatedCache = new Map();
 export async function searchMailbox(mailbox, phrase, { from = null, to = null, max = 1000 } = {}) {
   if (!config.ms.enabled) return [];
   const words = String(phrase || '').replace(/["\\()]/g, ' ').trim().split(/\s+/).filter(Boolean);
@@ -146,7 +150,16 @@ export async function searchMailbox(mailbox, phrase, { from = null, to = null, m
     return await run(dated);
   } catch (err) {
     if (err.status !== 400 || (!from && !to)) throw err;
-    const all = await run(words.join(' AND '));
+    // Without the dates Microsoft gives only the newest 1,000 whatever the
+    // window, so that one search is made once (per hour) and each window
+    // filters it, rather than repeating it window after window.
+    const key = `${mailbox}|${words.join(' ')}`;
+    let hitCache = undatedCache.get(key);
+    if (!hitCache || Date.now() - hitCache.at > 3600000) {
+      hitCache = { at: Date.now(), all: await run(words.join(' AND ')) };
+      undatedCache.set(key, hitCache);
+    }
+    const all = hitCache.all;
     return all.filter((m) => (!from || m.receivedAt >= new Date(from)) && (!to || m.receivedAt < new Date(to)));
   }
 }
@@ -192,8 +205,22 @@ export async function fetchMessageDetail(graphId, fallback = {}, mailbox = confi
   if (!config.ms.enabled || !graphId || String(graphId).startsWith('dev-') || String(graphId).startsWith('out-')) {
     return { bodyText: fallback.bodyPreview || null, attachments: [], skipped: [] };
   }
-  const base = `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(graphId)}`;
-  const msg = await graphGet(`${base}?$select=body`, { Prefer: 'outlook.body-content-type="text"' });
+  let base = `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(graphId)}`;
+  let msg;
+  try {
+    msg = await graphGet(`${base}?$select=body`, { Prefer: 'outlook.body-content-type="text"' });
+  } catch (err) {
+    // A message's id changes when it is moved to another folder (by a rule or
+    // by hand). Its Internet message id doesn't, so it is found again by that.
+    if (err.status !== 404 || !fallback.messageId) throw err;
+    const found = await graphGet(
+      `${messagesUrl(mailbox || config.ms.mailbox)}?$filter=${encodeURIComponent(`internetMessageId eq '${String(fallback.messageId).replace(/'/g, "''")}'`)}&$select=id&$top=1`,
+    );
+    const id = found.value?.[0]?.id;
+    if (!id) throw err;
+    base = `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(id)}`;
+    msg = await graphGet(`${base}?$select=body`, { Prefer: 'outlook.body-content-type="text"' });
+  }
   const bodyText = (msg.body?.content || '').slice(0, 100000);
 
   const attachments = [];

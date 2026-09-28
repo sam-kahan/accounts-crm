@@ -84,7 +84,8 @@ test('organisation names match exactly or by an unambiguous shortening', () => {
   assert.equal(matchOrgName(ORGS, 'Livingcity Asset Management Ltd')?.id, 'o1');
   assert.equal(matchOrgName(ORGS, 'E.ON Next')?.id, 'o2');
   // "City Council" is a generic ending; "Metropolitan University" is not.
-  assert.equal(matchOrgName(ORGS, 'Manchester')?.id, 'o3');
+  // A bare place name is not its council: the place turns up in every address.
+  assert.equal(matchOrgName(ORGS, 'Manchester'), null);
   assert.equal(matchOrgName([...ORGS, { id: 'o5', name: 'Manchester Council' }], 'Manchester'), null, 'two councils: ambiguous');
   assert.equal(matchOrgName(ORGS, 'EON'), null, 'too short to trust');
   assert.equal(matchOrgName(ORGS, 'Urban Bubble'), null);
@@ -133,7 +134,7 @@ test('a shortened name matches only when what it leaves off is generic', () => {
   assert.equal(sameOrgName('LivingCity', 'Livingcity Asset Management Limited'), true);
   assert.equal(sameOrgName('E.ON Next', 'EON Next Ltd'), true);
   assert.equal(sameOrgName('Liverpool', 'Liverpool Mutual Homes'), false);
-  assert.equal(sameOrgName('Salford', 'Salford City Council'), true);
+  assert.equal(sameOrgName('Salford', 'Salford City Council'), false);
 });
 
 test('different postcodes are never the same issue, and a postcode-less thread cannot bridge two', () => {
@@ -146,7 +147,7 @@ test('different postcodes are never the same issue, and a postcode-less thread c
   assert.equal(findExistingComplaint(complaints, [], { org_name: 'Bury Council', property: '3 St, BL8 1XX', raised_on: '2026-05-03' }), null);
 });
 
-import { unitOf } from '../src/services/orgMatch.js';
+import { unitOf, sameProperty, addressNumbers } from '../src/services/orgMatch.js';
 
 test('unitOf reads the flat or house number from an address', () => {
   assert.equal(unitOf('Apartment 309, 2 Moorfields, Liverpool, L2 2BT'), '309');
@@ -172,4 +173,22 @@ test('two flats at the same postcode are two issues, not one', () => {
   const onFile = [{ id: 'c1', org_name: 'LivingCity', property: 'Apartment 78 Falkner Place, 68 Falkner Street, Liverpool, L8 7AD', raised_on: '2026-09-28' }];
   assert.equal(findExistingComplaint(onFile, [], { org_name: 'LivingCity', property: '78 Falkner Place, L8 7AD' })?.id, 'c1');
   assert.equal(findExistingComplaint(onFile, [], { org_name: 'LivingCity', property: 'Apartment 73, 68 Falkner Street, L8 7AD' }), null);
+});
+
+test('the same property written more or less fully is one property; two flats in a block are two', () => {
+  assert.equal(sameProperty('Flat 2, 10 X Road, M1 1AA', '10 X Road, M1 1AA'), true);
+  assert.equal(sameProperty('Apartment 309, 2 Moorfields, L2 2BT', '2 Moorfields, L2 2BT'), true);
+  assert.equal(sameProperty('Apartment 309, 2 Moorfields, L2 2BT', 'Apartment 326, 2 Moorfields, L2 2BT'), false);
+  assert.equal(sameProperty('Apartment 78 Falkner Place, 68 Falkner Street, L8 7AD', '78 Falkner Place, L8 7AD'), true);
+  assert.equal(sameProperty('Apartment 78 Falkner Place, 68 Falkner Street, L8 7AD', 'Apartment 73, 68 Falkner Street, L8 7AD'), false);
+  assert.equal(sameProperty('A08 and A09 Bateson Building, L1 1AA', 'A09 Bateson Building, L1 1AA'), true);
+  assert.equal(sameProperty('84 Waverley Crescent, M43 7WL', '86 Waverley Crescent, M43 7WL'), false);
+  assert.equal(sameProperty('10 X Road, M1 1AA', '10 X Road, M2 2BB'), false);
+  assert.deepEqual([...addressNumbers('Apartment 309, 2 Moorfields, L2 2BT')].sort(), ['2', '309']);
+});
+
+test('a bare place name is never taken for its council', () => {
+  assert.equal(sameOrgName('Liverpool', 'Liverpool City Council'), false);
+  assert.equal(sameOrgName('Manchester', 'Manchester City Council'), false);
+  assert.equal(sameOrgName('LivingCity', 'Livingcity Asset Management Limited'), true);
 });

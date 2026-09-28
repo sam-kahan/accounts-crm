@@ -51,20 +51,33 @@ export async function processEmail(emailId) {
 
   // 1. The whole email and its attachments.
   let detail = { bodyText: em.body_text, attachments: [], skipped: [] };
+  let readNote = null; // set when it had to be read without the full email
   try {
-    detail = await fetchMessageDetail(em.graph_id, { bodyPreview: em.body_preview }, em.source_mailbox || undefined);
+    detail = await fetchMessageDetail(
+      em.graph_id,
+      { bodyPreview: em.body_preview, messageId: String(em.message_id || '').replace(/#dup-.*$/, '') || null },
+      em.source_mailbox || undefined,
+    );
     if (detail.bodyText) {
       await query('UPDATE complaint_emails SET body_text = $2 WHERE id = $1', [em.id, detail.bodyText]);
       em.body_text = detail.bodyText;
     }
   } catch (err) {
-    // Not read in full (the mailbox refused even after retries): leave it
-    // unprocessed rather than record it without its attachments. The
-    // five-minute check tries again.
-    await query('UPDATE complaint_emails SET analysis_error = $2 WHERE id = $1', [
-      em.id, `Could not read in full: ${String(err.message).slice(0, 300)}`,
-    ]);
-    return { filed: Boolean(em.complaint_id), retry: true };
+    // Not read in full. While there are tries left, leave it for the
+    // five-minute check to try again rather than record it without its
+    // attachments. Once the message is gone from the mailbox (deleted), or on
+    // the last try, it is read from what we have, and it says so, so it is
+    // never left unread for good.
+    const gone = err.status === 404;
+    if (!gone && em.attempts < 6) {
+      await query('UPDATE complaint_emails SET analysis_error = $2 WHERE id = $1', [
+        em.id, `Could not read in full: ${String(err.message).slice(0, 300)}`,
+      ]);
+      return { filed: Boolean(em.complaint_id), retry: true };
+    }
+    readNote = `Read from ${em.body_text ? 'the text already saved' : 'the preview only'}` +
+      `${gone ? ' (it is no longer in the mailbox)' : ' (the mailbox kept refusing)'}; any attachments were not saved.`;
+    await query('UPDATE complaint_emails SET analysis_error = $2 WHERE id = $1', [em.id, readNote]);
   }
 
   // 2. Work out what it is (and, from the general inbox, which complaint).
@@ -81,8 +94,8 @@ export async function processEmail(emailId) {
         attachments: detail.attachments,
       });
       await query(
-        `UPDATE complaint_emails SET analysis = $2, analysed_at = now(), analysis_error = NULL WHERE id = $1`,
-        [em.id, JSON.stringify(analysis)],
+        `UPDATE complaint_emails SET analysis = $2, analysed_at = now(), analysis_error = $3 WHERE id = $1`,
+        [em.id, JSON.stringify(analysis), readNote],
       );
       // Filed from the general inbox only on a confident match.
       if (!em.complaint_id && analysis.complaint_id && analysis.confidence === 'high') {
