@@ -150,6 +150,30 @@ const shares = (a, b) => [...a].some((v) => b.has(v));
 //   - only one has an address: not assumed the same
 //   - neither has an address or an account number: raised within a fortnight
 //     is a POSSIBLE match, never a certain one
+// The words that name a street or building in an address ("moorfields",
+// "falkner", "waverley"), leaving out the kind of place, towns and filler.
+const NOT_A_NAME = new Set(['apartment', 'apartments', 'flat', 'flats', 'unit', 'suite', 'room', 'floor', 'block', 'house',
+  'road', 'street', 'lane', 'avenue', 'close', 'crescent', 'drive', 'place', 'court', 'way', 'grove', 'gardens',
+  'terrace', 'square', 'walk', 'mews', 'view', 'building', 'liverpool', 'manchester', 'salford', 'merseyside',
+  'lancashire', 'greater', 'bootle', 'the', 'and', 'of', 'at']);
+const nameWords = (text) => new Set(String(text || '').toLowerCase()
+  .replace(/\b[a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2}\b/g, ' ') // the postcode
+  .split(/[^a-z]+/).filter((w) => w.length >= 4 && !NOT_A_NAME.has(w)));
+
+// Two addresses, at least one without a postcode, written out the same:
+// the same flat/house numbers and a street or building name in common
+// ("Apartment 326, 2 Moorfields" and "Apt 326, 2 Moorfields, Liverpool L2 2BT").
+export function sameAddressText(pa, pb) {
+  const a = addressNumbers(pa);
+  const b = addressNumbers(pb);
+  if (!a.size || !b.size) return false;
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
+  if (![...small].every((n) => big.has(n))) return false;
+  const wa = nameWords(pa);
+  const wb = nameWords(pb);
+  return [...wa].some((w) => wb.has(w));
+}
+
 export function issueMatch(a, b) {
   const no = { same: false, certain: false };
   const aa = accountsOf(a);
@@ -168,6 +192,8 @@ export function issueMatch(a, b) {
     const same = sameProperty(a.property, b.property);
     return { same, certain: same };
   }
+  // One or neither has a postcode: the address as written can still settle it.
+  if (a.property && b.property && sameAddressText(a.property, b.property)) return { same: true, certain: true };
   if (pa || pb) return no;
   return nearInTime(a.raised_on, b.raised_on) ? { same: true, certain: false } : no;
 }

@@ -111,9 +111,14 @@ export async function processEmail(emailId) {
       ]);
     }
   }
-  if (!em.complaint_id && analysis?.new_complaint && analysis.confidence === 'high' &&
-      ['watch_new', 'watch', 'inbox'].includes(em.match_method)) {
-    // Our own email making a new complaint: create it, so nobody has to.
+  // Our own email making a new complaint: create it, so nobody has to. And
+  // anything someone deliberately forwarded to the complaints inbox that
+  // isn't on a complaint yet: forwarding it means "track this", so a
+  // complaint is made from it (or it joins the one it certainly matches),
+  // whether or not it is the very first email of the complaint.
+  const forwardedToUs = em.match_method === 'inbox' && analysis && !analysis.complaint_id;
+  if (!em.complaint_id && (forwardedToUs || (analysis?.new_complaint && analysis.confidence === 'high' &&
+      ['watch_new', 'watch', 'inbox'].includes(em.match_method)))) {
     em.complaint_id = await createFromEmail(em, analysis);
     // Others about it may already be waiting (forwarded together, read first).
     if (em.complaint_id) setImmediate(() => fileWaitingEmails().catch((err) => console.error('[complaints] filing waiting emails:', err.message)));
@@ -268,6 +273,7 @@ async function createFromEmail(em, analysis) {
     return null;
   }
   if (p.is_complaint === false || !p.subject || !p.org_name) return null;
+  if (p.confidence === 'low') return null; // too unsure to create: it waits for a person
 
   // Already open about the same issue (same organisation and property, or
   // raised within a fortnight)? File it there rather than start a second one.
@@ -320,7 +326,9 @@ async function createFromEmail(em, analysis) {
     ).rows[0];
   }
 
-  const raised = analysis.sent_on || londonDateOf(new Date(em.received_at));
+  // The date the complaint was made, from the thread (a forward is often a later email in it).
+  const raised = (/^\d{4}-\d{2}-\d{2}$/.test(p.raised_on || '') && p.raised_on <= londonDateOf(new Date()) ? p.raised_on : null)
+    || analysis.sent_on || londonDateOf(new Date(em.received_at));
   const created = await createComplaint(
     {
       organisation_id: org.id,

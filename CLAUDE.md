@@ -526,6 +526,21 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-28 — forwards start complaints; addresses without postcodes match
+- **Forwarding to the complaints inbox means "track this"**: an inbox email
+  not on a complaint is made into one (or joins the one it certainly matches)
+  even if it isn't the first email of the complaint; the complaint is dated
+  from the thread, not the forward. Only a low-confidence reading, or a
+  possible-but-not-certain match, waits under Emails to file.
+- **The same address written with and without its postcode is the same
+  property** (`orgMatch.js#sameAddressText`: same flat/house numbers and a
+  street or building name in common), so a forward about "Apartment 326,
+  2 Moorfields" joins the complaint about "Apt 326, 2 Moorfields, L2 2BT"
+  instead of starting a second.
+- Tidy up shows whether each complaint is open or closed, with links: the
+  list shows open ones by default, so a pair with a closed one looked like a
+  pair with one missing.
+
 ### 2026-09-28 — a procedure document adds to the research, it doesn't wipe it
 - **Figures are merged, not replaced** (`client/src/procedureMerge.js`,
   `organisations.procedure_sources`, migration `027`): their procedure

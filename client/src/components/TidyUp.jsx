@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api, formatDate } from '../api';
 
@@ -46,8 +47,15 @@ export default function TidyUp({ refreshKey, onChanged }) {
         {t.complaints.map(({ keep, merge: m }) => (
           <div key={`${keep.id}-${m.id}`} style={{ padding: '8px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
             <div style={{ fontSize: 13 }}>
-              <strong>Same issue?</strong> {keep.ref_code} “{keep.subject}” (raised {formatDate(keep.raised_on)}) and{' '}
-              {m.ref_code} “{m.subject}” (raised {formatDate(m.raised_on)}), both against {keep.linked_org || keep.org_name}.
+              <strong>Same issue?</strong>{' '}
+              <Link to={`/complaints/${keep.id}`}>{keep.ref_code}</Link> “{keep.subject}” (raised {formatDate(keep.raised_on)}, {keep.state === 'open' ? 'open' : 'closed'}) and{' '}
+              <Link to={`/complaints/${m.id}`}>{m.ref_code}</Link> “{m.subject}” (raised {formatDate(m.raised_on)}, {m.state === 'open' ? 'open' : 'closed'}), both against {keep.linked_org || keep.org_name}.
+              {(keep.state !== 'open' || m.state !== 'open') && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  The closed one isn’t on the list while it shows open complaints only. Merging keeps the open one
+                  with everything from both.
+                </div>
+              )}
             </div>
             <button className="btn btn-sm" style={{ marginTop: 6 }} disabled={busy === m.id}
               onClick={() => merge('c', keep, m)}>

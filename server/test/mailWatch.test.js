@@ -222,3 +222,15 @@ test('a debt collector quoting the supplier\'s account number is the same compla
   // but a different organisation with no shared account is not
   assert.equal(issueMatch(bg, { org_name: 'LCS', property: '6 Benedict Street, L20 2EN' }).same, false);
 });
+
+import { sameAddressText } from '../src/services/orgMatch.js';
+
+test('the same address written with and without its postcode is the same property', () => {
+  assert.equal(sameAddressText('Apartment 326, 2 Moorfields', 'Apt 326, 2 Moorfields, Liverpool, L2 2BT'), true);
+  assert.equal(sameAddressText('Apartment 326, 2 Moorfields', 'Apartment 309, 2 Moorfields, L2 2BT'), false);
+  assert.equal(sameAddressText('84 Waverley Crescent', '84 Other Crescent, M43 7WL'), false); // same number, different street
+  assert.equal(sameAddressText('Moorfields', '2 Moorfields'), false); // no numbers on one side: can't tell
+  const a = { org_name: 'CDER Group', property: 'Apartment 326, 2 Moorfields', raised_on: '2026-07-28' };
+  const b = { org_name: 'CDER Group', property: 'Apartment 326, 2 Moorfields, Liverpool, L2 2BT', raised_on: '2026-08-12' };
+  assert.deepEqual(issueMatch(a, b), { same: true, certain: true });
+});
