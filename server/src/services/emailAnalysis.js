@@ -70,6 +70,12 @@ Work out, from the evidence only:
 - account_numbers: every customer or account number the email gives for that property or customer
   (energy/water account, council tax account, service-charge or ground-rent account), exactly as
   written. Not phone, invoice or bill numbers, amounts or case references. Empty list if none.
+- our_step: ONLY for Greenco's own email (kind "our_email"): "stage2_request" if it is Greenco asking the
+  organisation to escalate this complaint to its next stage (a Stage 2 / complaints manager / senior
+  review, a review of their Stage 1 answer), "ombudsman_referral" if it is Greenco referring the complaint
+  to an ombudsman or redress scheme (sent to the ombudsman, or telling them it has been referred); a
+  chaser, a reminder or an email that merely MENTIONS Stage 2 or the ombudsman as a possibility is
+  null. null for everything else.
 - resolved: true only if the email shows the matter complained about has been PUT RIGHT or settled —
   the organisation confirming the fee has been removed, the refund made, the bill issued as asked, the
   account corrected, or the complaint upheld and closed; or Greenco confirming it is now happy that it
@@ -94,7 +100,7 @@ Return ONLY a JSON object with exactly these keys:
  "kind": string, "their_reference": string|null, "promised_by": string|null, "summary": string,
  "action_needed": string|null, "evidence": string|null, "confidence": "high"|"medium"|"low",
  "complaint_id": string|null, "new_complaint": boolean, "org_name": string|null, "author_org": string|null,
- "resolved": boolean, "outcome": string|null,
+ "resolved": boolean, "outcome": string|null, "our_step": "stage2_request"|"ombudsman_referral"|null,
  "property": string|null, "account_numbers": [string]}`;
 
 function extractJson(text) {
@@ -144,6 +150,7 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
     new_complaint: Boolean(r?.new_complaint),
     org_name: str(r?.org_name, 200),
     author_org: kind === 'our_email' ? null : str(r?.author_org, 200),
+    our_step: kind === 'our_email' && ['stage2_request', 'ombudsman_referral'].includes(r?.our_step) ? r.our_step : null,
     resolved: r?.resolved === true,
     outcome: r?.resolved === true ? str(r?.outcome, 500) : null,
     property: str(r?.property, 300),
@@ -168,6 +175,49 @@ export function resolutionSuggestion(a, { arrived = null } = {}) {
   };
 }
 
+// Greenco's own email that IS a step: the Stage 2 request, or the referral to
+// the ombudsman — sent from Outlook, then copied or forwarded here. The
+// complaint is moved on by itself, dated the day it was sent (with Undo),
+// only when that is certain: high confidence, a date, an open track at the
+// stage it moves on from, and a date that fits. Anything less waits for a
+// person, saying what it looks like.
+export function planOurStep(complaint, a, today = todayISO()) {
+  const what = a.our_step === 'stage2_request' ? 'our Stage 2 request' : 'our referral to the ombudsman';
+  const date = a.sent_on;
+  if (a.confidence !== 'high') return { auto: false, reason: `It looks like ${what}, but the AI isn’t certain` };
+  if (!date) return { auto: false, reason: `It looks like ${what}, but the date it was sent isn’t clear` };
+  if (!trackOpen(complaint)) return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+  if (date > today || date < (complaint.stage_started_on || complaint.raised_on || '0000')) {
+    return { auto: false, reason: `It looks like ${what}, but its date doesn’t fit this complaint` };
+  }
+  if (a.our_step === 'stage2_request') {
+    // Already at Stage 2 (or beyond): nothing to move, it is a record.
+    if (complaint.stage !== 'stage_1') return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+    return {
+      auto: true,
+      changes: { stage: 'stage_2', stage_started_on: date, responded_on: null, response_due_manual: false },
+      reviewedAs: 'correspondence',
+      event: { type: 'escalated', date, note: 'Escalated to Stage 2' },
+      step: 'Stage 2 requested',
+    };
+  }
+  if (complaint.stage === 'ombudsman') return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+  if (complaint.stage !== 'stage_2') {
+    return { auto: false, reason: 'It looks like our referral to the ombudsman, but the complaint is still at Stage 1 here' };
+  }
+  return {
+    auto: true,
+    changes: {
+      stage: 'ombudsman', stage_started_on: date, responded_on: null, response_due_manual: false,
+      // Their Stage 2 answer is their final response: the referral window counts from it.
+      ...(complaint.responded_on && !complaint.final_response_on ? { final_response_on: complaint.responded_on } : {}),
+    },
+    reviewedAs: 'correspondence',
+    event: { type: 'escalated', date, note: 'Referred to the ombudsman' },
+    step: 'Referred to the ombudsman',
+  };
+}
+
 // What can be recorded from an analysed email without asking anyone.
 // Returns { changes, event, reviewedAs, auto: true } or { auto: false, reason }.
 export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
@@ -175,6 +225,7 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
   // Our own email (a CC'd copy of what we sent) is filed as correspondence
   // unless the AI was unsure; nothing else is filed without high confidence —
   // an uncertain "not from them" could be their real acknowledgement.
+  if (a.kind === 'our_email' && a.our_step) return planOurStep(complaint, a, today);
   if (a.kind === 'our_email' && a.confidence !== 'low') {
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }

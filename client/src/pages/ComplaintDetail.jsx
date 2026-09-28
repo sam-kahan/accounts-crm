@@ -1209,6 +1209,8 @@ export default function ComplaintDetail() {
                         Recorded automatically
                         {em.applied.after?.acknowledged_on && <>: acknowledged {formatDate(em.applied.after.acknowledged_on)}</>}
                         {em.applied.after?.responded_on && <>: responded {formatDate(em.applied.after.responded_on)}</>}
+                        {em.applied.after?.stage === 'stage_2' && <>: moved to Stage 2 from {formatDate(em.applied.after.stage_started_on)} (our Stage 2 request)</>}
+                        {em.applied.after?.stage === 'ombudsman' && <>: referred to the ombudsman on {formatDate(em.applied.after.stage_started_on)}</>}
                         {em.applied.after?.reference && <> · their reference {em.applied.after.reference}</>}
                         {em.applied.party_id && partyName(em.applied.party_id) && <> · for {partyName(em.applied.party_id)}</>}
                         .{' '}

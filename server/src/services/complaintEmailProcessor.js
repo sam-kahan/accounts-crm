@@ -7,7 +7,7 @@ import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
 import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
-import { trackForEmail } from './complaintParties.js';
+import { trackForEmail, tracksOf } from './complaintParties.js';
 import { buildNumberIndex, complaintByNumber } from './numberMatch.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
@@ -234,6 +234,22 @@ async function applyEmail(em, analysis, skipped = []) {
     } else {
       plan = { auto: false, reason: pick.reason };
     }
+  } else if (parties.length && analysis?.our_step) {
+    // Our Stage 2 request / referral on a complaint with more than one
+    // organisation: whose part moves on is decided by who it was sent to
+    // (their complaints address's domain), never guessed.
+    const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
+    const orgs = orgIds.length
+      ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+      : [];
+    const domains = new Set((em.to_addresses || []).map((a) => String(a).toLowerCase().split('@')[1]).filter(Boolean));
+    const hits = tracksOf(complaint, parties, orgs).filter((t) => t.domain && domains.has(t.domain));
+    if (hits.length === 1) {
+      party = hits[0].party;
+      plan = planFromAnalysis(party || complaint, analysis);
+    } else {
+      plan = { auto: false, reason: 'It looks like our Stage 2 request or referral, but it isn’t clear which organisation’s part it moves on' };
+    }
   } else {
     plan = planFromAnalysis(complaint, analysis);
   }
@@ -295,9 +311,11 @@ async function applyEmail(em, analysis, skipped = []) {
   });
   const sentStep = analysis?.kind === 'our_email' && (wentOutside || analysis.forwarded);
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
-  const recorded = plan.event
-    ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
-    : '';
+  const recorded = plan.step
+    ? ` ${plan.step}${fromWhom}: the complaint was moved on automatically, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`
+    : plan.event
+      ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
+      : '';
   const ev = await query(
     `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,

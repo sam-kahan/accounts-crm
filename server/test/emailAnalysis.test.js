@@ -122,3 +122,35 @@ test('an email saying it has been put right is flagged to confirm, never closed'
   // Greenco confirming it is sorted counts
   assert.equal(resolutionSuggestion(analysis({ resolved: true, from_organisation: false, kind: 'our_email' })).by_us, true);
 });
+
+import { planOurStep } from '../src/services/emailAnalysis.js';
+
+const ours = (over = {}) => normaliseAnalysis({
+  kind: 'our_email', from_organisation: false, sent_on: '2026-09-29', confidence: 'high',
+  our_step: 'stage2_request', summary: 'Greenco asks for a Stage 2 review.', ...over,
+}, { today: '2026-09-30' });
+
+test('our Stage 2 request sent from Outlook moves the complaint to Stage 2 by itself, dated the day it went', () => {
+  const plan = planFromAnalysis(complaint({ raised_on: '2026-08-27', stage_started_on: '2026-08-27' }), ours(), { today: '2026-09-30' });
+  assert.equal(plan.auto, true);
+  assert.deepEqual(plan.changes, { stage: 'stage_2', stage_started_on: '2026-09-29', responded_on: null, response_due_manual: false });
+  assert.equal(plan.event.type, 'escalated');
+});
+
+test('not certain, already at Stage 2, or a chaser that only mentions Stage 2: nothing moves', () => {
+  const c = complaint({ raised_on: '2026-08-27', stage_started_on: '2026-08-27' });
+  assert.equal(planFromAnalysis(c, ours({ confidence: 'medium' }), { today: '2026-09-30' }).auto, false);
+  assert.deepEqual(planFromAnalysis({ ...c, stage: 'stage_2' }, ours(), { today: '2026-09-30' }).changes, {});
+  const chaser = normaliseAnalysis({ kind: 'our_email', sent_on: '2026-09-29', confidence: 'high', our_step: null }, { today: '2026-09-30' });
+  assert.deepEqual(planFromAnalysis(c, chaser, { today: '2026-09-30' }).changes, {});
+  // their email can't claim to be our step
+  assert.equal(normaliseAnalysis({ kind: 'stage1_response', our_step: 'stage2_request' }).our_step, null);
+});
+
+test('our referral to the ombudsman: from Stage 2 only, keeping their Stage 2 answer as the final response', () => {
+  const s2 = complaint({ stage: 'stage_2', raised_on: '2026-06-01', stage_started_on: '2026-07-01', responded_on: '2026-07-20' });
+  const plan = planFromAnalysis(s2, ours({ our_step: 'ombudsman_referral' }), { today: '2026-09-30' });
+  assert.equal(plan.changes.stage, 'ombudsman');
+  assert.equal(plan.changes.final_response_on, '2026-07-20');
+  assert.equal(planFromAnalysis(complaint(), ours({ our_step: 'ombudsman_referral' }), { today: '2026-09-30' }).auto, false);
+});

@@ -586,6 +586,16 @@ the page says how far each date can be trusted.
   review at once; `POST /:id/review` cancels any queued review so it is paid
   for once. The review's `headline` is the one-line instruction the page and
   the list lead with.
+- **Our own Stage 2 request / referral moves the complaint on by itself.**
+  The email analysis reads `our_step` (`stage2_request` | `ombudsman_referral`,
+  our emails only; a chaser that merely mentions Stage 2 is null), and
+  `planOurStep()` (pure, tested) escalates on the date it was sent — Stage 1
+  → Stage 2, or Stage 2 → ombudsman keeping their Stage 2 answer as the final
+  response — only with high confidence, a date that fits and the track at the
+  right stage; otherwise it waits for a person. Undo like any other automatic
+  record. With more than one organisation, the recipient's domain picks the
+  track. The page's **Send it and escalate to Stage 2…** does the same in one
+  press when sending from here (`send-email` with `then: 'escalate'`).
 - **Never "chase" what isn't due** (`services/reviewGuard.js`, pure, tested).
   The review is given TODAY and each deadline marked "not yet due /
   OVERDUE" as authoritative, and `guardReview()` then checks it against the
