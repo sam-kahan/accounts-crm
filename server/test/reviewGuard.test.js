@@ -17,8 +17,8 @@ test('LivingCity: raised today, acknowledgement due Thu 1 Oct — a chaser is re
   });
   assert.equal(g.next_action.type, 'wait');
   assert.equal(g.email_now, false);
-  assert.match(g.headline, /^Nothing to send yet/);
-  assert.match(g.headline, /Thu 1 Oct 2026|Mon 5 Oct 2026/);
+  assert.match(g.headline, /^Nothing (more )?to send/);
+  assert.match(g.headline, /Mon 5 Oct 2026/); // 5 working days after writing to them (later than the 1 Oct acknowledgement)
   assert.ok(g.email.body); // kept for if they miss it
 });
 
@@ -27,7 +27,7 @@ test('58 Lawefield: we wrote to them today — no chaser, even though a date has
     anyOverdue: true, nextDue: null, lastSentOn: '2026-09-28', today: TODAY,
   });
   assert.equal(g.next_action.type, 'wait');
-  assert.match(g.headline, /you last wrote to them on Mon 28 Sep 2026\. Wait for their reply until Mon 5 Oct 2026/);
+  assert.match(g.headline, /you wrote to them on Mon 28 Sep 2026\. Wait for their reply until Mon 5 Oct 2026/);
 });
 
 test('really overdue and nothing sent lately: the chaser stands', () => {
@@ -48,4 +48,26 @@ test('the next thing due from them, across organisations', () => {
     { state: 'open', stage: 'stage_1', status: 'awaiting_ack', ack_due: '2026-10-01', org_name: 'LCS' },
   ]);
   assert.deepEqual(n, { date: '2026-10-01', what: "LCS's acknowledgement" });
+});
+
+test('sent from the system and no reply since: no email is advised, whatever it is about', () => {
+  const r = {
+    headline: 'Email British Gas Void Care today asking for a corrected final bill.',
+    next_action: { type: 'send_email' }, email: { subject: 'Final bill', body: 'Dear…' },
+  };
+  const g = guardReview(r, { anyOverdue: false, nextDue: null, lastSentOn: '2026-09-29', lastTheirsOn: '2026-09-14', today: '2026-09-29' });
+  assert.equal(g.next_action.type, 'wait');
+  assert.match(g.headline, /you wrote to them on Tue 29 Sep 2026\. Wait for their reply until Tue 6 Oct 2026/);
+});
+
+test('they replied after our email: the ball is ours, a reply can be advised', () => {
+  const r = { headline: 'Send them the tenancy agreement they asked for.', next_action: { type: 'send_email' }, email: { body: 'x' } };
+  const g = guardReview(r, { anyOverdue: false, nextDue: null, lastSentOn: '2026-09-28', lastTheirsOn: '2026-09-29', today: '2026-09-29' });
+  assert.equal(g, r);
+});
+
+test('our email a fortnight ago and no reply: a follow-up is allowed once the fair time has passed', () => {
+  const r = { headline: 'Ask again for the corrected bill.', next_action: { type: 'send_email' }, email: { body: 'x' } };
+  const g = guardReview(r, { anyOverdue: false, nextDue: null, lastSentOn: '2026-09-10', lastTheirsOn: '2026-09-01', today: '2026-09-29' });
+  assert.equal(g, r);
 });

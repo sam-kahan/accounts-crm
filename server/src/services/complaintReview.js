@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { gatherContext } from './complaintContext.js';
+import { gatherContext, lastTheirsByComplaint } from './complaintContext.js';
 import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction } from './complaintRules.js';
 import { guardReview, nextDueFromThem } from './reviewGuard.js';
@@ -21,6 +21,8 @@ const REVIEW_INSTRUCTION =
   'plain-English instruction, at most 15 words, starting with a verb, saying exactly what to do next ' +
   'and by when (e.g. "Email E.ON Next asking for the final bill by 8 Oct." or "Nothing to do until ' +
   '5 Oct: wait for their Stage 1 answer."). No reasons in it; the reasons go in "summary". ' +
+  'The complaint has ALREADY been made (see the context): never recommend "raising" or "making" a complaint, ' +
+  'and never draft an email that raises one or threatens one. ' +
   'In "summary" (2-3 short sentences): where ' +
   'it stands, what the organisation most recently said (with its date), and whether they are keeping ' +
   'to the timescales of their procedure — naming any deadline they have missed. In ' +
@@ -73,6 +75,7 @@ export async function refreshReview(id) {
         anyOverdue: Boolean(c.any_needs_chasing),
         nextDue: nextDueFromThem([c, ...(c.parties || [])]),
         lastSentOn: sent[sent.length - 1] || null,
+        lastTheirsOn: (await lastTheirsByComplaint([id])).get(id) || null,
       },
     );
     await query(

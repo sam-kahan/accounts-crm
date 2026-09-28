@@ -39,14 +39,39 @@ export function nextDueFromThem(tracks) {
   return due.sort((a, b) => a.date.localeCompare(b.date))[0] || null;
 }
 
-// facts: { anyOverdue, nextDue: {date, what} | null, lastSentOn: 'YYYY-MM-DD' | null, today }
+// Does a review tell Greenco to send an email NOW (whatever it is about)?
+export function wantsToSendNow(r) {
+  if (!r) return false;
+  if (r.next_action?.type === 'wait' || r.email_now === false) return false;
+  return r.next_action?.type === 'send_email' || Boolean(r.email?.body) || recommendsChasing(r);
+}
+
+// facts: { anyOverdue, nextDue: {date, what} | null, lastSentOn, lastTheirsOn, today }
+//   lastSentOn    the last day Greenco wrote to them (an email sent, a chaser logged)
+//   lastTheirsOn  the last day an email arrived FROM them
 // Returns the review unchanged, or corrected with `guarded` saying why.
 export function guardReview(review, facts) {
-  if (!review || !recommendsChasing(review)) return review;
+  if (!review) return review;
   const today = facts.today || todayISO();
   let headline = null;
   let by = null;
   let why = null;
+  // The ball is in their court: Greenco wrote last. Nothing more is sent —
+  // whatever the email would be about — until they have had a fair time to
+  // reply (and their own deadline, if later), however the advice is worded.
+  const ballTheirs = facts.lastSentOn && (!facts.lastTheirsOn || facts.lastSentOn >= facts.lastTheirsOn);
+  if (ballTheirs && wantsToSendNow(review)) {
+    let until = addWorkingDays(facts.lastSentOn, CHASE_GAP_WORKING_DAYS);
+    if (facts.nextDue && facts.nextDue.date > until) until = facts.nextDue.date;
+    if (today < until) {
+      return corrected(review, {
+        by: until,
+        headline: `Nothing more to send: you wrote to them on ${ukDate(facts.lastSentOn)}. Wait for their reply until ${ukDate(until)}.`,
+        why: `It suggested sending an email, but Greenco wrote to them on ${ukDate(facts.lastSentOn)} and they haven't replied since, so they have until ${ukDate(until)} first.`,
+      });
+    }
+  }
+  if (!recommendsChasing(review)) return review;
   const sentLately = facts.lastSentOn &&
     workingDaysSince(facts.lastSentOn, today) < CHASE_GAP_WORKING_DAYS;
   if (sentLately) {
@@ -65,6 +90,10 @@ export function guardReview(review, facts) {
   } else {
     return review; // something really is overdue and nothing was sent lately: chasing is right
   }
+  return corrected(review, { headline, by, why });
+}
+
+function corrected(review, { headline, by, why }) {
   return {
     ...review,
     headline,

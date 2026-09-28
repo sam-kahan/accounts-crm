@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { HttpError } from '../lib/http.js';
-import { complaintEmailAddress } from '../config.js';
+import { complaintEmailAddress, config } from '../config.js';
 import {
   computeAckDue,
   computeOmbudsmanFrom,
@@ -23,6 +23,24 @@ import { attachmentTexts, attachmentBlocks } from './attachments.js';
 // Attach derived status + rule + procedure checklist + org context to a row.
 export async function decorate(c) {
   return (await decorateMany([c]))[0];
+}
+
+// The last day an email arrived FROM them on each complaint.
+export async function lastTheirsByComplaint(ids) {
+  const ours = String(config.complaintEmail.domain || '').toLowerCase();
+  const { rows } = await query(
+    `SELECT complaint_id,
+            max(CASE WHEN analysis->>'sent_on' ~ '^\d{4}-\d{2}-\d{2}$'
+                     THEN (analysis->>'sent_on')::date
+                     ELSE (received_at AT TIME ZONE 'Europe/London')::date END) AS d
+       FROM complaint_emails
+      WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound'
+        AND COALESCE(analysis->>'kind', '') <> 'our_email'
+        AND lower(COALESCE(sender_email, '')) NOT LIKE '%@' || $2
+      GROUP BY complaint_id`,
+    [ids, ours],
+  );
+  return new Map(rows.map((x) => [x.complaint_id, x.d]));
 }
 
 // Many at once (the list, the dashboard): the organisations and the further
@@ -51,6 +69,9 @@ export async function decorateMany(rows) {
       ) x GROUP BY complaint_id`,
     [rows.map((r) => r.id)],
   )).rows.map((x) => [x.complaint_id, x.d]));
+  // When they last wrote to us: the date on their email (as read), or the
+  // day it arrived — never ours, a forward of ours included.
+  const lastTheirs = await lastTheirsByComplaint(rows.map((r) => r.id));
   return rows.map((r) => {
     const c = withParties(
       decorateWithOrg(r, orgOf(r)),
@@ -64,6 +85,7 @@ export async function decorateMany(rows) {
         anyOverdue: c.any_needs_chasing,
         nextDue: nextDueFromThem([c, ...c.parties]),
         lastSentOn: lastSent.get(r.id) || null,
+        lastTheirsOn: lastTheirs.get(r.id) || null,
       });
     }
     return c;

@@ -83,6 +83,18 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   const today = todayISO();
   const due = (d) => (!d ? 'n/a' : d < today ? `${d} (OVERDUE)` : d === today ? `${d} (due TODAY)` : `${d} (not yet due)`);
   lines.push(`TODAY is ${today} (UK). The status and the due dates below are worked out by the system from their procedure and are authoritative: never call a deadline missed or overdue unless it says OVERDUE, and never recommend chasing anything that is not yet due.`);
+  // The complaint already exists: a draft that "raises a formal complaint",
+  // asks them to log one, or threatens one "if unresolved" reads as if it
+  // hadn't been made, and confuses everyone who reads it.
+  const stageWords = { stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'with the ombudsman', resolved: 'resolved', closed: 'closed' };
+  lines.push(
+    `THIS IS ALREADY A FORMAL COMPLAINT: it was made to ${complaint.org_name} on ${complaint.raised_on} and is now at ` +
+      `${stageWords[complaint.stage] || complaint.stage}. Never write that Greenco is making, raising or opening a ` +
+      'complaint, never ask them to log it as one, and never threaten to "raise a complaint" if things are not put ' +
+      `right. Refer to it as "our complaint of ${complaint.raised_on}" (with their reference where known), and when ` +
+      'escalating, name the next step in THEIR procedure (for example asking for the Stage 2 / complaints manager ' +
+      'review, or referral to the ombudsman once allowed).',
+  );
   lines.push('');
   lines.push(`Organisation: ${complaint.org_name} (${rule.label})`);
   if (complaint.property) lines.push(`Property / account: ${complaint.property}`);

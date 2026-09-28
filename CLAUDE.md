@@ -591,10 +591,17 @@ the page says how far each date can be trusted.
   OVERDUE" as authoritative, and `guardReview()` then checks it against the
   system's own dates: advice to chase / follow up is replaced by "Nothing to
   send yet: wait for …, due …" when nothing is overdue, or when Greenco wrote
-  to them in the last 5 working days (`CHASE_GAP_WORKING_DAYS`). Applied when
+  to them in the last 5 working days (`CHASE_GAP_WORKING_DAYS`). Above both:
+  when Greenco wrote LAST (`lastSentOn >= lastTheirsOn`, their emails dated by
+  `lastTheirsByComplaint`), advice to send ANY email now is held until 5
+  working days after ours (or their deadline, if later) — "Nothing more to
+  send: you wrote to them on …", however the advice was worded. Applied when
   the review is written AND when it is shown (`decorateMany`), so an older
   review can't say otherwise. When the step is to wait the drafted email is
-  folded away as the follow-up for if they miss the date.
+  folded away as the follow-up for if they miss the date. The AI is also told
+  the complaint ALREADY EXISTS (made on <date>, at <stage>): its drafts never
+  "raise" or threaten a complaint or ask them to log one; they refer to "our
+  complaint of <date>" and the next step in the organisation's procedure.
 - **Filing by number** (`services/numberMatch.js`): any email (any sender)
   quoting one open complaint's account number or reference is filed on it
   with certainty, from the watched mailboxes and from waiting emails; whole
