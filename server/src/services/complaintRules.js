@@ -261,6 +261,15 @@ export function effectiveRule(org, type) {
 
 const stageStart = (c) => c.stage_started_on || c.raised_on;
 
+// Is this organisation's track still running? A complaint with more than one
+// organisation stays open while any of them is, so the main organisation's
+// own track can have ended (its stage says 'resolved' or 'closed') while the
+// complaint's state is still 'open'. Every track — the complaint row or a
+// complaint_parties row — is read the same way.
+export function trackOpen(t) {
+  return (t?.state || 'open') === 'open' && !['resolved', 'closed'].includes(t?.stage);
+}
+
 // A date as people read it in a sentence: "Thu 1 Oct 2026".
 export function ukDate(iso) {
   if (!iso) return iso;
@@ -338,9 +347,9 @@ const plural = (n, word) => `${n} working day${n === 1 ? '' : 's'}${word ? ` ${w
 // Derive live status + a plain-English "next action" for a complaint.
 export function deriveStatus(complaint, rule) {
   const base = { overdue: false, ack_overdue: false, needs_chasing: false };
-  if (complaint.state === 'resolved')
+  if (complaint.state === 'resolved' || complaint.stage === 'resolved')
     return { ...base, status: 'resolved', label: 'Resolved', nextAction: null };
-  if (complaint.state === 'closed')
+  if (complaint.state === 'closed' || complaint.stage === 'closed')
     return { ...base, status: 'closed', label: 'Closed', nextAction: null };
   if (complaint.stage === 'ombudsman')
     return {
@@ -428,7 +437,7 @@ export function deriveStatus(complaint, rule) {
 export function procedureSteps(complaint, rule) {
   const today = todayISO();
   const stage = complaint.stage || 'stage_1';
-  const closed = complaint.state === 'resolved' || complaint.state === 'closed';
+  const closed = !trackOpen(complaint);
   const order = { stage_1: 1, stage_2: 2, ombudsman: 3, resolved: 4, closed: 4 };
   const at = order[stage] || 1;
   const timed = (date, done) =>
@@ -545,9 +554,13 @@ export function describeChanges(before, after) {
 
 // What an AI review was written against. When this changes, the review is out
 // of date (the nightly job and the page both use it).
+// Each further organisation's track counts too (appended only when there is
+// one, so a complaint with a single organisation keeps the signature its
+// stored review was written against).
 export function reviewSignature(c) {
-  return [c.status, c.stage, c.state, c.acknowledged_on, c.responded_on, c.final_response_on,
-    c.response_due].map((v) => v ?? '').join('|');
+  const one = (t) => [t.status, t.stage, t.state, t.acknowledged_on, t.responded_on, t.final_response_on,
+    t.response_due].map((v) => v ?? '').join('|');
+  return [one(c), ...(c.parties || []).map((p) => `${p.id}:${one(p)}`)].join('||');
 }
 
 // The one-click actions a review may recommend, each mapped to a button that

@@ -285,14 +285,35 @@ export const api = {
     remove: (id) => request(`/complaints/${id}`, { method: 'DELETE' }),
     addEvent: (id, data) =>
       request(`/complaints/${id}/events`, { method: 'POST', body: JSON.stringify(data) }),
-    escalate: (id, date) =>
-      request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date }) }),
-    // Say what an email that arrived was: acknowledgement | response | correspondence.
-    reviewEmail: (id, emailId, as, date) =>
+    // partyId: a further organisation on the complaint (null: the main one).
+    escalate: (id, date, partyId = null) =>
+      request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date, party_id: partyId }) }),
+    // Say what an email that arrived was: acknowledgement | response | correspondence,
+    // and, with more than one organisation on the complaint, which one it is from.
+    reviewEmail: (id, emailId, as, date, partyId = null) =>
       request(`/complaints/${id}/emails/${emailId}/review`, {
         method: 'POST',
-        body: JSON.stringify({ as, date: date || null }),
+        body: JSON.stringify({ as, date: date || null, party_id: partyId }),
       }),
+    // Further organisations on one complaint (a debt collector and the supplier).
+    addParty: (id, data) =>
+      request(`/complaints/${id}/parties`, { method: 'POST', body: JSON.stringify(data) }),
+    updateParty: (id, partyId, data) =>
+      request(`/complaints/${id}/parties/${partyId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    removeParty: (id, partyId) =>
+      request(`/complaints/${id}/parties/${partyId}`, { method: 'DELETE' }),
+    // Re-check complaints against their emails: every open one, or one now.
+    recheckStatus: () => request('/complaints/recheck'),
+    recheckAll: (force = false) => request('/complaints/recheck', { method: 'POST', body: JSON.stringify({ force }) }),
+    recheck: (id) => request(`/complaints/${id}/recheck`, { method: 'POST' }),
+    undoRecheck: (id) => request(`/complaints/${id}/recheck/undo`, { method: 'POST' }),
+    // Emails that bounced, not yet looked into; and saying one has been.
+    bounces: () => request('/complaints/bounces'),
+    resolveBounce: (bounceId, note) =>
+      request(`/complaints/bounces/${bounceId}/resolve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    // Search the mailboxes for every reference and account number on it.
+    searchEmails: (id, all = false) =>
+      request(`/complaints/${id}/search-emails`, { method: 'POST', body: JSON.stringify({ all }) }),
     undoEmail: (id, emailId) =>
       request(`/complaints/${id}/emails/${emailId}/undo`, { method: 'POST' }),
     refreshReview: (id) => request(`/complaints/${id}/review`, { method: 'POST' }),

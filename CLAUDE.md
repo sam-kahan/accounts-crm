@@ -516,6 +516,58 @@ the page says how far each date can be trusted.
   (`refreshStaleReviews`, from `/api/dashboard/send-reminders`) refreshes any
   whose `ai_review_status` signature the calendar has overtaken. Nothing is sent
   from it; the draft waits for a person to press Send.
+- **One complaint, more than one organisation** (migration `029`,
+  `services/complaintParties.js`). A debt collector chasing a supplier's bill
+  (LCS for British Gas) is ONE issue with two complaints procedures. The
+  complaint row is the MAIN organisation's track, unchanged; each further
+  organisation is a `complaint_parties` row with the same procedure fields
+  (reference, raised_on, stage, ack/response/final dates, response_due,
+  ombudsman_deadline), read by the same rules engine and re-dated by
+  `recomputePartyDeadlines`. `decorate`/`decorateMany` return `parties` (each
+  decorated), `org_names` and `any_needs_chasing` — use `any_needs_chasing` for
+  "needs chasing" lists. The step routes (`/events`, `/escalate`, email
+  review) take `party_id`; `complaint_events.party_id` and
+  `complaint_emails.party_id` say whose track an entry is on. **The complaint
+  stays open while any track is**: resolving the main track sets its *stage*
+  to `resolved` and `state` follows `overallState()`; `trackOpen()` in
+  `complaintRules.js` is the per-track test. An incoming email from "the
+  organisation" is recorded on the track `trackForEmail()` picks (their
+  reference, `author_org` from the email analysis, the sender's domain) —
+  only when the signs point at exactly one; otherwise it waits for a person.
+  Tidy up's merge of two complaints against DIFFERENT organisations (matched on
+  the account number) makes the merged one a party instead of discarding its
+  track (`second_organisation` on the pair). A complaint with parties is never
+  changed by the re-check (below); it reports instead.
+- **Every reference is searched, not just the account number**
+  (`accountNumbers.js#searchTermsFor`): account numbers, their reference, each
+  party's reference, our reference and the GC-C code, each once
+  (`accounts_searched` holds normalised keys). Too-short/plain references
+  (under 6 characters, or no digit) are not searched and the page says so.
+  `POST /complaints/:id/search-emails` (202, background) searches now; the
+  complaint page shows `email_search` (searched / pending / too short). No AI.
+- **Re-check against the emails** (migration `031`,
+  `services/complaintRecheck.js`): for each open complaint, search by every
+  number, read all its emails with the import's reader
+  (`reconstructComplaint`, one AI read, skipped when `recheck_signature` shows
+  nothing new), then `planRecheck()` (pure, tested): stage moves FORWARD only,
+  blank dates filled, a differing recorded date reported never overwritten,
+  low confidence / more than one organisation changes nothing. Apply +
+  timeline + Undo record in one transaction (`last_recheck`), marks To check.
+  `POST /complaints/recheck` runs every open one in the background
+  (`app_settings.recheck_run`, only ever started by a person);
+  `POST /:id/recheck` (202) and `/:id/recheck/undo` for one.
+- **Bounced emails are flagged** (migration `030`, `services/bounces.js`). A
+  bounce message in a mailbox we read (watched + catch-all) is recognised by
+  `readBounce()` (pure, tested: sender mailer-daemon/postmaster/Exchange, or a
+  subject that STARTS with Undeliverable/Mail delivery failed/…; delays are
+  not bounces) and never filed as a complaint email. Emails sent from the CRM
+  bounce to SMTP2GO, so `POST /api/webhooks/email-bounce?key=BOUNCE_WEBHOOK_KEY`
+  takes its hard-bounce/reject events. A bounce links to a complaint only when
+  an email of ours on it went to that address (never merely because the
+  address is the organisation's); it shows on the complaint page, on every
+  complaint using the address, on the organisation ("Email bounced"), in the
+  Complaints page card and the dashboard tile until someone presses "Looked
+  into it" with what they found.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)
@@ -567,6 +619,23 @@ the page says how far each date can be trusted.
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-09-28 — two organisations on one complaint; every reference searched; re-check; bounces
+- **A complaint can be against more than one organisation** (LCS and British
+  Gas), each with its own reference, procedure, deadlines and steps, sharing
+  the emails, documents, timeline and account number. "+ Another organisation"
+  on the complaint page; a section per organisation; the list shows one line
+  per organisation. Reasoning in "Complaints" above.
+- **The mailboxes are searched for every reference on a complaint**, not only
+  the account number, with the state shown on the complaint and a Search now
+  button.
+- **Re-check every open complaint against its emails** (Complaints page, and
+  per complaint): search, read, and move imported complaints off Stage 1 to
+  where the emails show — cautiously, with Undo, marked To check.
+- **Bounced emails are flagged** for a person to look into. Set
+  `BOUNCE_WEBHOOK_KEY` and the SMTP2GO webhook (deploy/DEPLOY.md) for emails
+  sent from the CRM; bounces of Outlook-sent mail are read from the watched
+  mailboxes without any set-up.
 
 ### 2026-09-28 — spending less on AI; research remembered; no "0 days"
 - **The AI costs far less** (the owner asked for economy):

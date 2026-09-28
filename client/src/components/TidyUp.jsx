@@ -15,9 +15,11 @@ export default function TidyUp({ refreshKey, onChanged }) {
 
   if (!t || (!t.complaints.length && !t.organisations.length)) return null;
 
-  async function merge(kind, keep, merge) {
+  async function merge(kind, keep, merge, secondOrg = false) {
     const what = kind === 'c'
-      ? `Merge ${merge.ref_code} into ${keep.ref_code}? Its emails, documents and timeline move to ${keep.ref_code}, and ${merge.ref_code} is removed.`
+      ? secondOrg
+        ? `Combine ${merge.ref_code} into ${keep.ref_code}? ${merge.linked_org || merge.org_name} becomes a second organisation on ${keep.ref_code}, keeping its own reference, dates and procedure. Its emails, documents and timeline move across, and ${merge.ref_code} is removed.`
+        : `Merge ${merge.ref_code} into ${keep.ref_code}? Its emails, documents and timeline move to ${keep.ref_code}, and ${merge.ref_code} is removed.`
       : `Merge “${merge.name}” into “${keep.name}”? Its complaints and documents move across, and the deadlines follow “${keep.name}”’s procedure.`;
     if (!confirm(what)) return;
     setBusy(merge.id);
@@ -44,12 +46,19 @@ export default function TidyUp({ refreshKey, onChanged }) {
           These look like the same thing on file twice. Merging keeps everything and notes it on the timeline.
         </p>
         {err && <div className="inline-note warn" style={{ marginBottom: 8 }}>{err}</div>}
-        {t.complaints.map(({ keep, merge: m }) => (
+        {t.complaints.map(({ keep, merge: m, second_organisation: second }) => (
           <div key={`${keep.id}-${m.id}`} style={{ padding: '8px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
             <div style={{ fontSize: 13 }}>
               <strong>Same issue?</strong>{' '}
               <Link to={`/complaints/${keep.id}`}>{keep.ref_code}</Link> “{keep.subject}” (raised {formatDate(keep.raised_on)}, {keep.state === 'open' ? 'open' : 'closed'}) and{' '}
-              <Link to={`/complaints/${m.id}`}>{m.ref_code}</Link> “{m.subject}” (raised {formatDate(m.raised_on)}, {m.state === 'open' ? 'open' : 'closed'}), both against {keep.linked_org || keep.org_name}.
+              <Link to={`/complaints/${m.id}`}>{m.ref_code}</Link> “{m.subject}” (raised {formatDate(m.raised_on)}, {m.state === 'open' ? 'open' : 'closed'}),{' '}
+              {second
+                ? <>against {keep.linked_org || keep.org_name} and {m.linked_org || m.org_name}, with the same account number.
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                    Combining makes one complaint with both organisations on it, each keeping its own
+                    reference, dates and procedure.
+                  </div></>
+                : <>both against {keep.linked_org || keep.org_name}.</>}
               {(keep.state !== 'open' || m.state !== 'open') && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                   The closed one isn’t on the list while it shows open complaints only. Merging keeps the open one
@@ -58,8 +67,8 @@ export default function TidyUp({ refreshKey, onChanged }) {
               )}
             </div>
             <button className="btn btn-sm" style={{ marginTop: 6 }} disabled={busy === m.id}
-              onClick={() => merge('c', keep, m)}>
-              {busy === m.id ? 'Merging…' : `Merge into ${keep.ref_code}`}
+              onClick={() => merge('c', keep, m, second)}>
+              {busy === m.id ? 'Merging…' : second ? `Combine into ${keep.ref_code}` : `Merge into ${keep.ref_code}`}
             </button>
           </div>
         ))}

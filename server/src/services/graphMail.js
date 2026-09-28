@@ -201,6 +201,17 @@ export async function fetchMailboxMessages() {
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
 
+// Just the text of one message (no attachments) — for reading a bounce
+// message, whose preview often stops before the address that failed.
+export async function fetchMessageText(graphId, mailbox = config.ms.mailbox) {
+  if (!config.ms.enabled || !graphId) return null;
+  const msg = await graphGet(
+    `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(graphId)}?$select=body`,
+    { Prefer: 'outlook.body-content-type="text"' },
+  );
+  return (msg.body?.content || '').slice(0, 50000);
+}
+
 export async function fetchMessageDetail(graphId, fallback = {}, mailbox = config.ms.mailbox) {
   if (!config.ms.enabled || !graphId || String(graphId).startsWith('dev-') || String(graphId).startsWith('out-')) {
     return { bodyText: fallback.bodyPreview || null, attachments: [], skipped: [] };

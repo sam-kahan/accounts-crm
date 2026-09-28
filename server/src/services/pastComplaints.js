@@ -8,7 +8,7 @@ import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, groupCandidates, mergeExtracted, findExistingMatch, postcodeOf, sameIssue } from './orgMatch.js';
+import { findOrgByName, groupCandidates, mergeExtracted, findExistingMatch, postcodeOf, sameIssue, PARTY_COLS } from './orgMatch.js';
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
@@ -325,7 +325,7 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
 //            without asking
 export async function onFileFor(group, preloaded = null) {
   const complaints = preloaded?.complaints
-    || (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on, reference, our_reference, account_numbers FROM complaints')).rows;
+    || (await query(`SELECT c.id, c.ref_code, c.subject, c.org_name, c.organisation_id, c.property, c.raised_on, c.reference, c.our_reference, c.account_numbers, ${PARTY_COLS} FROM complaints c`)).rows;
   const orgs = preloaded?.orgs || (await query('SELECT id, name FROM organisations')).rows;
   const xs = group.map((c) => c.extracted || {});
   if (group.length > 1) xs.push(mergeExtracted(group));

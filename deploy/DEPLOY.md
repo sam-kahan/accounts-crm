@@ -78,6 +78,10 @@ Set:
 - `REMINDER_TO=sam.kahan@greenco.co.uk`
 - `SESSION_SECRET=` — **required for login.** Generate one: `openssl rand -hex 32`
 - `REMINDER_CRON_KEY=` — for the nightly reminder cron: `openssl rand -hex 24`
+- `BOUNCE_WEBHOOK_KEY=` — for SMTP2GO's bounce webhook: `openssl rand -hex 24`, then in
+  SMTP2GO → Settings → Webhooks add
+  `https://accounts.greenco.co.uk/api/webhooks/email-bounce?key=<the key>` for the bounce
+  and reject events, so an email sent from the CRM that bounces is flagged
 
 ## Phase 4 — First build + migrate
 

@@ -6,11 +6,12 @@ import { ukDate } from './complaintRules.js';
 import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
-import { recomputeDeadlines } from './complaintDeadlines.js';
+import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
+import { trackForEmail } from './complaintParties.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, findExistingMatch } from './orgMatch.js';
+import { findOrgByName, findExistingMatch, PARTY_COLS } from './orgMatch.js';
 import { researchOrganisation } from './orgResearch.js';
 
 // ---------------------------------------------------------------------------
@@ -35,8 +36,8 @@ const KIND_LABEL = {
 
 async function openCandidates() {
   const { rows } = await query(
-    `SELECT id, org_name, subject, property, ref_code, reference, account_numbers FROM complaints
-      WHERE state = 'open' ORDER BY raised_on DESC LIMIT 80`,
+    `SELECT c.id, c.org_name, c.subject, c.property, c.ref_code, c.reference, c.account_numbers, ${PARTY_COLS}
+       FROM complaints c WHERE c.state = 'open' ORDER BY c.raised_on DESC LIMIT 80`,
   );
   return rows;
 }
@@ -87,6 +88,12 @@ export async function processEmail(emailId) {
       const complaint = em.complaint_id
         ? (await query('SELECT * FROM complaints WHERE id = $1', [em.complaint_id])).rows[0]
         : null;
+      if (complaint) {
+        complaint.parties = (await query(
+          'SELECT org_name, relationship, reference, stage FROM complaint_parties WHERE complaint_id = $1 ORDER BY created_at',
+          [complaint.id],
+        )).rows;
+      }
       analysis = await analyseEmail({
         email: em,
         complaint,
@@ -170,11 +177,39 @@ async function applyEmail(em, analysis, skipped = []) {
   const arrived = londonDateOf(new Date(em.received_at));
   const who = analysis?.author || em.sender_name || em.sender_email || 'unknown';
   const skippedNote = skipped.length ? ` (not saved, too large: ${skipped.join(', ')})` : '';
-
-  const plan = planFromAnalysis(complaint, analysis);
   const summary = analysis?.summary ? `: ${analysis.summary.replace(/[.\s]+$/, '')}` : '';
   const kind = analysis ? KIND_LABEL[analysis.kind] || 'Email' : 'Email';
   const noteDate = analysis?.sent_on || arrived;
+
+  // With more than one organisation on the complaint, an email from "the
+  // organisation" is recorded on the track of the one that wrote it — never
+  // guessed, since the wrong one would move the other organisation's clock.
+  const parties = (await query(
+    'SELECT * FROM complaint_parties WHERE complaint_id = $1 ORDER BY created_at', [complaint.id],
+  )).rows;
+  let party = null;
+  let plan;
+  const fromThem = analysis?.from_organisation && analysis.kind !== 'our_email' && analysis.confidence === 'high';
+  if (parties.length && fromThem) {
+    const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
+    const orgs = orgIds.length
+      ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+      : [];
+    const pick = trackForEmail({
+      complaint, parties, orgs, analysis, email: em, ourDomain: config.complaintEmail.domain,
+    });
+    if (pick.track) {
+      party = pick.track.party;
+      plan = planFromAnalysis(party || complaint, analysis);
+    } else {
+      plan = { auto: false, reason: pick.reason };
+    }
+  } else {
+    plan = planFromAnalysis(complaint, analysis);
+  }
+  const target = party || complaint;
+  const table = party ? 'complaint_parties' : 'complaints';
+  const fromWhom = party ? ` (${party.org_name})` : '';
 
   if (!plan.auto) {
     // Waits for a person, with the suggestion on the email.
@@ -187,30 +222,38 @@ async function applyEmail(em, analysis, skipped = []) {
   }
 
   const before = {};
-  for (const k of Object.keys(plan.changes)) before[k] = complaint[k] ?? null;
+  for (const k of Object.keys(plan.changes)) before[k] = target[k] ?? null;
   const cols = Object.keys(plan.changes);
   if (cols.length) {
     const set = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
-    await query(`UPDATE complaints SET ${set} WHERE id = $1`, [complaint.id, ...cols.map((c) => plan.changes[c])]);
+    await query(`UPDATE ${table} SET ${set} WHERE id = $1`, [target.id, ...cols.map((c) => plan.changes[c])]);
   }
   const type = plan.event?.type || 'note';
   const recorded = plan.event
-    ? ` Recorded automatically as their ${kind.toLowerCase()}, dated ${ukDate(plan.event.date)}.`
+    ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
     : '';
   const ev = await query(
-    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [complaint.id, plan.event?.date || noteDate, type, `${kind} from ${who}${summary}${skippedNote}.${recorded}`, AUTO_BY],
+    `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [complaint.id, party?.id || null, plan.event?.date || noteDate, type, `${kind} from ${who}${summary}${skippedNote}.${recorded}`, AUTO_BY],
   );
   await query(
-    `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, applied = $4
+    `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, applied = $4,
+            party_id = $5
       WHERE id = $1`,
     [
       em.id, plan.reviewedAs, AUTO_BY,
-      JSON.stringify({ before, after: plan.changes, event_id: ev.rows[0].id, kind: analysis?.kind || null }),
+      JSON.stringify({
+        before, after: plan.changes, event_id: ev.rows[0].id, kind: analysis?.kind || null,
+        party_id: party?.id || null,
+      }),
+      party?.id || null,
     ],
   );
-  if (cols.length) await recomputeDeadlines(complaint.id);
+  if (cols.length) {
+    if (party) await recomputePartyDeadlines(party.id);
+    else await recomputeDeadlines(complaint.id);
+  }
 }
 
 // Undo what was recorded automatically from an email: put the replaced values
@@ -220,9 +263,16 @@ export async function undoEmail(em, by) {
   const applied = em.applied;
   if (!applied) return false;
   const cols = Object.keys(applied.before || {});
+  // Recorded on a further organisation's track (migration 029), or the main one.
+  const partyId = applied.party_id || null;
+  const table = partyId ? 'complaint_parties' : 'complaints';
+  const targetId = partyId || em.complaint_id;
   // Only undo what is still as it was recorded: a date someone has since
   // entered or corrected must never be wiped by undoing an older email.
-  const now = (await query('SELECT * FROM complaints WHERE id = $1', [em.complaint_id])).rows[0];
+  const now = (await query(`SELECT * FROM ${table} WHERE id = $1`, [targetId])).rows[0];
+  if (partyId && !now && cols.length) {
+    throw new HttpError(409, 'Can’t undo: that organisation has been removed from this complaint since.');
+  }
   const moved = cols.filter((c) => (now?.[c] ?? null) !== (applied.after?.[c] ?? null));
   if (moved.length) {
     throw new HttpError(
@@ -233,26 +283,29 @@ export async function undoEmail(em, by) {
   }
   if (cols.length) {
     const set = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
-    await query(`UPDATE complaints SET ${set} WHERE id = $1`, [em.complaint_id, ...cols.map((c) => applied.before[c])]);
+    await query(`UPDATE ${table} SET ${set} WHERE id = $1`, [targetId, ...cols.map((c) => applied.before[c])]);
   }
   if (applied.event_id) await query('DELETE FROM complaint_events WHERE id = $1', [applied.event_id]);
   await query(
-    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-     VALUES ($1, $4, 'note', $2, $3)`,
+    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by, party_id)
+     VALUES ($1, $4, 'note', $2, $3, $5)`,
     [
       em.complaint_id,
       `Automatic record from the email "${em.subject || '(no subject)'}" undone` +
         (cols.length ? ` (${cols.map((c) => `${c.replace(/_/g, ' ')} back to ${applied.before[c] ?? 'blank'}`).join('; ')})` : '') + '.',
       by,
       todayISO(),
+      partyId && now ? partyId : null,
     ],
   );
   await query(
-    `UPDATE complaint_emails SET reviewed_at = NULL, reviewed_as = NULL, reviewed_by = NULL, applied = NULL
+    `UPDATE complaint_emails SET reviewed_at = NULL, reviewed_as = NULL, reviewed_by = NULL, applied = NULL,
+            party_id = NULL
       WHERE id = $1`,
     [em.id],
   );
-  await recomputeDeadlines(em.complaint_id);
+  if (partyId && now) await recomputePartyDeadlines(partyId);
+  else await recomputeDeadlines(em.complaint_id);
   scheduleReview(em.complaint_id);
   return true;
 }
@@ -278,7 +331,8 @@ async function createFromEmail(em, analysis) {
   // Already open about the same issue (same organisation and property, or
   // raised within a fortnight)? File it there rather than start a second one.
   const open = (await query(
-    `SELECT id, org_name, organisation_id, property, raised_on, reference, our_reference, subject, account_numbers FROM complaints WHERE state = 'open'`,
+    `SELECT c.id, c.org_name, c.organisation_id, c.property, c.raised_on, c.reference, c.our_reference, c.subject, c.account_numbers, ${PARTY_COLS}
+       FROM complaints c WHERE c.state = 'open'`,
   )).rows;
   const orgsAll = (await query('SELECT id, name FROM organisations')).rows;
   // Matched first on the account number (orgMatch.js#issueMatch). Only a
@@ -371,8 +425,8 @@ export async function fileWaitingEmails() {
   )).rows;
   if (!waiting.length) return 0;
   const open = (await query(
-    `SELECT id, ref_code, org_name, organisation_id, property, raised_on, reference, our_reference, subject, account_numbers
-       FROM complaints WHERE state = 'open'`,
+    `SELECT c.id, c.ref_code, c.org_name, c.organisation_id, c.property, c.raised_on, c.reference, c.our_reference, c.subject, c.account_numbers, ${PARTY_COLS}
+       FROM complaints c WHERE c.state = 'open'`,
   )).rows;
   const orgs = (await query('SELECT id, name FROM organisations')).rows;
   let filed = 0;

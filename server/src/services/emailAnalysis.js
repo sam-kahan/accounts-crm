@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
+import { trackOpen } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // Reads an email that arrived for a complaint — usually one a colleague has
@@ -62,6 +63,9 @@ Work out, from the evidence only:
 - action_needed: what Greenco should do because of it, in one sentence, or null.
 - evidence: the exact short quote that shows the kind and the date.
 - org_name: the organisation the complaint is against (not Greenco), as named in the email, else null.
+- author_org: the organisation the AUTHOR writes for, as named in the email, else null. A debt
+  collector or solicitor writing on behalf of a supplier is the debt collector or solicitor, not the
+  supplier ("LCS" for a letter from LCS about a British Gas bill). null for Greenco's own emails.
 - property: the property address the email is about, if given, else null.
 - account_numbers: every customer or account number the email gives for that property or customer
   (energy/water account, council tax account, service-charge or ground-rent account), exactly as
@@ -82,7 +86,7 @@ Return ONLY a JSON object with exactly these keys:
 {"forwarded": boolean, "author": string|null, "from_organisation": boolean, "sent_on": string|null,
  "kind": string, "their_reference": string|null, "promised_by": string|null, "summary": string,
  "action_needed": string|null, "evidence": string|null, "confidence": "high"|"medium"|"low",
- "complaint_id": string|null, "new_complaint": boolean, "org_name": string|null,
+ "complaint_id": string|null, "new_complaint": boolean, "org_name": string|null, "author_org": string|null,
  "property": string|null, "account_numbers": [string]}`;
 
 function extractJson(text) {
@@ -131,6 +135,7 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
     complaint_id: candidateIds.includes(r?.complaint_id) ? r.complaint_id : null,
     new_complaint: Boolean(r?.new_complaint),
     org_name: str(r?.org_name, 200),
+    author_org: kind === 'our_email' ? null : str(r?.author_org, 200),
     property: str(r?.property, 300),
     account_numbers: Array.isArray(r?.account_numbers)
       ? [...new Set(r.account_numbers.map((a) => str(a, 40)).filter(Boolean))].slice(0, 6)
@@ -156,7 +161,9 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
   const since = complaint.stage_started_on || complaint.raised_on;
   const refChange =
     a.their_reference && !complaint.reference ? { reference: a.their_reference } : {};
-  const open = complaint.state === 'open';
+  // A track that has ended (the whole complaint, or one organisation's part
+  // of it) takes nothing more automatically.
+  const open = trackOpen(complaint);
 
   if (!date) return { auto: false, reason: 'The date they sent it isn’t clear' };
   if (!open) return { auto: false, reason: 'The complaint is closed' };
@@ -207,6 +214,15 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
   if (complaint) {
     lines.push('The complaint this email arrived for:');
     lines.push(`- Against: ${complaint.org_name}`);
+    // More than one organisation: each runs its own procedure, so the model
+    // is told all of them and asked who wrote it (author_org).
+    for (const p of complaint.parties || []) {
+      lines.push(`- Also against: ${p.org_name}${p.relationship ? ` (${p.relationship})` : ''}` +
+        `${p.reference ? `, their reference ${p.reference}` : ''}; stage ${p.stage}`);
+    }
+    if (complaint.parties?.length) {
+      lines.push('  from_organisation is true if ANY of these organisations (or someone acting for one) wrote it; say which in author_org.');
+    }
     lines.push(`- Subject: ${complaint.subject}`);
     if (complaint.property) lines.push(`- Property: ${complaint.property}`);
     lines.push(`- Our reference: ${complaint.ref_code}`);
@@ -218,9 +234,9 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
     lines.push('Open complaints it might belong to:');
     for (const c of candidates) {
       lines.push(
-        `- complaint_id ${c.id}: ${c.org_name} — ${c.subject}` +
+        `- complaint_id ${c.id}: ${[c.org_name, ...(c.party_names || [])].join(' and ')} — ${c.subject}` +
           `${c.property ? ` — ${c.property}` : ''} — ours ${c.ref_code}` +
-          `${c.reference ? ` — theirs ${c.reference}` : ''}` +
+          `${[c.reference, ...(c.party_refs || [])].filter(Boolean).length ? ` — theirs ${[c.reference, ...(c.party_refs || [])].filter(Boolean).join(' / ')}` : ''}` +
           `${c.account_numbers?.length ? ` — account ${c.account_numbers.join(' / ')}` : ''}`,
       );
     }

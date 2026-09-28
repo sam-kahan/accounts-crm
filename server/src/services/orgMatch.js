@@ -10,6 +10,13 @@ import { query } from '../db/pool.js';
 // guess would apply another body's procedure, so anything ambiguous is no match.
 // ---------------------------------------------------------------------------
 
+// The further organisations on each complaint (migration 029), for SELECTs
+// FROM complaints c that feed the matching: their names and their references.
+export const PARTY_COLS =
+  `(SELECT coalesce(array_agg(p.org_name ORDER BY p.created_at), '{}') FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_names,
+   (SELECT coalesce(array_agg(p.reference ORDER BY p.created_at) FILTER (WHERE p.reference IS NOT NULL), '{}')
+      FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_refs`;
+
 export function orgKey(name) {
   return String(name || '').toLowerCase()
     .replace(/&/g, ' and ').replace(/\blimited\b/g, 'ltd').replace(/\bthe\b/g, ' ')
@@ -127,7 +134,8 @@ export function accountsOf(x) {
 // complaint).
 export function refsOf(x) {
   const out = new Set();
-  for (const v of [x?.reference, x?.our_reference]) {
+  // A complaint with more than one organisation carries each one's reference.
+  for (const v of [x?.reference, x?.our_reference, ...(Array.isArray(x?.party_refs) ? x.party_refs : [])]) {
     const k = norm(v);
     if (refLike(k)) out.add(k);
   }
@@ -216,7 +224,9 @@ export function findExistingMatch(complaints, orgs, x) {
   let possible = null;
   for (const c of complaints) {
     const org = c.organisation_id ? orgs.find((o) => o.id === c.organisation_id) : null;
-    const names = [c.org_name, org?.name].filter(Boolean);
+    // Every organisation on it: a complaint against British Gas that also
+    // has LCS on it is found from an LCS letter too (migration 029).
+    const names = [c.org_name, org?.name, ...(c.party_names || [])].filter(Boolean);
     const name = x.org_name ? names.find((n) => sameOrgName(n, x.org_name)) : null;
     // Without the same organisation only the account number can match.
     const m = issueMatch({ ...c, org_name: name || c.org_name }, name ? x : { ...x, org_name: null });

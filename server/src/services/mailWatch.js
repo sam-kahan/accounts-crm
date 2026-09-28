@@ -1,6 +1,7 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { fetchMailboxSince } from './graphMail.js';
+import { fetchMailboxSince, fetchMessageText } from './graphMail.js';
+import { bounceFromMailbox } from './bounces.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting, watchedMailboxes } from './settings.js';
 import { postcodeOf } from './orgMatch.js';
@@ -79,6 +80,10 @@ async function watchContext() {
       `SELECT o.complaints_email AS a FROM complaints c JOIN organisations o ON o.id = c.organisation_id
         WHERE c.state = 'open' AND o.complaints_email IS NOT NULL
        UNION
+       SELECT o.complaints_email FROM complaint_parties p
+         JOIN complaints c ON c.id = p.complaint_id JOIN organisations o ON o.id = p.organisation_id
+        WHERE c.state = 'open' AND o.complaints_email IS NOT NULL
+       UNION
        SELECT e.sender_email FROM complaint_emails e JOIN complaints c ON c.id = e.complaint_id
         WHERE c.state = 'open' AND e.direction = 'inbound' AND e.sender_email IS NOT NULL`,
     )
@@ -89,9 +94,12 @@ async function watchContext() {
   // What identifies an open complaint in an email that doesn't use the word:
   // our reference, theirs, and the property postcode.
   const open = (await query(
-    `SELECT ref_code, reference, our_reference, property, account_numbers FROM complaints WHERE state = 'open'`,
+    `SELECT c.ref_code, c.reference, c.our_reference, c.property, c.account_numbers,
+            (SELECT coalesce(array_agg(p.reference) FILTER (WHERE p.reference IS NOT NULL), '{}')
+               FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_refs
+       FROM complaints c WHERE c.state = 'open'`,
   )).rows;
-  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, postcodeOf(c.property), ...(c.account_numbers || [])])
+  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, ...(c.party_refs || []), postcodeOf(c.property), ...(c.account_numbers || [])])
     .filter((m) => m && String(m).trim().length >= 5)
     .map((m) => String(m).trim().toLowerCase()))];
   return { ourDomain, threads, orgDomains, markers };
@@ -119,6 +127,12 @@ export async function watchMailboxes() {
       const { items: mail, complete, readTo } = await fetchMailboxSince(mb, from);
       fetched += mail.length;
       for (const e of mail) {
+        // A bounce is flagged for a person to look into, never filed.
+        try {
+          if (await bounceFromMailbox(e, mb, (m) => fetchMessageText(m.graphId, mb))) continue;
+        } catch (err) {
+          errors.push(`${mb}: a bounce couldn't be recorded (${err.message})`);
+        }
         const route = routeWatchedEmail(e, ctx);
         if (!route) continue;
         const id = await storeEmail(e, { complaintId: route.complaintId, method: route.method, mailbox: mb });

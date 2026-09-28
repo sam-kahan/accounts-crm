@@ -10,7 +10,7 @@ import {
   mailerStatus,
 } from '../services/mailer.js';
 import { carriedLineSql } from '../services/commission.js';
-import { effectiveRule, deriveStatus, computeAckDue, reviewSignature } from '../services/complaintRules.js';
+import { decorateMany } from '../services/complaintContext.js';
 import { syncAllCompanies } from '../services/companySync.js';
 import { syncInvoicing } from '../services/invoicingSync.js';
 import { refreshStaleReviews } from '../services/complaintReview.js';
@@ -75,48 +75,50 @@ async function collectDueItems(days = 30) {
 // to derive live status so a missed deadline shows up as OVERDUE in the reminder.
 async function collectComplaintDueItems(days = 30) {
   const { rows } = await query(
-    `SELECT c.*, to_jsonb(o) AS org
-       FROM complaints c
-       LEFT JOIN organisations o ON o.id = c.organisation_id
-      WHERE c.state = 'open'`,
+    `SELECT * FROM complaints WHERE state = 'open'`,
   );
   const horizon = addDays(todayISO(), days);
 
+  // Each organisation on a complaint is due on its own procedure (migration
+  // 029), so each gets its own line, named for that organisation.
+  const decorated = await decorateMany(rows);
   const items = [];
-  for (const c of rows) {
-    const rule = effectiveRule(c.org, c.org_type);
-    const derived = deriveStatus(c, rule);
-    const { status, overdue } = derived;
+  for (const c of decorated) {
     // What to do about it, and a link straight to it: the AI's next step when
     // its review is up to date, otherwise the one worked out from the dates.
-    const current = c.ai_review && c.ai_review_status === reviewSignature({ ...c, ...derived });
-    const detail = (current && c.ai_review?.recommended_action) || derived.nextAction || null;
+    const aiStep = (c.ai_review_current && c.ai_review?.recommended_action) || null;
     const link = `${config.appUrl.replace(/\/+$/, '')}/complaints/${c.id}`;
-    if (status === 'responded' || status === 'with_ombudsman') continue; // nothing due from them
-    if (status === 'ack_overdue') {
+    for (const t of [c, ...(c.parties || [])]) {
+      const main = t === c;
+      const detail = (main ? aiStep : null) || t.nextAction || null;
+      const whose = c.parties?.length ? ` (${t.org_name})` : '';
+      // Nothing due from them: responded, with the ombudsman, or finished.
+      if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;
+      if (t.status === 'ack_overdue') {
+        items.push({
+          type: 'complaint',
+          id: c.id,
+          label: `Complaint NOT ACKNOWLEDGED${whose}: ${c.subject}`,
+          due_date: t.ack_due,
+          company_name: t.org_name,
+          overdue: true,
+          detail,
+          link,
+        });
+        continue;
+      }
+      if (!t.response_due || t.response_due > horizon) continue;
       items.push({
         type: 'complaint',
         id: c.id,
-        label: `Complaint NOT ACKNOWLEDGED: ${c.subject}`,
-        due_date: computeAckDue(c, rule),
-        company_name: c.org_name,
-        overdue: true,
+        label: `Complaint ${t.overdue ? 'response OVERDUE' : 'response due'}${whose}: ${c.subject}`,
+        due_date: t.response_due,
+        company_name: t.org_name,
+        overdue: t.overdue,
         detail,
         link,
       });
-      continue;
     }
-    if (!c.response_due || c.response_due > horizon) continue;
-    items.push({
-      type: 'complaint',
-      id: c.id,
-      label: `Complaint ${overdue ? 'response OVERDUE' : 'response due'}: ${c.subject}`,
-      due_date: c.response_due,
-      company_name: c.org_name,
-      overdue,
-      detail,
-      link,
-    });
   }
   return items;
 }
@@ -185,10 +187,9 @@ router.get(
     let complaints = null;
     if (seeComplaints) {
       const { rows } = await query(
-        `SELECT c.*, to_jsonb(o) AS org FROM complaints c
-           LEFT JOIN organisations o ON o.id = c.organisation_id WHERE c.state = 'open'`,
+        `SELECT * FROM complaints WHERE state = 'open'`,
       );
-      const chasing = rows.filter((c) => deriveStatus(c, effectiveRule(c.org, c.org_type)).needs_chasing).length;
+      const chasing = (await decorateMany(rows)).filter((c) => c.any_needs_chasing).length;
       const waiting = (
         await query(
           `SELECT count(*)::int AS n FROM complaint_emails
@@ -196,7 +197,8 @@ router.get(
         )
       ).rows[0].n;
       const toCheck = (await query('SELECT count(*)::int AS n FROM complaints WHERE needs_check')).rows[0].n;
-      complaints = { open: rows.length, chasing, waiting, to_check: toCheck };
+      const bounced = (await query('SELECT count(*)::int AS n FROM email_bounces WHERE resolved_at IS NULL')).rows[0].n;
+      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced };
     }
 
     res.json({

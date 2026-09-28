@@ -6,18 +6,21 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman } from '../services/complaintRules.js';
-import { decorate, decorateMany, gatherContext } from '../services/complaintContext.js';
+import { describeChanges, theOmbudsman, trackOpen } from '../services/complaintRules.js';
+import { overallState } from '../services/complaintParties.js';
+import { openBounces } from '../services/bounces.js';
+import { recheckComplaint, undoRecheck, startRecheck, recheckStatus } from '../services/complaintRecheck.js';
+import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { backfillAccountNumbers, searchAccountEmails } from '../services/accountNumbers.js';
+import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
-import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue } from '../services/orgMatch.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
-import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
+import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import {
   ingestEmails,
@@ -52,6 +55,45 @@ router.param('id', requireUuidParam);
 
 // Who did it, for the record kept on the timeline.
 const who = (req) => req.user?.name || req.user?.email || null;
+
+// One organisation's track on a complaint: the main one (the complaint row)
+// when no party is named, or a further organisation's (complaint_parties,
+// migration 029). The step routes below work on either the same way.
+async function loadTrack(complaintId, partyId) {
+  const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  if (!complaint) throw new HttpError(404, 'Complaint not found');
+  if (!partyId) return { complaint, party: null, row: complaint, table: 'complaints' };
+  const party = (await query(
+    'SELECT * FROM complaint_parties WHERE id = $1 AND complaint_id = $2', [partyId, complaintId],
+  )).rows[0];
+  if (!party) throw new HttpError(404, 'That organisation isn’t on this complaint');
+  return { complaint, party, row: party, table: 'complaint_parties' };
+}
+
+const recomputeTrack = (t) =>
+  (t.party ? recomputePartyDeadlines(t.party.id) : recomputeDeadlines(t.complaint.id));
+
+// The complaint is open while any organisation's track is (complaintParties.js).
+async function settleOverall(complaintId) {
+  const c = (await query('SELECT * FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  if (!c) return;
+  const parties = (await query('SELECT * FROM complaint_parties WHERE complaint_id = $1', [complaintId])).rows;
+  const state = overallState(c, parties);
+  if (state !== c.state) {
+    await query(
+      `UPDATE complaints SET state = $2,
+              closed_on = CASE WHEN $2 = 'open' THEN closed_on ELSE COALESCE(closed_on, $3::date) END
+        WHERE id = $1`,
+      [complaintId, state, todayISO()],
+    );
+  }
+}
+
+async function decoratedById(id) {
+  const c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
+  if (!c) throw new HttpError(404, 'Complaint not found');
+  return decorate(c);
+}
 
 
 const ORG_TYPES = [
@@ -287,6 +329,16 @@ router.get(
     if (c.ombudsman_from) lines.push(`Can refer from: ${c.ombudsman_from}`);
     lines.push(`Refer by: ${c.ombudsman_deadline || 'n/a'}`);
     if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
+    for (const p of c.parties || []) {
+      lines.push('');
+      lines.push(`Also complained to: ${p.org_name} (${p.rule.label})${p.relationship ? `, ${p.relationship}` : ''}`);
+      if (p.reference) lines.push(`  Their reference: ${p.reference}`);
+      lines.push(`  Raised: ${p.raised_on}   Stage: ${p.stage}   Status: ${p.label}`);
+      if (p.acknowledged_on) lines.push(`  Acknowledged: ${p.acknowledged_on}`);
+      if (p.responded_on) lines.push(`  Their response: ${p.responded_on}`);
+      if (p.final_response_on) lines.push(`  Their final response: ${p.final_response_on}`);
+      lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${p.ombudsman_deadline || 'n/a'}`);
+    }
     lines.push('');
     lines.push('GROUNDS FOR REFERRAL');
     lines.push('-'.repeat(48));
@@ -295,7 +347,7 @@ router.get(
     lines.push('CASE TIMELINE');
     lines.push('-'.repeat(48));
     for (const e of [...ctx.events].reverse()) {
-      lines.push(`${e.event_date}  [${e.type}]  ${e.note || ''}`.trim());
+      lines.push(`${e.event_date}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
     }
     lines.push('');
     lines.push('CORRESPONDENCE LOG');
@@ -360,28 +412,38 @@ router.post(
       await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY response_due ASC NULLS LAST`)
     ).rows;
     const decorated = await decorateMany(open);
-    const overdue = decorated.filter((c) => c.needs_chasing).slice(0, 12);
+    // One chaser per organisation that needs chasing: with more than one on a
+    // complaint, each is chased under its own procedure and reference.
+    const due = decorated.flatMap((c) => [
+      ...(c.needs_chasing ? [{ c, t: c }] : []),
+      ...(c.parties || []).filter((p) => p.needs_chasing).map((p) => ({ c, t: p })),
+    ]).slice(0, 12);
 
     const drafts = [];
-    for (const c of overdue) {
+    for (const { c, t } of due) {
+      const party = t !== c;
+      const aim = party
+        ? ` Address it to ${t.org_name}${t.reference ? `, quoting their reference ${t.reference}` : ''}, ` +
+          `about THEIR part of the complaint (their procedure and dates), not ${c.org_name}'s.`
+        : '';
       try {
         const ctx = await gatherContext(c.id);
         const r = await assistComplaint({
           ...ctx,
           instruction:
-            c.status === 'ack_overdue'
+            (t.status === 'ack_overdue'
               ? 'Draft a polite but firm chaser: the complaint has not been acknowledged within ' +
                 'the time their own procedure sets. Ask them to acknowledge it, name who is ' +
                 'handling it, and confirm when the outcome will be sent.'
               : 'Draft a firm chaser email pressing for the overdue response and noting that the ' +
-                'missed deadline is itself a complaint-handling failure.',
+                'missed deadline is itself a complaint-handling failure.') + aim,
         });
         drafts.push({
-          id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject,
-          org_email: c.org_email, email_address: c.email_address, draft: r,
+          id: c.id, ref_code: c.ref_code, org_name: t.org_name, subject: c.subject,
+          org_email: t.org_email, email_address: c.email_address, draft: r,
         });
       } catch (err) {
-        drafts.push({ id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject, error: err.message });
+        drafts.push({ id: c.id, ref_code: c.ref_code, org_name: t.org_name, subject: c.subject, error: err.message });
       }
     }
     res.json({ count: drafts.length, drafts });
@@ -454,8 +516,9 @@ router.get(
     ).rows;
     const decorated = await decorateMany(open);
 
-    const overdue = decorated.filter((c) => c.needs_chasing);
-    const awaiting = decorated.filter((c) => !c.needs_chasing);
+    // Any organisation on it needing chasing puts the complaint in the list.
+    const overdue = decorated.filter((c) => c.any_needs_chasing);
+    const awaiting = decorated.filter((c) => !c.any_needs_chasing);
 
     const counts = (
       await query(`
@@ -516,7 +579,65 @@ router.get(
       to_check: (await query(`SELECT count(*)::int AS n FROM complaints WHERE needs_check`)).rows[0].n,
       past_pending: pending,
       unfiled,
+      bounced: (await query('SELECT count(*)::int AS n FROM email_bounces WHERE resolved_at IS NULL')).rows[0].n,
     });
+  }),
+);
+
+// --- Re-check every open complaint against its emails (migration 031) --------
+// Search by every account number and reference, read each complaint's emails
+// together, and move it to where they show it has got to. Only ever started by
+// a person; runs in the background with its progress here.
+router.get(
+  '/recheck',
+  asyncHandler(async (_req, res) => {
+    const open = (await query(`SELECT count(*)::int AS n,
+        count(*) FILTER (WHERE rechecked_at IS NULL)::int AS never FROM complaints WHERE state = 'open'`)).rows[0];
+    res.json({ run: await recheckStatus(), open: open.n, never_rechecked: open.never, ai: config.anthropic.enabled, mailbox: emailConfigured() });
+  }),
+);
+router.post(
+  '/recheck',
+  asyncHandler(async (req, res) => {
+    try {
+      res.status(202).json(await startRecheck({ by: who(req), force: Boolean(req.body?.force) }));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+  }),
+);
+
+// --- Emails that bounced (migration 030) ------------------------------------
+// Every bounce not yet looked into, for the Complaints page.
+router.get(
+  '/bounces',
+  asyncHandler(async (_req, res) => {
+    res.json(await openBounces());
+  }),
+);
+
+// A person has looked into a bounce (corrected the address, found another
+// way to reach them): it stops being flagged, and what they found is kept on
+// the record and on the complaint's timeline.
+const bounceResolveInput = z.object({ note: z.string().trim().min(1, 'Say what you found or did').max(1000) });
+router.post(
+  '/bounces/:bounceId/resolve',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.bounceId).success) throw new HttpError(400, 'Invalid id');
+    const d = parse(bounceResolveInput, req.body);
+    const { rows } = await query(
+      `UPDATE email_bounces SET resolved_at = now(), resolved_by = $2, resolution = $3
+        WHERE id = $1 AND resolved_at IS NULL RETURNING *`,
+      [req.params.bounceId, who(req), d.note],
+    );
+    if (!rows[0]) throw new HttpError(404, 'That bounce has already been dealt with');
+    if (rows[0].complaint_id) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [rows[0].complaint_id, todayISO(), `Bounced email to ${rows[0].address} looked into: ${d.note}`, who(req)],
+      );
+    }
+    res.json(rows[0]);
   }),
 );
 
@@ -562,7 +683,7 @@ router.get(
     );
     // Say when one is already in the system, so it is linked, not duplicated.
     const complaints = (await query(
-      'SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on, reference, our_reference, account_numbers FROM complaints',
+      `SELECT c.id, c.ref_code, c.subject, c.org_name, c.organisation_id, c.property, c.raised_on, c.reference, c.our_reference, c.account_numbers, ${PARTY_COLS} FROM complaints c`,
     )).rows;
     const orgs = (await query('SELECT id, name FROM organisations')).rows;
     // Threads about the same issue are shown (and imported) as one complaint.
@@ -750,15 +871,17 @@ router.get(
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const decorated = await decorate(rows[0]);
-    const events = (
-      await query(
-        'SELECT * FROM complaint_events WHERE complaint_id = $1 ORDER BY event_date DESC, created_at DESC',
-        [req.params.id],
-      )
-    ).rows;
+    const events = await listEvents(req.params.id);
     const emails = await listComplaintEmails(req.params.id);
     const attachments = await listAttachments(req.params.id);
-    res.json({ ...decorated, events, emails, attachments });
+    const email_search = await searchStatus(rows[0]);
+    // Bounces not yet looked into: of emails about this complaint, or to any
+    // of its organisations' complaints addresses.
+    const bounces = await openBounces({
+      complaintId: rows[0].id,
+      addresses: [decorated, ...decorated.parties].map((t) => t.org_email).filter(Boolean),
+    });
+    res.json({ ...decorated, events, emails, attachments, email_search, bounces });
   }),
 );
 
@@ -781,6 +904,9 @@ const reviewInput = z.object({
   // The date on THEIR email. Defaults to what the AI read from it, then to the
   // day it arrived — for a forward, the arrival date is the day it was forwarded.
   date: isoDate.optional().nullable(),
+  // Which organisation it is from, when the complaint has more than one
+  // (null: the main organisation).
+  party_id: z.string().uuid().optional().nullable(),
 });
 
 router.post(
@@ -796,17 +922,18 @@ router.post(
       ])
     ).rows[0];
     if (!em) throw new HttpError(404, 'Email not found on this complaint');
-    const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]))
-      .rows[0];
+    const track = await loadTrack(req.params.id, d.as === 'correspondence' ? null : d.party_id);
+    const complaint = track.row; // the organisation's track the step is recorded on
+    const partyId = track.party?.id || null;
     const on = d.date || em.analysis?.sent_on || londonDateOf(new Date(em.received_at));
     if (on > todayISO()) throw new HttpError(400, 'That date is in the future');
     const subject = em.subject || '(no subject)';
 
     // Once only: a double-click, or two people at once, can't record it twice.
     const marked = await query(
-      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3
+      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, party_id = $4
         WHERE id = $1 AND reviewed_at IS NULL`,
-      [em.id, d.as, who(req)],
+      [em.id, d.as, who(req), partyId],
     );
     if (!marked.rowCount) throw new HttpError(409, 'This email has already been dealt with.');
     // Replacing a date already recorded is allowed, but never silently.
@@ -816,40 +943,41 @@ router.post(
         : d.as === 'response' && complaint.responded_on && complaint.responded_on !== on
           ? `responded: ${complaint.responded_on} → ${on}`
           : null;
+    const cid = req.params.id;
     if (replacing) {
       await query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-         VALUES ($1,$2,'note',$3,$4)`,
-        [complaint.id, todayISO(), `Details corrected: ${replacing} (from the email "${subject}")`, who(req)],
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+         VALUES ($1,$2,$3,'note',$4,$5)`,
+        [cid, partyId, todayISO(), `Details corrected: ${replacing} (from the email "${subject}")`, who(req)],
       );
     }
     if (d.as === 'acknowledgement') {
-      await query('UPDATE complaints SET acknowledged_on = $2 WHERE id = $1', [complaint.id, on]);
+      await query(`UPDATE ${track.table} SET acknowledged_on = $2 WHERE id = $1`, [complaint.id, on]);
       await query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-         VALUES ($1,$2,'acknowledged',$3,$4)`,
-        [complaint.id, on, `Acknowledged by email: ${subject}`, who(req)],
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+         VALUES ($1,$2,$3,'acknowledged',$4,$5)`,
+        [cid, partyId, on, `Acknowledged by email: ${subject}`, who(req)],
       );
     } else if (d.as === 'response') {
       await query(
-        `UPDATE complaints SET responded_on = $2,
+        `UPDATE ${track.table} SET responded_on = $2,
                 final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
           WHERE id = $1`,
         [complaint.id, on],
       );
       await query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-         VALUES ($1,$2,'response_received',$3,$4)`,
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+         VALUES ($1,$2,$3,'response_received',$4,$5)`,
         [
-          complaint.id, on,
+          cid, partyId, on,
           `${complaint.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`,
           who(req),
         ],
       );
     }
-    const updated = await recomputeDeadlines(complaint.id);
-    scheduleReview(complaint.id);
-    res.json(await decorate(updated));
+    await recomputeTrack(track);
+    scheduleReview(cid);
+    res.json(await decoratedById(cid));
   }),
 );
 
@@ -919,62 +1047,76 @@ const eventInput = z.object({
     'resolved', 'deadline_missed', 'note',
   ]),
   note: z.string().optional().nullable(),
+  // A step taken with a further organisation on the complaint (null: the
+  // main organisation, or the complaint as a whole for a note).
+  party_id: z.string().uuid().optional().nullable(),
 });
 
 router.post(
   '/:id/events',
   asyncHandler(async (req, res) => {
     const d = parse(eventInput, req.body);
-    const existing = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
-    const complaint = existing.rows[0];
-    if (!complaint) throw new HttpError(404, 'Complaint not found');
+    const track = await loadTrack(req.params.id, d.party_id);
+    const partyId = track.party?.id || null;
 
     await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [req.params.id, d.event_date, d.type, d.note || null, who(req)],
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [req.params.id, partyId, d.event_date, d.type, d.note || null, who(req)],
     );
 
-    // Side effects: certain event types update the complaint's own fields.
+    // Side effects: certain event types update that organisation's track.
     if (d.type === 'acknowledged') {
-      await query('UPDATE complaints SET acknowledged_on = $2 WHERE id = $1', [
-        req.params.id, d.event_date,
+      await query(`UPDATE ${track.table} SET acknowledged_on = $2 WHERE id = $1`, [
+        track.row.id, d.event_date,
       ]);
     } else if (d.type === 'response_received') {
       // A Stage 2 response is their final one — the date many schemes count
       // the referral window from.
       await query(
-        `UPDATE complaints SET responded_on = $2,
+        `UPDATE ${track.table} SET responded_on = $2,
                 final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
           WHERE id = $1`,
-        [req.params.id, d.event_date],
+        [track.row.id, d.event_date],
       );
     } else if (d.type === 'resolved') {
-      await query(
-        `UPDATE complaints SET state = 'resolved', stage = 'resolved', closed_on = $2 WHERE id = $1`,
-        [req.params.id, d.event_date],
-      );
+      // That organisation's part is over. The complaint as a whole stays open
+      // while another organisation's part of it is still running.
+      if (track.party) {
+        await query(
+          `UPDATE complaint_parties SET state = 'resolved', stage = 'resolved', closed_on = $2, outcome = $3
+            WHERE id = $1`,
+          [track.party.id, d.event_date, d.note || null],
+        );
+      } else {
+        await query(`UPDATE complaints SET stage = 'resolved', closed_on = $2 WHERE id = $1`, [
+          req.params.id, d.event_date,
+        ]);
+      }
+      await settleOverall(req.params.id);
     }
 
     // An acknowledgement can move the Stage 1 date (where their clock runs
     // from it) and a final response starts the referral window.
-    const updated = await recomputeDeadlines(req.params.id);
+    await recomputeTrack(track);
     scheduleReview(req.params.id);
-    res.status(201).json(await decorate(updated));
+    res.status(201).json(await decoratedById(req.params.id));
   }),
 );
 
 // Escalate to the next stage. The new stage's clock starts on the date given
 // (the day the Stage 2 request went in), and its deadline is worked out again.
-const escalateInput = z.object({ date: isoDate.optional().nullable() });
+const escalateInput = z.object({
+  date: isoDate.optional().nullable(),
+  party_id: z.string().uuid().optional().nullable(),
+});
 
 router.post(
   '/:id/escalate',
   asyncHandler(async (req, res) => {
     const d = parse(escalateInput, req.body || {});
-    const existing = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
-    const complaint = existing.rows[0];
-    if (!complaint) throw new HttpError(404, 'Complaint not found');
+    const track = await loadTrack(req.params.id, d.party_id);
+    const complaint = track.row;
 
     const next =
       complaint.stage === 'stage_1' ? 'stage_2' :
@@ -987,19 +1129,19 @@ router.post(
     // Assignments read the row as it was, so a Stage 2 response recorded as
     // responded_on is kept as the final response before it is cleared.
     await query(
-      `UPDATE complaints
+      `UPDATE ${track.table}
           SET final_response_on = COALESCE(final_response_on,
                 CASE WHEN stage = 'stage_2' THEN responded_on END),
               stage = $2, stage_started_on = $3, responded_on = NULL,
               response_due_manual = false
         WHERE id = $1`,
-      [req.params.id, next, escalatedOn],
+      [complaint.id, next, escalatedOn],
     );
     await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-       VALUES ($1,$2,'escalated',$3,$4)`,
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+       VALUES ($1,$2,$3,'escalated',$4,$5)`,
       [
-        req.params.id, escalatedOn,
+        req.params.id, track.party?.id || null, escalatedOn,
         next === 'ombudsman'
           ? `Referred to ${theOmbudsman(rule.ombudsman)}`
           : 'Escalated to Stage 2',
@@ -1007,9 +1149,9 @@ router.post(
       ],
     );
 
-    const updated = await recomputeDeadlines(req.params.id);
+    await recomputeTrack(track);
     scheduleReview(req.params.id);
-    res.json(await decorate(updated));
+    res.json(await decoratedById(req.params.id));
   }),
 );
 
@@ -1083,6 +1225,243 @@ router.put(
     }
     scheduleReview(req.params.id);
     res.json(await decorate(updated));
+  }),
+);
+
+// --- Further organisations on one complaint (migration 029) ---------------
+// A debt collector and the supplier it collects for (LCS and British Gas) are
+// one issue with two complaints procedures. Each further organisation has its
+// own reference, stage and deadlines, recorded with the same steps as the
+// main one (party_id on /events, /escalate and email review).
+const partyInput = z.object({
+  organisation_id: z.string().uuid().optional().nullable(),
+  org_name: z.string().trim().min(1).max(200),
+  org_type: z.enum(ORG_TYPES).optional(),
+  relationship: z.string().trim().max(200).optional().nullable(),
+  reference: z.string().trim().max(100).optional().nullable(),
+  raised_on: isoDate,
+  channel: z.enum(['email', 'phone', 'portal', 'letter', 'other']).optional().nullable(),
+  stage: z.enum(['stage_1', 'stage_2', 'ombudsman']).optional(),
+  stage_started_on: isoDate.optional().nullable(),
+  acknowledged_on: isoDate.optional().nullable(),
+  responded_on: isoDate.optional().nullable(),
+  final_response_on: isoDate.optional().nullable(),
+  response_due: isoDate.optional().nullable(),
+});
+
+// Dates that can't be right are refused rather than stored.
+function checkPartyDates(d) {
+  const today = todayISO();
+  for (const k of ['raised_on', 'stage_started_on', 'acknowledged_on', 'responded_on', 'final_response_on']) {
+    if (d[k] && d[k] > today) throw new HttpError(400, `The ${k.replace(/_/g, ' ')} date is in the future`);
+  }
+  for (const k of ['acknowledged_on', 'responded_on', 'final_response_on', 'stage_started_on']) {
+    if (d[k] && d.raised_on && d[k] < d.raised_on) {
+      throw new HttpError(400, `The ${k.replace(/_/g, ' ')} date is before the complaint was made to them`);
+    }
+  }
+}
+
+// The organisation a party links to brings its name's type with it, as the
+// main organisation's does.
+async function orgTypeFor(orgId) {
+  if (!orgId) return null;
+  const org = (await query('SELECT type FROM organisations WHERE id = $1', [orgId])).rows[0];
+  if (!org) throw new HttpError(400, 'That organisation no longer exists');
+  return org.type;
+}
+
+router.post(
+  '/:id/parties',
+  asyncHandler(async (req, res) => {
+    const d = parse(partyInput, req.body);
+    checkPartyDates(d);
+    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    if (d.organisation_id && d.organisation_id === c.organisation_id) {
+      throw new HttpError(400, `${c.org_name} is already the main organisation on this complaint.`);
+    }
+    const type = (await orgTypeFor(d.organisation_id)) || d.org_type || 'other';
+    const stage = d.stage || 'stage_1';
+    // A complaint that had ended is open again with a new organisation's part
+    // running. Its main track is marked as ended first, so it doesn't read as
+    // back at the stage it finished on.
+    if (c.state !== 'open' && trackOpen({ ...c, state: 'open' })) {
+      await query('UPDATE complaints SET stage = state WHERE id = $1', [c.id]);
+    }
+    let party;
+    try {
+      party = (await query(
+        `INSERT INTO complaint_parties
+           (complaint_id, organisation_id, org_name, org_type, relationship, reference, raised_on, channel,
+            stage, stage_started_on, acknowledged_on, responded_on, final_response_on,
+            response_due, response_due_manual, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+        [
+          c.id, d.organisation_id || null, d.org_name, type, d.relationship || null, d.reference || null,
+          d.raised_on, d.channel || null, stage,
+          d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
+          d.acknowledged_on || null, d.responded_on || null,
+          d.final_response_on || (stage === 'stage_2' ? d.responded_on || null : null),
+          d.response_due || null, Boolean(d.response_due), who(req),
+        ],
+      )).rows[0];
+    } catch (err) {
+      if (err.code === '23505') throw new HttpError(409, `${d.org_name} is already on this complaint.`);
+      throw err;
+    }
+    await recomputePartyDeadlines(party.id);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+       VALUES ($1,$2,$3,'raised',$4,$5)`,
+      [
+        c.id, party.id, d.raised_on,
+        `Complaint also made to ${d.org_name}${d.relationship ? ` (${d.relationship})` : ''}` +
+          `${d.reference ? `, their reference ${d.reference}` : ''}.`,
+        who(req),
+      ],
+    );
+    await settleOverall(c.id);
+    scheduleReview(c.id);
+    res.status(201).json(await decoratedById(c.id));
+  }),
+);
+
+router.put(
+  '/:id/parties/:partyId',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.partyId).success) throw new HttpError(400, 'Invalid id');
+    const d = parse(partyInput.partial(), req.body);
+    const { party } = await loadTrack(req.params.id, req.params.partyId);
+    checkPartyDates({ ...party, ...d });
+    const c = (await query('SELECT organisation_id, org_name FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (d.organisation_id && d.organisation_id === c.organisation_id) {
+      throw new HttpError(400, `${c.org_name} is already the main organisation on this complaint.`);
+    }
+    const orgType = d.organisation_id ? await orgTypeFor(d.organisation_id) : d.org_type;
+    let manual;
+    if (d.response_due !== undefined) manual = d.response_due !== null;
+    const stageStarted = party.stage === 'stage_1' && d.raised_on ? d.raised_on : d.stage_started_on;
+    const { clause, values } = buildUpdateSet({
+      organisation_id: d.organisation_id,
+      org_name: d.org_name,
+      org_type: orgType,
+      relationship: d.relationship,
+      reference: d.reference,
+      raised_on: d.raised_on,
+      channel: d.channel,
+      stage_started_on: stageStarted,
+      acknowledged_on: d.acknowledged_on,
+      responded_on: d.responded_on,
+      final_response_on: d.final_response_on,
+      response_due: d.response_due,
+      response_due_manual: manual,
+    });
+    if (!clause) throw new HttpError(400, 'No fields to update');
+    try {
+      await query(`UPDATE complaint_parties SET ${clause} WHERE id = $1`, [party.id, ...values]);
+    } catch (err) {
+      if (err.code === '23505') throw new HttpError(409, 'That organisation is already on this complaint.');
+      throw err;
+    }
+    const updated = await recomputePartyDeadlines(party.id);
+    const changes = describeChanges(party, updated);
+    if ((party.relationship || null) !== (updated.relationship || null)) {
+      changes.push(`how they're involved: ${party.relationship || '(blank)'} → ${updated.relationship || '(blank)'}`);
+    }
+    if (changes.length) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+         VALUES ($1,$2,$3,'note',$4,$5)`,
+        [req.params.id, party.id, todayISO(), `${updated.org_name}: details corrected: ${changes.join('; ')}`, who(req)],
+      );
+    }
+    scheduleReview(req.params.id);
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// Taking an organisation off a complaint (added by mistake). Its timeline
+// entries and emails stay on the complaint, no longer tied to it, and the
+// removal is written on the timeline.
+router.delete(
+  '/:id/parties/:partyId',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.partyId).success) throw new HttpError(400, 'Invalid id');
+    const { party } = await loadTrack(req.params.id, req.params.partyId);
+    await query('DELETE FROM complaint_parties WHERE id = $1', [party.id]);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1,$2,'note',$3,$4)`,
+      [
+        req.params.id, todayISO(),
+        `${party.org_name} taken off this complaint` +
+          `${party.reference ? ` (their reference was ${party.reference})` : ''}.`,
+        who(req),
+      ],
+    );
+    await settleOverall(req.params.id);
+    scheduleReview(req.params.id);
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// Re-check one complaint now (always read, even with nothing new), and undo
+// what the last re-check changed.
+router.post(
+  '/:id/recheck',
+  asyncHandler(async (req, res) => {
+    if (!config.anthropic.enabled) throw new HttpError(503, 'The AI isn’t configured, so the emails can’t be read.');
+    await decoratedById(req.params.id); // 404 now if it doesn't exist
+    // In the background: searching and reading a long history can take longer
+    // than the browser waits. The page watches rechecked_at for it finishing;
+    // a failure is written on the timeline so it is never silent.
+    const by = who(req);
+    recheckComplaint(req.params.id, { by, force: true }).catch(async (err) => {
+      console.error(`[complaints] re-check ${req.params.id} failed:`, err.message);
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [req.params.id, todayISO(), `Re-check against its emails failed: ${String(err.message).slice(0, 300)}. Nothing was changed.`, by],
+      ).catch(() => {});
+    });
+    res.status(202).json({ started: true });
+  }),
+);
+router.post(
+  '/:id/recheck/undo',
+  asyncHandler(async (req, res) => {
+    try {
+      await undoRecheck(req.params.id, who(req));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// --- Every email quoting its numbers ---------------------------------------
+// Search the mailboxes now for this complaint's account numbers and every
+// reference on it (theirs, each further organisation's, ours). `all` searches
+// the ones already searched again. No AI is used: emails found are kept in
+// full and the one review afterwards reads them.
+router.post(
+  '/:id/search-emails',
+  asyncHandler(async (req, res) => {
+    const all = Boolean(req.body?.all);
+    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    // Refused now if it can't start (no mailbox connection, one already
+    // running); otherwise it runs in the background — searching several
+    // mailboxes can take longer than the browser waits — and the page shows
+    // it finishing on the timeline.
+    let started;
+    try {
+      started = searchNow(req.params.id, { all, by: who(req) });
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    started.catch((err) => console.error(`[complaints] search for ${c.ref_code} failed:`, err.message));
+    res.status(202).json({ started: true, email_search: { ...(await searchStatus(c)), running: true } });
   }),
 );
 

@@ -5,7 +5,7 @@ import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js
 import { config } from '../config.js';
 import { ruleFor, ombudsmanUrlFor } from '../services/complaintRules.js';
 import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
-import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
+import { recomputeForOrganisation, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
 import {
   orgDocumentUpload,
   procedureMemoryUpload,
@@ -189,8 +189,12 @@ router.get(
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
       `SELECT o.*,
-              (SELECT count(*) FROM complaints c WHERE c.organisation_id = o.id) AS complaint_count,
-              (SELECT count(*) FROM organisation_documents d WHERE d.organisation_id = o.id) AS document_count
+              ((SELECT count(*) FROM complaints c WHERE c.organisation_id = o.id)
+               + (SELECT count(*) FROM complaint_parties p WHERE p.organisation_id = o.id)) AS complaint_count,
+              (SELECT count(*) FROM organisation_documents d WHERE d.organisation_id = o.id) AS document_count,
+              -- Their complaints address bounced and nobody has looked into it yet.
+              EXISTS (SELECT 1 FROM email_bounces b WHERE b.resolved_at IS NULL
+                        AND b.address = lower(o.complaints_email)) AS email_bounced
          FROM organisations o ORDER BY name ASC`,
     );
     res.json(rows);
@@ -262,6 +266,7 @@ router.put(
     // A linked complaint takes its type from the organisation (the type sets
     // the defaults for anything the procedure doesn't state).
     await query('UPDATE complaints SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);
+    await query('UPDATE complaint_parties SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);
     // Its open complaints are re-dated from the procedure as it now stands.
     const recalculated = await recomputeForOrganisation(req.params.id);
     res.json({ ...rows[0], recalculated });
@@ -278,12 +283,17 @@ router.delete(
         req.params.id,
       ])
     ).rows.map((r) => r.id);
+    // Also where it is a further organisation on a complaint (migration 029).
+    const linkedParties = (
+      await query(`SELECT id FROM complaint_parties WHERE organisation_id = $1 AND state = 'open'`, [req.params.id])
+    ).rows.map((r) => r.id);
     await removeOrgDocumentFiles(req.params.id);
     const { rowCount } = await query('DELETE FROM organisations WHERE id = $1', [
       req.params.id,
     ]);
     if (!rowCount) throw new HttpError(404, 'Organisation not found');
     if (linked.length) await recomputeForOrganisation(req.params.id, linked);
+    for (const id of linkedParties) await recomputePartyDeadlines(id);
     res.status(204).end();
   }),
 );

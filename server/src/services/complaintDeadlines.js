@@ -38,6 +38,22 @@ export async function recomputeDeadlines(id, db = { query }) {
   return rows[0];
 }
 
+// The same for one further organisation on a complaint (complaint_parties,
+// migration 029): its own procedure, its own clock.
+export async function recomputePartyDeadlines(partyId, db = { query }) {
+  const p = (await db.query('SELECT * FROM complaint_parties WHERE id = $1', [partyId])).rows[0];
+  if (!p) return null;
+  const { rule } = await ruleForComplaint(p, db);
+  const responseDue = p.response_due_manual ? p.response_due : computeResponseDue(p, rule);
+  const ombudsmanDeadline = computeOmbudsmanDeadline(p, rule);
+  const { rows } = await db.query(
+    `UPDATE complaint_parties SET response_due = $2, ombudsman_deadline = $3
+      WHERE id = $1 RETURNING *`,
+    [partyId, responseDue, ombudsmanDeadline],
+  );
+  return rows[0];
+}
+
 // After an organisation's procedure is edited (or the organisation removed),
 // every OPEN complaint against it is re-dated. Closed ones keep the dates they
 // were handled against. Each date that moved is written on that complaint's
@@ -74,5 +90,35 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
     }
     scheduleReview(r.id);
   }
-  return rows.length;
+  // The same organisation as a further party on other complaints (LCS on a
+  // British Gas complaint): its track there follows its procedure too.
+  const parties = orgId
+    ? (await query(
+      `SELECT p.id, p.complaint_id, p.org_name, p.response_due, p.ombudsman_deadline, p.stage
+         FROM complaint_parties p JOIN complaints c ON c.id = p.complaint_id
+        WHERE c.state = 'open' AND p.state = 'open' AND p.organisation_id = $1`,
+      [orgId],
+    )).rows
+    : [];
+  for (const p of parties) {
+    const after = await recomputePartyDeadlines(p.id);
+    if (!after) continue;
+    const moves = [];
+    const label = p.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
+    if ((p.response_due || null) !== (after.response_due || null)) {
+      moves.push(`${label} ${p.response_due || '(none)'} → ${after.response_due || '(none)'}`);
+    }
+    if ((p.ombudsman_deadline || null) !== (after.ombudsman_deadline || null)) {
+      moves.push(`refer-by date ${p.ombudsman_deadline || '(none)'} → ${after.ombudsman_deadline || '(none)'}`);
+    }
+    if (moves.length) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+         VALUES ($1,$2,$3,'note',$4,$5)`,
+        [p.complaint_id, p.id, todayISO(), `${p.org_name}: deadlines updated from ${source}: ${moves.join('; ')}.`, by],
+      );
+    }
+    scheduleReview(p.complaint_id);
+  }
+  return rows.length + parties.length;
 }

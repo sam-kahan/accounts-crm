@@ -138,8 +138,9 @@ export async function backfillAccountNumbers({ limit = 20 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Every email about the account, on the complaint. For each account number a
-// complaint has that hasn't been searched for yet, every watched mailbox (and
+// Every email about the complaint, on the complaint. For each account number
+// AND each reference number (theirs, each further organisation's, ours, our
+// GC-C code) a complaint has that hasn't been searched for yet, every watched mailbox (and
 // the catch-all, and any searched for past complaints) is searched for it, and
 // each email thread that really quotes it (checked in the text, not taken on
 // the search's word) is brought onto the complaint: read in full with its
@@ -210,53 +211,169 @@ async function searchOne(c, number, mailboxes) {
   return { added, threads };
 }
 
+// Every number an email about this complaint could quote: its account numbers,
+// its reference with each organisation (the main one and any further one,
+// migration 029), our own reference for it, and our GC-C code. Each is searched
+// for once (accounts_searched holds what has been, normalised). A reference
+// too short or too plain to search safely (fewer than 6 letters and digits, or
+// no digit at all) would bring in unrelated mail, so it is left out and said so.
+export function searchTermsFor(c, partyRefs = []) {
+  const out = [];
+  const seen = new Set();
+  const add = (value, kind) => {
+    const v = String(value || '').trim();
+    const key = keyOf(v);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    // Our GC-C code is unique by construction ("GC-C-" and six characters,
+    // sometimes all letters), so it is always safe to search for.
+    const ours = kind === 'our complaint code' && /^GCC[A-Z0-9]{6}$/.test(key);
+    out.push({ value: v, key, kind, searchable: ours || (key.length >= 6 && /\d/.test(key)) });
+  };
+  for (const n of c.account_numbers || []) add(n, 'account');
+  add(c.reference, 'their reference');
+  for (const r of partyRefs) add(r.reference, `${r.org_name}'s reference`);
+  add(c.our_reference, 'our reference');
+  add(c.ref_code, 'our complaint code');
+  return out;
+}
+
+async function partyRefsOf(id) {
+  return (await query(
+    'SELECT org_name, reference FROM complaint_parties WHERE complaint_id = $1 AND reference IS NOT NULL ORDER BY created_at',
+    [id],
+  )).rows;
+}
+
+// What is left to search for on one complaint (for the page: "not yet searched").
+export async function searchStatus(c) {
+  const terms = searchTermsFor(c, await partyRefsOf(c.id));
+  const done = new Set(c.accounts_searched || []);
+  return {
+    searched: terms.filter((t) => t.searchable && done.has(t.key)).map((t) => ({ value: t.value, kind: t.kind })),
+    pending: terms.filter((t) => t.searchable && !done.has(t.key)).map((t) => ({ value: t.value, kind: t.kind })),
+    too_short: terms.filter((t) => !t.searchable).map((t) => ({ value: t.value, kind: t.kind })),
+    searched_at: c.accounts_searched_at || null,
+    running: searching,
+    // Account numbers are read off its emails first, so both are searched together.
+    waiting_for_accounts: !c.accounts_read_at,
+    mailbox_connected: config.ms.enabled,
+  };
+}
+
+// Search the mailboxes for one complaint's numbers. `all` searches every one
+// again (a person pressing "Search again"); otherwise only the ones not yet
+// searched. Nothing is read by the AI here: each email found is kept in full
+// with its attachments, and the complaint's one review afterwards reads them.
+export async function searchComplaintEmails(c, { all = false, mailboxes = null, by = BY } = {}) {
+  const boxes = mailboxes || (await mailboxesToSearch());
+  const terms = searchTermsFor(c, await partyRefsOf(c.id)).filter((t) => t.searchable);
+  const done = new Set(c.accounts_searched || []);
+  const pending = all ? terms : terms.filter((t) => !done.has(t.key));
+  if (!pending.length) return { searched: 0, added: 0, ok: true };
+  const notes = [];
+  const searchedKeys = [];
+  let added = 0;
+  let ok = true;
+  for (const t of pending) {
+    try {
+      const r = await searchOne(c, t.value, boxes);
+      added += r.added;
+      searchedKeys.push(t.key);
+      notes.push(r.added
+        ? `${r.added} email${r.added === 1 ? '' : 's'} in ${r.threads} thread${r.threads === 1 ? '' : 's'} quoting ${t.kind} ${t.value}`
+        : `no further emails quoting ${t.kind} ${t.value}`);
+    } catch (err) {
+      ok = false; // that one is tried again next time
+      console.error(`[complaints] searching for ${t.kind} ${t.value} (${c.ref_code}):`, err.message);
+    }
+  }
+  if (searchedKeys.length) {
+    await query(
+      `UPDATE complaints SET accounts_searched = $2, accounts_searched_at = now() WHERE id = $1`,
+      [c.id, [...new Set([...(c.accounts_searched || []), ...searchedKeys])]],
+    );
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [c.id, londonDateOf(new Date()), `Searched the mailboxes (${boxes.join(', ')}) for its reference and account numbers: ${notes.join('; ')}.`, by],
+    );
+  }
+  if (added) {
+    const { scheduleReview } = await import('./complaintReview.js');
+    scheduleReview(c.id);
+  }
+  return { searched: searchedKeys.length, added, ok, notes };
+}
+
 let searching = false;
-export async function searchAccountEmails({ limit = 4 } = {}) {
+export function searchRunning() { return searching; }
+
+// Run `fn` holding the search lock (one search at a time, whoever starts it),
+// waiting up to `waitMs` for another to finish. Used by the re-check.
+export async function withSearchLock(fn, { waitMs = 600000 } = {}) {
+  const until = Date.now() + waitMs;
+  while (searching) {
+    if (Date.now() > until) throw new Error('Another email search is still running.');
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  searching = true;
+  try {
+    return await fn();
+  } finally {
+    searching = false;
+  }
+}
+
+// The background run (after each 5-minute check and at start-up): every
+// complaint, open ones first, with a number not yet searched for — a few at a
+// time, so the backlog is worked through without holding the check up.
+export async function searchAccountEmails({ limit = 6 } = {}) {
   if (searching || !config.ms.enabled) return { complaints: 0, added: 0 };
   searching = true;
   let done = 0;
   let addedAll = 0;
   try {
     const mailboxes = await mailboxesToSearch();
-    const due = (await query(
-      `SELECT * FROM complaints
-        WHERE cardinality(account_numbers) > 0 AND accounts_read_at IS NOT NULL
+    const rows = (await query(
+      `SELECT * FROM complaints WHERE accounts_read_at IS NOT NULL
         ORDER BY (state = 'open') DESC, raised_on DESC`,
-    )).rows.filter((c) => (c.account_numbers || []).some((n) => !(c.accounts_searched || []).includes(keyOf(n))))
-      .slice(0, limit);
-    for (const c of due) {
-      const pending = c.account_numbers.filter((n) => !(c.accounts_searched || []).includes(keyOf(n)));
-      const notes = [];
-      let ok = true;
-      for (const n of pending) {
-        try {
-          const r = await searchOne(c, n, mailboxes);
-          addedAll += r.added;
-          notes.push(r.added
-            ? `${r.added} email${r.added === 1 ? '' : 's'} in ${r.threads} thread${r.threads === 1 ? '' : 's'} quoting account ${n}`
-            : `no further emails quoting account ${n}`);
-        } catch (err) {
-          ok = false; // tried again next time
-          console.error(`[complaints] searching for account ${n} (${c.ref_code}):`, err.message);
-        }
-      }
-      if (!ok) continue;
-      await query(
-        `UPDATE complaints SET accounts_searched = $2, accounts_searched_at = now() WHERE id = $1`,
-        [c.id, [...new Set([...(c.accounts_searched || []), ...pending.map(keyOf)])]],
-      );
-      await query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
-        [c.id, londonDateOf(new Date()), `Searched the mailboxes (${mailboxes.join(', ')}) for its account number: ${notes.join('; ')}.`, BY],
-      );
-      if (notes.some((t) => !t.startsWith('no further'))) {
-        const { scheduleReview } = await import('./complaintReview.js');
-        scheduleReview(c.id);
-      }
+    )).rows;
+    for (const c of rows) {
+      if (done >= limit) break;
+      const terms = searchTermsFor(c, await partyRefsOf(c.id));
+      if (!terms.some((t) => t.searchable && !(c.accounts_searched || []).includes(t.key))) continue;
+      const r = await searchComplaintEmails(c, { mailboxes });
+      addedAll += r.added;
       done += 1;
     }
   } finally {
     searching = false;
   }
   return { complaints: done, added: addedAll };
+}
+
+// A person asked for this complaint to be searched now (or again).
+// Throws straight away (not in the promise) when it can't start, so the route
+// can say why; otherwise returns the running search.
+export function searchNow(id, { all = false, by } = {}) {
+  if (!config.ms.enabled) {
+    const e = new Error('The mailbox connection isn’t set up, so emails can’t be searched.');
+    e.status = 503;
+    throw e;
+  }
+  if (searching) {
+    const e = new Error('A search is already running. Try again in a minute or two.');
+    e.status = 409;
+    throw e;
+  }
+  searching = true;
+  return (async () => {
+    try {
+      const c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
+      if (!c) return { searched: 0, added: 0, ok: false };
+      return await searchComplaintEmails(c, { all, by });
+    } finally {
+      searching = false;
+    }
+  })();
 }

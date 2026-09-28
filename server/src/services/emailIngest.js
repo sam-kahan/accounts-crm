@@ -58,6 +58,14 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
   const ids = [];
 
   for (const e of emails) {
+    // A bounce is flagged for a person to look into, never filed.
+    try {
+      const { bounceFromMailbox } = await import('./bounces.js');
+      const { fetchMessageText } = await import('./graphMail.js');
+      if (await bounceFromMailbox(e, mailbox, (m) => fetchMessageText(m.graphId, mailbox || undefined))) continue;
+    } catch (err) {
+      console.error('[complaints] bounce not recorded:', err.message);
+    }
     const m = matchEmailToComplaint(e, index, inbox);
     // Shared catch-all: only persist emails that are deliberately ours. The
     // rest of the mailbox (spam / other teams' mail) is left untouched.

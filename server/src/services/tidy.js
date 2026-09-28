@@ -1,7 +1,8 @@
 import { query, pool } from '../db/pool.js';
 import { todayISO } from '../lib/dates.js';
-import { sameIssue, matchOrgName } from './orgMatch.js';
-import { recomputeDeadlines, recomputeForOrganisation } from './complaintDeadlines.js';
+import { sameIssue, matchOrgName, sameOrgName } from './orgMatch.js';
+import { recomputeDeadlines, recomputeForOrganisation, recomputePartyDeadlines } from './complaintDeadlines.js';
+import { overallState } from './complaintParties.js';
 import { scheduleReview } from './complaintReview.js';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,13 @@ function keepOrg(a, b) {
   return [a, b];
 }
 
+// Two complaints are against the same organisation: the same saved one, or
+// the same name.
+function sameOrganisation(a, b) {
+  if (a.organisation_id && b.organisation_id) return a.organisation_id === b.organisation_id;
+  return sameOrgName(a.linked_org || a.org_name, b.linked_org || b.org_name);
+}
+
 export async function tidySuggestions() {
   const complaints = (await query(
     `SELECT c.id, c.ref_code, c.subject, c.org_name, c.organisation_id, c.property, c.raised_on, c.state,
@@ -46,7 +54,13 @@ export async function tidySuggestions() {
       const fb = { ...b, org_name: b.linked_org || b.org_name };
       // Keep the open one (its clock and next step are live); if both are
       // open, keep the older one.
-      if (sameIssue(fa, fb)) complaintPairs.push(a.state !== 'open' && b.state === 'open' ? { keep: b, merge: a } : { keep: a, merge: b });
+      if (!sameIssue(fa, fb)) continue;
+      const pair = a.state !== 'open' && b.state === 'open' ? { keep: b, merge: a } : { keep: a, merge: b };
+      // The same issue with two different organisations (LCS and British
+      // Gas, matched on the account number): merging makes ONE complaint
+      // with both organisations on it, each keeping its own procedure.
+      pair.second_organisation = !sameOrganisation(a, b);
+      complaintPairs.push(pair);
     }
   }
 
@@ -69,6 +83,11 @@ export async function tidySuggestions() {
   return { complaints: complaintPairs, organisations: orgPairs };
 }
 
+async function orgName(client, id) {
+  if (!id) return null;
+  return (await client.query('SELECT name FROM organisations WHERE id = $1', [id])).rows[0]?.name || null;
+}
+
 // Merge complaint `mergeId` into `keepId`: every email, document, timeline
 // entry and found thread moves across, blanks on the kept one are filled from
 // the other, and the other is removed. One transaction: all of it or none.
@@ -88,16 +107,77 @@ export async function mergeComplaints(keepId, mergeId, by) {
       [keep, gone] = [gone, keep];
       [keepId, mergeId] = [mergeId, keepId];
     }
+    // Against a different organisation (the debt collector and the supplier):
+    // the merged complaint's track becomes a further organisation on the kept
+    // one, with its own reference, stage and dates — nothing of it is lost,
+    // and none of it is taken for the kept organisation's.
+    const secondOrg = !sameOrganisation(
+      { ...keep, linked_org: await orgName(client, keep.organisation_id) },
+      { ...gone, linked_org: await orgName(client, gone.organisation_id) },
+    );
+    let partyNote = '';
+    let newParty = null;
+    if (secondOrg) {
+      const dupOrg = gone.organisation_id && (
+        gone.organisation_id === keep.organisation_id ||
+        (await client.query('SELECT 1 FROM complaint_parties WHERE complaint_id = $1 AND organisation_id = $2',
+          [keepId, gone.organisation_id])).rowCount);
+      if (dupOrg) throw Object.assign(new Error(`${gone.org_name} is already on ${keep.ref_code}.`), { status: 409 });
+      const ended = ['resolved', 'closed'].includes(gone.stage) ? gone.stage
+        : gone.state !== 'open' ? gone.state : null;
+      newParty = (await client.query(
+        `INSERT INTO complaint_parties
+           (complaint_id, organisation_id, org_name, org_type, reference, raised_on, channel, stage, state,
+            stage_started_on, acknowledged_on, responded_on, final_response_on, response_due,
+            response_due_manual, ombudsman_deadline, outcome, closed_on, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+        [
+          keepId, gone.organisation_id, gone.org_name, gone.org_type, gone.reference, gone.raised_on,
+          gone.channel, ended || gone.stage, ended ? (ended === 'closed' ? 'closed' : 'resolved') : 'open',
+          gone.stage_started_on, gone.acknowledged_on, gone.responded_on, gone.final_response_on,
+          gone.response_due, gone.response_due_manual, gone.ombudsman_deadline, gone.outcome,
+          gone.closed_on, by,
+        ],
+      )).rows[0];
+      // Its timeline and emails are that organisation's, not the kept one's.
+      await client.query('UPDATE complaint_events SET party_id = $1 WHERE complaint_id = $2 AND party_id IS NULL', [newParty.id, mergeId]);
+      await client.query('UPDATE complaint_emails SET party_id = $1 WHERE complaint_id = $2 AND party_id IS NULL AND applied IS NOT NULL', [newParty.id, mergeId]);
+      // An email recorded automatically on it is undone against the new track.
+      await client.query(
+        `UPDATE complaint_emails SET applied = jsonb_set(applied, '{party_id}', to_jsonb($1::text))
+          WHERE complaint_id = $2 AND applied IS NOT NULL AND (applied->>'party_id') IS NULL`,
+        [newParty.id, mergeId],
+      );
+      partyNote = `; ${gone.org_name} is now a second organisation on this complaint, with its own reference and dates`;
+    }
+    // Further organisations already on the merged one come across too, unless
+    // that organisation is already on the kept one.
+    const movedParties = (await client.query(
+      `UPDATE complaint_parties p SET complaint_id = $1
+        WHERE p.complaint_id = $2 AND p.id IS DISTINCT FROM $3::uuid
+          AND (p.organisation_id IS NULL OR (p.organisation_id IS DISTINCT FROM $4::uuid AND NOT EXISTS (
+            SELECT 1 FROM complaint_parties q WHERE q.complaint_id = $1 AND q.organisation_id = p.organisation_id)))
+        RETURNING id`,
+      [keepId, mergeId, newParty?.id || null, keep.organisation_id],
+    )).rows.map((r) => r.id);
     const moved = {};
     for (const t of ['complaint_emails', 'complaint_attachments', 'complaint_events']) {
       moved[t] = (await client.query(`UPDATE ${t} SET complaint_id = $1 WHERE complaint_id = $2`, [keepId, mergeId])).rowCount;
     }
     await client.query('UPDATE complaint_import_candidates SET complaint_id = $1 WHERE complaint_id = $2', [keepId, mergeId]);
-    // Fill what the kept one is missing; never overwrite what it has.
+    // Fill what the kept one is missing; never overwrite what it has. Their
+    // reference, organisation and acknowledgement belong to the organisation:
+    // taken only when it is the same one.
     const fill = {};
-    for (const col of ['reference', 'our_reference', 'property', 'category', 'organisation_id', 'acknowledged_on']) {
+    const fillCols = secondOrg
+      ? ['our_reference', 'property', 'category']
+      : ['reference', 'our_reference', 'property', 'category', 'organisation_id', 'acknowledged_on'];
+    for (const col of fillCols) {
       if (!keep[col] && gone[col]) fill[col] = gone[col];
     }
+    // The account numbers are the issue's, whichever organisation quoted them.
+    const accounts = [...new Set([...(keep.account_numbers || []), ...(gone.account_numbers || [])])];
+    if (accounts.length !== (keep.account_numbers || []).length) fill.account_numbers = accounts;
     if (gone.description && gone.description !== keep.description) {
       fill.description = [keep.description, `From ${gone.ref_code}: ${gone.description}`].filter(Boolean).join('\n\n');
     }
@@ -116,11 +196,22 @@ export async function mergeComplaints(keepId, mergeId, by) {
         `Merged in ${gone.ref_code} ("${gone.subject}", raised ${gone.raised_on}): ` +
           `${moved.complaint_emails} email(s), ${moved.complaint_attachments} document(s), ` +
           `${moved.complaint_events} timeline entr${moved.complaint_events === 1 ? 'y' : 'ies'} moved here` +
-          (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + '.',
+          (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + partyNote + '.',
         by,
       ],
     );
+    // Open while any organisation's part of it is.
+    const k = (await client.query('SELECT * FROM complaints WHERE id = $1', [keepId])).rows[0];
+    const ps = (await client.query('SELECT * FROM complaint_parties WHERE complaint_id = $1', [keepId])).rows;
+    const state = overallState(k, ps);
+    if (state !== k.state) {
+      if (k.state !== 'open' && !['resolved', 'closed'].includes(k.stage)) {
+        await client.query('UPDATE complaints SET stage = state WHERE id = $1', [keepId]);
+      }
+      await client.query('UPDATE complaints SET state = $2 WHERE id = $1', [keepId, state]);
+    }
     await client.query('COMMIT');
+    for (const id of [...(newParty ? [newParty.id] : []), ...movedParties]) await recomputePartyDeadlines(id);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -152,6 +243,15 @@ export async function mergeOrganisations(keepId, mergeId, by) {
       [keepId, mergeId, keep.type],
     )).rows.map((r) => r.id);
     await client.query('UPDATE organisation_documents SET organisation_id = $1 WHERE organisation_id = $2', [keepId, mergeId]);
+    // As a further organisation on complaints too — except where the kept one
+    // is already on that complaint (it would be there twice).
+    await client.query(
+      `UPDATE complaint_parties p SET organisation_id = $1, org_type = $3
+        WHERE p.organisation_id = $2 AND NOT EXISTS (
+          SELECT 1 FROM complaint_parties q WHERE q.complaint_id = p.complaint_id AND q.organisation_id = $1)
+          AND NOT EXISTS (SELECT 1 FROM complaints c WHERE c.id = p.complaint_id AND c.organisation_id = $1)`,
+      [keepId, mergeId, keep.type],
+    );
     const fill = {};
     for (const col of ['complaints_email', 'complaints_url', 'phone', 'location']) {
       if (!keep[col] && gone[col]) fill[col] = gone[col];

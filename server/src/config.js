@@ -49,6 +49,9 @@ export const config = {
   // Lets the nightly reminder cron call /api/dashboard/send-reminders without a
   // login session: POST ...?key=<REMINDER_CRON_KEY>.
   reminderCronKey: process.env.REMINDER_CRON_KEY || '',
+  // SMTP2GO's bounce webhook authenticates with this (?key= or X-Webhook-Key).
+  // Unset: the webhook refuses everything.
+  bounceWebhookKey: process.env.BOUNCE_WEBHOOK_KEY || '',
 
   // Public base URL, used to build password-reset links in emails.
   appUrl: process.env.APP_BASE_URL || 'https://accounts.greenco.co.uk',

@@ -179,13 +179,14 @@ export default function Dashboard() {
           <div className="value">{counts.overdue}</div>
         </div>
         {complaints && (
-          <Link to="/complaints" className={`stat ${complaints.chasing || complaints.waiting ? 'alert' : ''}`}>
+          <Link to="/complaints" className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}>
             <div className="label">Complaints</div>
             <div className="value">{complaints.open}</div>
             <div className="muted" style={{ fontSize: 12 }}>
               open{complaints.chasing ? ` · ${complaints.chasing} need chasing` : ''}
               {complaints.waiting ? ` · ${complaints.waiting} email(s) to check` : ''}
               {complaints.to_check ? ` · ${complaints.to_check} imported to check` : ''}
+              {complaints.bounced ? ` · ${complaints.bounced} bounced email(s) to look into` : ''}
             </div>
           </Link>
         )}

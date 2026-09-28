@@ -499,6 +499,12 @@ export default function Organisations() {
                     }}
                   >
                     <strong>{o.name}</strong>
+                    {o.email_bounced && (
+                      <span className="badge red" style={{ marginLeft: 6 }}
+                        title="An email to their complaints address bounced. Check the address; see Bounced emails on the Complaints page.">
+                        Email bounced
+                      </span>
+                    )}
                     <div className="muted" style={{ fontSize: 12 }}>
                       {[o.procedure_ref, o.location].filter(Boolean).join(' · ') || o.ombudsman_name || ''}
                     </div>

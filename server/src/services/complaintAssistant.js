@@ -114,14 +114,54 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   }
   if (complaint.nextAction) lines.push(`System-suggested next action: ${complaint.nextAction}`);
 
+  // More than one organisation on the same issue (a debt collector and the
+  // supplier it collects for): each runs its own procedure.
+  if (complaint.parties?.length) {
+    lines.push('');
+    lines.push(
+      `This complaint is with ${complaint.parties.length + 1} organisations about the same issue. The ` +
+        `details above are ${complaint.org_name}'s (the main organisation). Each organisation below runs ` +
+        'its OWN complaints procedure, with its own reference and deadlines, and something one of them ' +
+        'says or does can matter to the other. Keep them apart: an email goes to ONE organisation, quotes ' +
+        'THEIR reference, and refers to the other organisation and its reference where that helps.',
+    );
+    for (const p of complaint.parties) {
+      const r = p.rule;
+      lines.push('');
+      lines.push(`Also against: ${p.org_name} (${r.label})${p.relationship ? `, ${p.relationship}` : ''}`);
+      lines.push(`  Their reference: ${p.reference || 'not known yet'}`);
+      lines.push(`  Complaint made to them: ${p.raised_on}; stage: ${p.stage}; status: ${p.label}${p.overdue ? ' (OVERDUE)' : ''}`);
+      if (p.acknowledged_on) lines.push(`  Acknowledged on: ${p.acknowledged_on}`);
+      else if (p.ack_due) lines.push(`  Acknowledgement due: ${p.ack_due}`);
+      lines.push(`  Response due: ${p.response_due || 'n/a'}`);
+      if (p.responded_on) lines.push(`  Responded on: ${p.responded_on}`);
+      if (p.final_response_on) lines.push(`  Their final response: ${p.final_response_on}`);
+      if (p.ombudsman_from) lines.push(`  Can refer to ${r.ombudsman} from: ${p.ombudsman_from}`);
+      lines.push(`  Refer by: ${p.ombudsman_deadline || 'n/a'}`);
+      if (r.procedureRef) lines.push(`  Their complaints procedure: ${r.procedureRef}`);
+      if (p.procedure?.procedure_summary) lines.push(`  How their procedure works: ${p.procedure.procedure_summary}`);
+      lines.push(
+        `  Timescales: acknowledge within ${r.ackDays} working days; Stage 1 within ${r.stage1Days}; ` +
+          `Stage 2 within ${r.stage2Days}; refer to ${r.ombudsman} within ${r.referralMonths} months.`,
+      );
+      if (r.defaulted?.length) lines.push(`  NOT confirmed from their own procedure (general defaults): ${r.defaulted.join(', ')}.`);
+      if (p.nextAction) lines.push(`  System-suggested next action for them: ${p.nextAction}`);
+    }
+  }
+
   lines.push('');
   // The timeline carries text taken from emails (automatic entries, their
   // reference), so it is read as data like the emails themselves.
   lines.push('Timeline (most recent first) and their reference:');
   lines.push('<untrusted_content>');
   if (complaint.reference) lines.push(`Their reference: ${complaint.reference}`);
+  for (const p of complaint.parties || []) {
+    if (p.reference) lines.push(`${p.org_name}'s reference: ${p.reference}`);
+  }
   if (events?.length) {
-    for (const e of events) lines.push(`- ${e.event_date} [${e.type}] ${e.note || ''}`.trim());
+    for (const e of events) {
+      lines.push(`- ${e.event_date} [${e.type}]${e.party_name ? ` (${e.party_name})` : ''} ${e.note || ''}`.trim());
+    }
   } else {
     lines.push('- (no events logged)');
   }

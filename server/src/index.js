@@ -25,6 +25,7 @@ import complaints from './routes/complaints.js';
 import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
 import commissionInvoices from './routes/commissionInvoices.js';
+import bounceWebhook from './routes/bounceWebhook.js';
 import invoicingWebhook from './routes/invoicingWebhook.js';
 import users from './routes/users.js';
 
@@ -127,6 +128,8 @@ app.use('/api/organisations', requireAuth, requirePermission('complaints'), orga
 // server, so it authenticates with the shared integration secret rather than a
 // login session — mounted on its own path so no authed route is widened.
 app.use('/api/webhooks/invoicing', invoicingWebhook);
+// SMTP2GO reports emails the CRM sent that bounced (routes/bounceWebhook.js).
+app.use('/api/webhooks/email-bounce', bounceWebhook);
 
 app.use('/api/contractors', requireAuth, requirePermission('commission'), contractors);
 app.use('/api/contractor-invoices', requireAuth, requirePermission('commission'), contractorInvoices);

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
+import { BounceWarning } from '../components/BouncedEmails.jsx';
 
 const STAGE_LABEL = {
   stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'Ombudsman',
@@ -39,32 +40,45 @@ const REVIEWED_AS = {
   sent: 'Sent',
 };
 
-// The dated steps, shared by the buttons and the AI's one-click action.
+// The dated steps, shared by the buttons and the AI's one-click action. Each
+// is taken on one organisation's track: `t` is the complaint itself (the main
+// organisation) or one of its further organisations (c.parties). With more
+// than one organisation the title names whose step it is.
 const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name || 'ombudsman'}`);
-const ACK = {
-  kind: 'acknowledged', title: 'Record their acknowledgement',
+// A further organisation's row carries its complaint's id; the complaint doesn't.
+const partyIdOf = (t) => (t?.complaint_id ? t.id : null);
+const withOrg = (t, multi, title) => (multi ? `${title}: ${t.org_name}` : title);
+const ACK = (t, multi) => ({
+  kind: 'acknowledged', party: partyIdOf(t), title: withOrg(t, multi, 'Record their acknowledgement'),
   intro: 'The date they acknowledged the complaint (the date on their email or letter).',
   defaultNote: 'Acknowledged by the organisation',
-};
-const RESPONSE = (c) => ({
-  kind: 'response_received',
-  title: c.stage === 'stage_2' ? 'Record their final (Stage 2) response' : 'Record their Stage 1 response',
-  intro: 'The date on their response. Upload the letter or email itself under Documents so it’s on file.',
-  defaultNote: c.stage === 'stage_2' ? 'Final (Stage 2) response received' : 'Stage 1 response received',
 });
-const ESCALATE = (c) => ({
+const RESPONSE = (t, multi) => ({
+  kind: 'response_received',
+  party: partyIdOf(t),
+  title: withOrg(t, multi, t.stage === 'stage_2' ? 'Record their final (Stage 2) response' : 'Record their Stage 1 response'),
+  intro: 'The date on their response. Upload the letter or email itself under Documents so it’s on file.',
+  defaultNote: t.stage === 'stage_2' ? 'Final (Stage 2) response received' : 'Stage 1 response received',
+});
+const ESCALATE = (t, multi) => ({
   kind: 'escalate',
-  title: c.stage === 'stage_1' ? 'Escalate to Stage 2' : `Refer to ${theOmbudsman(c.rule?.ombudsman)}`,
-  intro: c.stage === 'stage_1'
+  party: partyIdOf(t),
+  title: withOrg(t, multi, t.stage === 'stage_1' ? 'Escalate to Stage 2' : `Refer to ${theOmbudsman(t.rule?.ombudsman)}`),
+  intro: t.stage === 'stage_1'
     ? 'The date you asked them for Stage 2. Their Stage 2 deadline is counted from it.'
-    : `The date you referred the complaint to ${theOmbudsman(c.rule?.ombudsman)}.`,
+    : `The date you referred the complaint to ${theOmbudsman(t.rule?.ombudsman)}.`,
   noNote: true,
 });
-const RESOLVE = {
-  kind: 'resolved', title: 'Mark the complaint resolved',
-  intro: 'The date it was resolved, and the outcome. This is the record of how it ended.',
+const RESOLVE = (t, multi) => ({
+  kind: 'resolved', party: partyIdOf(t),
+  title: multi ? `Mark ${t.org_name}’s part resolved` : 'Mark the complaint resolved',
+  intro: multi
+    ? 'The date their part was resolved, and the outcome. The complaint stays open while another organisation’s part of it is still running.'
+    : 'The date it was resolved, and the outcome. This is the record of how it ended.',
   defaultNote: 'Complaint resolved', noteLabel: 'Outcome',
-};
+});
+// Is this organisation's part still running? (complaintRules.js#trackOpen)
+const trackOpen = (t) => t.state === 'open' && !['resolved', 'closed'].includes(t.stage);
 
 export default function ComplaintDetail() {
   const { id } = useParams();
@@ -103,6 +117,12 @@ export default function ComplaintDetail() {
   const [reviewing, setReviewing] = useState(false);
   // The date to record for each new email, starting from what the AI read.
   const [emailDates, setEmailDates] = useState({});
+  // With more than one organisation: which one each new email is from.
+  const [emailParties, setEmailParties] = useState({});
+  // Adding (true) or correcting (a party row) a further organisation.
+  const [partyForm, setPartyForm] = useState(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   const load = () => {
     setLoadError(null);
@@ -263,10 +283,10 @@ export default function ComplaintDetail() {
     }
   }
 
-  async function reviewEmail(emailId, as, date) {
+  async function reviewEmail(emailId, as, date, partyId = null) {
     setMsg(null);
     try {
-      await api.complaints.reviewEmail(id, emailId, as, date);
+      await api.complaints.reviewEmail(id, emailId, as, date, partyId);
       await load();
     } catch (e) {
       setMsg(e.message);
@@ -282,6 +302,43 @@ export default function ComplaintDetail() {
       setMsg(e.message);
     }
   }
+  // Search the mailboxes for every reference and account number on it. It
+  // runs in the background; the page looks again until it has finished.
+  async function searchEmails(all) {
+    setSearchBusy(true);
+    setMsg(null);
+    try {
+      await api.complaints.searchEmails(id, all);
+      setMsg('Searching the mailboxes. Anything found is added to Emails and noted on the timeline.');
+      let n = 0;
+      const t = setInterval(async () => {
+        n += 1;
+        try {
+          const fresh = await api.complaints.get(id);
+          if (!fresh.email_search?.running || n > 40) {
+            clearInterval(t);
+            setC(fresh);
+            setSearchBusy(false);
+          }
+        } catch {
+          if (n > 40) { clearInterval(t); setSearchBusy(false); }
+        }
+      }, 5000);
+    } catch (e) {
+      setMsg(e.message);
+      setSearchBusy(false);
+    }
+  }
+  async function removeParty(p) {
+    if (!confirm(`Take ${p.org_name} off this complaint? Its timeline entries and emails stay on the complaint.`)) return;
+    setMsg(null);
+    try {
+      setC(await api.complaints.removeParty(id, p.id).then(() => api.complaints.get(id)));
+    } catch (e) {
+      setMsg(e.message);
+    }
+  }
+
   async function refreshAiReview() {
     setReviewing(true);
     setMsg(null);
@@ -298,14 +355,22 @@ export default function ComplaintDetail() {
   // as doing it by hand, with the date filled in — nothing happens unconfirmed.
   function actionButton(na) {
     if (!na) return null;
+    // With more than one organisation the review can't say whose step it
+    // means, so only the email is offered here; the steps are on each
+    // organisation's own section below.
+    if (c.parties?.length) {
+      return na.type === 'send_email' && c.ai_review?.email?.body
+        ? <button className="btn-primary btn-sm" onClick={() => openSend(c.ai_review.email)}>Review &amp; send the email…</button>
+        : null;
+    }
     const stage1 = c.stage === 'stage_1';
     const map = {
       send_email: c.ai_review?.email?.body && ['Review & send the email…', () => openSend(c.ai_review.email)],
       escalate_stage2: stage1 && ['Escalate to Stage 2…', () => setAction(ESCALATE(c))],
       refer_ombudsman: c.stage === 'stage_2' && ['Refer to the ombudsman…', () => setAction(ESCALATE(c))],
-      record_acknowledgement: stage1 && !c.acknowledged_on && ['Record their acknowledgement…', () => setAction(ACK)],
+      record_acknowledgement: stage1 && !c.acknowledged_on && ['Record their acknowledgement…', () => setAction(ACK(c))],
       record_response: !c.responded_on && ['Record their response…', () => setAction(RESPONSE(c))],
-      resolve: ['Mark resolved…', () => setAction(RESOLVE)],
+      resolve: ['Mark resolved…', () => setAction(RESOLVE(c))],
     };
     const hit = map[na.type];
     if (!hit) return null;
@@ -331,8 +396,12 @@ export default function ComplaintDetail() {
   // so it is always asked for, defaulting to today.
   async function recordAction({ date, note }) {
     const a = action;
-    if (a.kind === 'escalate') await api.complaints.escalate(id, date);
-    else await api.complaints.addEvent(id, { event_date: date, type: a.kind, note: note || a.defaultNote });
+    if (a.kind === 'escalate') await api.complaints.escalate(id, date, a.party || null);
+    else {
+      await api.complaints.addEvent(id, {
+        event_date: date, type: a.kind, note: note || a.defaultNote, party_id: a.party || null,
+      });
+    }
     setAction(null);
     await load();
   }
@@ -364,12 +433,48 @@ export default function ComplaintDetail() {
     return <div className="spinner">Loading…</div>;
   }
 
-  const open = c.state === 'open';
-  const atStage = c.stage === 'stage_1' || c.stage === 'stage_2';
   const theOmb = theOmbudsman(c.rule?.ombudsman);
   const newEmails = (c.emails || []).filter((e) => e.direction !== 'outbound' && !e.reviewed_at);
-  const statusBadge =
-    c.needs_chasing ? 'red' : c.status === 'responded' || c.status === 'resolved' ? 'ok' : 'amber';
+  const badgeOf = (t) =>
+    t.needs_chasing ? 'red' : t.status === 'responded' || t.status === 'resolved' ? 'ok' : 'amber';
+  const statusBadge = badgeOf(c);
+  // More than one organisation on it (migration 029): each has its own section.
+  const parties = c.parties || [];
+  const multi = parties.length > 0;
+  const tracks = [c, ...parties];
+  const partyName = (pid) => parties.find((p) => p.id === pid)?.org_name || null;
+  // Which organisation an email is from, as the AI read it (author_org), when
+  // that names exactly one of them. Otherwise nobody guesses: it is asked.
+  const guessTrack = (a) => {
+    const said = String(a?.author_org || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!said) return undefined;
+    const hits = tracks.filter((t) => {
+      const n = t.org_name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return n && (n.includes(said) || said.includes(n));
+    });
+    return hits.length === 1 ? (partyIdOf(hits[0]) || 'main') : undefined;
+  };
+  // The step buttons for one organisation's part.
+  const trackButtons = (t) => {
+    const tAt = t.stage === 'stage_1' || t.stage === 'stage_2';
+    if (!trackOpen(t)) return null;
+    return (
+      <div className="btn-row" style={{ marginTop: 4 }}>
+        {t.stage === 'stage_1' && !t.acknowledged_on && !t.responded_on && (
+          <button className="btn btn-sm" onClick={() => setAction(ACK(t, multi))}>Record acknowledgement…</button>
+        )}
+        {tAt && !t.responded_on && (
+          <button className="btn btn-sm" onClick={() => setAction(RESPONSE(t, multi))}>Record their response…</button>
+        )}
+        {tAt && (
+          <button className="btn-navy btn-sm" onClick={() => setAction(ESCALATE(t, multi))}>
+            {t.stage === 'stage_1' ? 'Escalate to Stage 2…' : 'Refer to ombudsman…'}
+          </button>
+        )}
+        <button className="btn btn-sm" onClick={() => setAction(RESOLVE(t, multi))}>Mark resolved…</button>
+      </div>
+    );
+  };
 
   return (
     <>
@@ -384,31 +489,86 @@ export default function ComplaintDetail() {
           <div>
             <h2 style={{ fontSize: 19 }}>{c.subject}</h2>
             <div className="muted" style={{ marginTop: 4 }}>
-              {c.org_name} · {ORG_TYPE_LABEL[c.org_type] || c.org_type}
+              {multi
+                ? <>Against {tracks.map((t) => t.org_name).join(' and ')}</>
+                : <>{c.org_name} · {ORG_TYPE_LABEL[c.org_type] || c.org_type}</>}
               {c.property && ` · ${c.property}`}
             </div>
           </div>
           <div className="btn-row">
+            <button className="btn btn-sm" onClick={() => setPartyForm(true)}
+              title="The same issue with a second organisation, e.g. the debt collector and the supplier it collects for">
+              + Another organisation
+            </button>
+            {aiEnabled && (
+              <button className="btn btn-sm" disabled={rechecking}
+                title="Search by every account number and reference, read all its emails, and set its stage and dates from them"
+                onClick={async () => {
+                  if (!confirm('Re-check this complaint against its emails? It searches the mailboxes for its numbers, reads every email on it (one AI read), and moves its stage and dates to what the emails show. Changes can be undone.')) return;
+                  setRechecking(true);
+                  setMsg(null);
+                  const since = c.rechecked_at;
+                  const failedBefore = (c.events || []).filter((e) => /^Re-check against its emails failed/.test(e.note || '')).length;
+                  try {
+                    await api.complaints.recheck(id);
+                    setMsg('Re-checking: searching the mailboxes and reading its emails. This can take a minute or two.');
+                    // Watch for it finishing (or failing) for up to 10 minutes.
+                    let n = 0;
+                    const t = setInterval(async () => {
+                      n += 1;
+                      try {
+                        const fresh = await api.complaints.get(id);
+                        const failed = (fresh.events || []).filter((e) => /^Re-check against its emails failed/.test(e.note || '')).length > failedBefore;
+                        if (fresh.rechecked_at !== since || failed || n > 120) {
+                          clearInterval(t);
+                          setC(fresh);
+                          setRechecking(false);
+                          const note = (fresh.events || []).find((e) => /^Re-check/.test(e.note || ''));
+                          setMsg(n > 120 ? 'Still re-checking; the result will appear on the timeline.' : note?.note || null);
+                        }
+                      } catch { /* try again next tick */ }
+                    }, 5000);
+                  } catch (e) { setMsg(e.message); setRechecking(false); }
+                }}>
+                {rechecking ? 'Re-checking…' : 'Re-check from emails'}
+              </button>
+            )}
             <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit details</button>
             <button className="btn-danger btn-sm" onClick={remove}>Delete</button>
           </div>
         </div>
         <div className="card-body">
-          <div className="btn-row" style={{ marginBottom: 12 }}>
-            <span className="badge navy">{STAGE_LABEL[c.stage]}</span>
-            <span className={`badge ${statusBadge}`}>{c.label}</span>
-            {c.imported && <span className="badge grey">Imported</span>}
-          </div>
+          {multi ? (
+            <div style={{ marginBottom: 12 }}>
+              {tracks.map((t) => (
+                <div key={t.id} className="btn-row" style={{ marginBottom: 4 }}>
+                  <strong style={{ minWidth: 140 }}>{t.org_name}</strong>
+                  <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
+                  <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
+                </div>
+              ))}
+              {c.imported && <span className="badge grey">Imported</span>}
+            </div>
+          ) : (
+            <div className="btn-row" style={{ marginBottom: 12 }}>
+              <span className="badge navy">{STAGE_LABEL[c.stage]}</span>
+              <span className={`badge ${statusBadge}`}>{c.label}</span>
+              {c.imported && <span className="badge grey">Imported</span>}
+            </div>
+          )}
 
           {/* One next step: the AI's when its review is up to date, otherwise
               the one worked out from the deadlines. */}
           {(() => {
             const aiStep = c.ai_review_current && c.ai_review?.recommended_action;
-            const text = aiStep || c.nextAction;
+            // Without the AI's view, each organisation's own next step, named.
+            const text = aiStep || (multi
+              ? tracks.filter((t) => t.nextAction).map((t) => `${t.org_name}: ${t.nextAction}`).join(' ')
+              : c.nextAction);
             if (!text) return null;
-            const btn = aiStep && open ? actionButton(c.ai_review.next_action) : null;
+            const btn = aiStep && c.state === 'open' ? actionButton(c.ai_review.next_action) : null;
             return (
-              <div className={`inline-note ${c.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
+              <div className={`inline-note ${c.any_needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
                 <strong>Next step:</strong> {text}
                 {btn && <div style={{ marginTop: 8 }}>{btn}</div>}
               </div>
@@ -419,7 +579,11 @@ export default function ComplaintDetail() {
             <Info label="Raised" value={formatDate(c.raised_on)} />
             <Info label="Account number" value={c.account_numbers?.length ? c.account_numbers.join(', ') : '—'} />
             <Info label="Our reference" value={c.ref_code} />
-            <Info label="Their reference" value={c.reference || '—'} />
+            {multi
+              ? tracks.map((t) => (
+                <Info key={t.id} label={`${t.org_name}’s reference`} value={t.reference || '—'} />
+              ))
+              : <Info label="Their reference" value={c.reference || '—'} />}
             <Info label="Sent by" value={c.channel || '—'} />
             <Info label="Email address for this complaint" value={
               <span style={{ wordBreak: 'break-all' }}>
@@ -429,24 +593,28 @@ export default function ComplaintDetail() {
             } />
           </div>
 
-          {open && (
-            <div className="btn-row" style={{ marginTop: 4 }}>
-              {c.stage === 'stage_1' && !c.acknowledged_on && !c.responded_on && (
-                <button className="btn btn-sm" onClick={() => setAction(ACK)}>Record acknowledgement…</button>
-              )}
-              {atStage && !c.responded_on && (
-                <button className="btn btn-sm" onClick={() => setAction(RESPONSE(c))}>Record their response…</button>
-              )}
-              {atStage && (
-                <button className="btn-navy btn-sm" onClick={() => setAction(ESCALATE(c))}>
-                  {c.stage === 'stage_1' ? 'Escalate to Stage 2…' : 'Refer to ombudsman…'}
-                </button>
-              )}
-              <button className="btn btn-sm" onClick={() => setAction(RESOLVE)}>Mark resolved…</button>
-            </div>
-          )}
+          {/* One organisation: its steps are here. More than one: each
+              organisation's steps are in its own section below. */}
+          {!multi && trackButtons(c)}
         </div>
       </div>
+
+      <BounceWarning list={c.bounces} onDone={load} />
+
+      {/* What the last re-check against the emails changed, with Undo. */}
+      {c.last_recheck?.after && (
+        <div className="inline-note" style={{ marginBottom: 20 }}>
+          <strong>Re-checked against its emails</strong> on{' '}
+          {new Date(c.last_recheck.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}:{' '}
+          {Object.entries(c.last_recheck.after).filter(([k]) => k !== 'response_due_manual')
+            .map(([k, v]) => `${k.replace(/_/g, ' ')} ${c.last_recheck.before?.[k] ?? 'blank'} → ${v ?? 'blank'}`).join('; ')}.
+          {' '}The details are on the timeline.{' '}
+          <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={async () => {
+            if (!confirm('Undo what the re-check changed? The values it replaced are put back.')) return;
+            try { setC(await api.complaints.undoRecheck(id).then(() => api.complaints.get(id))); } catch (e) { setMsg(e.message); }
+          }}>Undo</button>
+        </div>
+      )}
 
       {c.needs_check && (
         <div className="inline-note warn" style={{ marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
@@ -557,6 +725,10 @@ export default function ComplaintDetail() {
               const a = em.analysis;
               const arrived = londonDay(em.received_at);
               const date = emailDates[em.id] ?? (a?.sent_on || arrived);
+              // Whose step it would be: the only organisation, or the one chosen
+              // (starting from the AI's reading when it names exactly one).
+              const pick = multi ? (emailParties[em.id] ?? guessTrack(a)) : 'main';
+              const tr = pick === 'main' ? c : parties.find((p) => p.id === pick) || null;
               return (
                 <div key={em.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border, #e5e7eb)' }}>
                   <strong>{em.subject || '(no subject)'}</strong>
@@ -580,16 +752,28 @@ export default function ComplaintDetail() {
                       <input type="date" value={date} max={today}
                         onChange={(e) => setEmailDates((d) => ({ ...d, [em.id]: e.target.value }))} />
                     </label>
-                    {c.stage === 'stage_1' && !c.acknowledged_on && (
+                    {multi && (
+                      <label className="field" style={{ margin: 0, maxWidth: 200 }}>
+                        <span className="lbl" style={{ fontSize: 12 }}>Which organisation is it from?</span>
+                        <select value={pick || ''}
+                          onChange={(e) => setEmailParties((d) => ({ ...d, [em.id]: e.target.value || undefined }))}>
+                          <option value="">— Choose —</option>
+                          {tracks.map((t) => (
+                            <option key={t.id} value={partyIdOf(t) || 'main'}>{t.org_name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {tr && tr.stage === 'stage_1' && !tr.acknowledged_on && trackOpen(tr) && (
                       <button className={`btn btn-sm ${a?.kind === 'acknowledgement' ? 'btn-primary' : ''}`}
-                        onClick={() => reviewEmail(em.id, 'acknowledgement', date)}>
+                        onClick={() => reviewEmail(em.id, 'acknowledgement', date, partyIdOf(tr))}>
                         Their acknowledgement
                       </button>
                     )}
-                    {atStage && (
+                    {tr && (tr.stage === 'stage_1' || tr.stage === 'stage_2') && trackOpen(tr) && (
                       <button className={`btn btn-sm ${a?.kind === 'stage1_response' || a?.kind === 'final_response' ? 'btn-primary' : ''}`}
-                        onClick={() => reviewEmail(em.id, 'response', date)}>
-                        Their {c.stage === 'stage_2' ? 'final' : 'Stage 1'} response
+                        onClick={() => reviewEmail(em.id, 'response', date, partyIdOf(tr))}>
+                        Their {tr.stage === 'stage_2' ? 'final' : 'Stage 1'} response
                       </button>
                     )}
                     <button className="btn-ghost btn-sm" onClick={() => reviewEmail(em.id, 'correspondence', date)}>
@@ -603,8 +787,40 @@ export default function ComplaintDetail() {
         </div>
       )}
 
-      {/* Their procedure, step by step */}
-      <ProcedureCard c={c} />
+      {/* Their procedure, step by step: one section per organisation, each
+          with its own reference, dates and steps. */}
+      {multi ? tracks.map((t) => (
+        <ProcedureCard key={t.id} c={t}
+          title={`${t.org_name}${partyIdOf(t) ? '' : ' (main organisation)'}: complaints procedure`}
+          head={
+            <>
+              <div className="form-grid">
+                {t.relationship && <Info label="How they’re involved" value={t.relationship} />}
+                <Info label="Their reference" value={t.reference || '—'} />
+                <Info label="Complaint made to them" value={formatDate(t.raised_on)} />
+                <Info label="Where it stands" value={
+                  <><span className="badge navy">{STAGE_LABEL[t.stage]}</span>{' '}
+                    <span className={`badge ${badgeOf(t)}`}>{t.label}</span></>
+                } />
+              </div>
+              {t.nextAction && (
+                <div className={`inline-note ${t.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 10 }}>
+                  <strong>Next step with {t.org_name}:</strong> {t.nextAction}
+                </div>
+              )}
+              <div className="btn-row" style={{ marginBottom: 12 }}>
+                {trackButtons(t)}
+                {partyIdOf(t) && (
+                  <>
+                    <button className="btn-ghost btn-sm" onClick={() => setPartyForm(t)}>Edit {t.org_name}’s details</button>
+                    <button className="btn-ghost btn-sm" onClick={() => removeParty(t)}>Take off this complaint</button>
+                  </>
+                )}
+              </div>
+            </>
+          }
+        />
+      )) : <ProcedureCard c={c} />}
 
       {/* Documents */}
       <div className="card" style={{ marginBottom: 20 }}>
@@ -677,6 +893,7 @@ export default function ComplaintDetail() {
           </div>
         </div>
         <div className="card-body" style={{ paddingBottom: 0 }}>
+          <EmailSearch s={c.email_search} busy={searchBusy} onSearch={searchEmails} />
           <div className="inline-note" style={{ marginBottom: 12 }}>
             <strong>This complaint’s email address:</strong>{' '}
             <code style={{ fontWeight: 600, wordBreak: 'break-all' }}>{c.email_address}</code>{' '}
@@ -715,6 +932,7 @@ export default function ComplaintDetail() {
                         {em.applied.after?.acknowledged_on && <>: acknowledged {formatDate(em.applied.after.acknowledged_on)}</>}
                         {em.applied.after?.responded_on && <>: responded {formatDate(em.applied.after.responded_on)}</>}
                         {em.applied.after?.reference && <> · their reference {em.applied.after.reference}</>}
+                        {em.applied.party_id && partyName(em.applied.party_id) && <> · for {partyName(em.applied.party_id)}</>}
                         .{' '}
                         <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => undoEmail(em)}>Undo</button>
                       </div>
@@ -783,7 +1001,10 @@ export default function ComplaintDetail() {
                 {c.events.map((e) => (
                   <tr key={e.id}>
                     <td className="due" style={{ width: 120 }}>{formatDate(e.event_date)}</td>
-                    <td style={{ width: 150 }}><span className="badge grey">{EVENT_LABEL[e.type] || e.type}</span></td>
+                    <td style={{ width: 150 }}>
+                      <span className="badge grey">{EVENT_LABEL[e.type] || e.type}</span>
+                      {e.party_name && <div style={{ marginTop: 4 }}><span className="badge navy">{e.party_name}</span></div>}
+                    </td>
                     <td style={{ whiteSpace: 'pre-wrap' }}>
                       {e.note}
                       {e.created_by && (
@@ -971,6 +1192,15 @@ export default function ComplaintDetail() {
         <DatedActionModal action={action} onClose={() => setAction(null)} onSubmit={recordAction} />
       )}
 
+      {partyForm && (
+        <PartyModal
+          c={c}
+          party={partyForm === true ? null : partyForm}
+          onClose={() => setPartyForm(null)}
+          onSaved={async () => { setPartyForm(null); await load(); }}
+        />
+      )}
+
       {editing && (
         <EditComplaintModal
           c={c}
@@ -1000,7 +1230,23 @@ export default function ComplaintDetail() {
           <label className="field">
             <span className="lbl">To *</span>
             <input value={send.to} onChange={(e) => setSend({ ...send, to: e.target.value })}
-              placeholder="complaints@example.co.uk" />
+              placeholder="complaints@example.co.uk" list="complaint-org-emails" />
+            <datalist id="complaint-org-emails">
+              {tracks.filter((t) => t.org_email).map((t) => (
+                <option key={t.id} value={t.org_email}>{t.org_name}</option>
+              ))}
+            </datalist>
+            {(c.bounces || []).some((b) => send.to.toLowerCase().includes(b.address)) && (
+              <span className="login-error" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                An email to this address bounced and hasn’t been looked into. It may not arrive.
+              </span>
+            )}
+            {multi && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                This complaint is with {tracks.map((t) => t.org_name).join(' and ')}: send it to the
+                one it is for, and quote their reference.
+              </span>
+            )}
           </label>
           <label className="field">
             <span className="lbl">CC</span>
@@ -1045,7 +1291,7 @@ export default function ComplaintDetail() {
 }
 
 // The organisation's procedure as a checklist, with how far it can be trusted.
-function ProcedureCard({ c }) {
+function ProcedureCard({ c, title, head }) {
   const p = c.procedure;
   const defaulted = c.rule?.defaulted || [];
   const timingDefaults = ['ackDays', 'stage1Days', 'stage2Days'].filter((k) => defaulted.includes(k));
@@ -1055,7 +1301,7 @@ function ProcedureCard({ c }) {
     trust = (
       <div className="inline-note warn" style={{ marginBottom: 12 }}>
         <strong>These dates use general timescales for a {c.rule?.label?.toLowerCase() || 'body like this'}.</strong>{' '}
-        Link this complaint to the organisation (Edit details) and add their own procedure on the{' '}
+        Link {c.complaint_id ? `${c.org_name} to its saved organisation (Edit ${c.org_name}’s details)` : 'this complaint to the organisation (Edit details)'} and add their own procedure on the{' '}
         <Link to="/organisations">Organisations</Link> page, so the dates follow their rules.
       </div>
     );
@@ -1084,10 +1330,10 @@ function ProcedureCard({ c }) {
   return (
     <div className="card" style={{ marginBottom: 20 }}>
       <div className="card-head">
-        <h2>Their complaints procedure, step by step</h2>
+        <h2>{title || 'Their complaints procedure, step by step'}</h2>
         {p?.procedure_ref && <span className="badge navy">{p.procedure_ref}</span>}
       </div>
-      <div className="card-body" style={{ paddingBottom: 0 }}>{trust}</div>
+      <div className="card-body" style={{ paddingBottom: 0 }}>{head}{trust}</div>
       <table>
         <tbody>
           {(c.steps || []).map((s) => {
@@ -1271,7 +1517,7 @@ function EditComplaintModal({ c, onClose, onSaved }) {
       </p>
       <form onSubmit={save}>
         <label className="field">
-          <span className="lbl">Organisation (its procedure sets the deadlines)</span>
+          <span className="lbl">{c.parties?.length ? 'Main organisation' : 'Organisation'} (its procedure sets the deadlines)</span>
           <select value={form.organisation_id} onChange={(e) => pickOrg(e.target.value)}>
             <option value="">— Not linked (general timescales) —</option>
             {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -1337,6 +1583,206 @@ function EditComplaintModal({ c, onClose, onSaved }) {
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Whether the mailboxes have been searched for every reference and account
+// number on this complaint, so its emails are all here before work starts.
+function EmailSearch({ s, busy, onSearch }) {
+  if (!s) return null;
+  const list = (xs) => xs.map((t) => `${t.kind} ${t.value}`).join('; ');
+  const running = busy || s.running;
+  let text;
+  let warn = false;
+  if (!s.mailbox_connected) {
+    text = 'The mailbox connection isn’t set up, so the mailboxes can’t be searched for this complaint’s emails.';
+    warn = true;
+  } else if (running) {
+    text = 'Searching the mailboxes for this complaint’s reference and account numbers…';
+  } else if (s.pending.length) {
+    warn = true;
+    text = s.waiting_for_accounts
+      ? `Not searched yet. Its account numbers are read off its emails first, then the mailboxes are searched for them and for: ${list(s.pending)}. This happens by itself within a few minutes, or search now.`
+      : `Not yet searched for: ${list(s.pending)}. This happens by itself within a few minutes, or search now.`;
+  } else if (s.searched.length) {
+    text = `Every email quoting its numbers is here: the mailboxes were searched for ${list(s.searched)}` +
+      `${s.searched_at ? ` (last on ${formatDate(String(s.searched_at).slice(0, 10))})` : ''}.`;
+  } else {
+    warn = true;
+    text = 'There is no reference or account number on this complaint to search for yet. Add them with Edit details.';
+  }
+  return (
+    <div className={`inline-note ${warn ? 'warn' : ''}`} style={{ marginBottom: 12 }}>
+      <strong>Emails quoting its numbers:</strong> {text}
+      {s.too_short?.length > 0 && (
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          Not searched, too short to search without bringing in unrelated mail: {list(s.too_short)}.
+        </div>
+      )}
+      {s.mailbox_connected && (
+        <div className="btn-row" style={{ marginTop: 6 }}>
+          {s.pending.length > 0 && (
+            <button className="btn-primary btn-sm" disabled={running} onClick={() => onSearch(false)}>
+              {running ? 'Searching…' : 'Search now'}
+            </button>
+          )}
+          {s.searched.length > 0 && (
+            <button className="btn btn-sm" disabled={running} onClick={() => onSearch(true)}
+              title="Search again for every number, for anything that has arrived since">
+              {running ? 'Searching…' : 'Search again'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add a further organisation to the complaint (the debt collector and the
+// supplier it collects for), or correct one. Each has its own reference,
+// dates and complaints procedure. A stage it has already reached is set when
+// it is added; after that it moves on with the step buttons, like the main one.
+function PartyModal({ c, party, onClose, onSaved }) {
+  const [orgs, setOrgs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [form, setForm] = useState({
+    organisation_id: party?.organisation_id || '',
+    org_name: party?.org_name || '',
+    org_type: party?.org_type || 'other',
+    relationship: party?.relationship || '',
+    reference: party?.reference || '',
+    raised_on: party?.raised_on || todayISO(),
+    stage: party?.stage || 'stage_1',
+    stage_started_on: party?.stage_started_on || '',
+    acknowledged_on: party?.acknowledged_on || '',
+    responded_on: party?.responded_on || '',
+    final_response_on: party?.final_response_on || '',
+  });
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => { api.organisations.list().then(setOrgs).catch(() => setOrgs([])); }, []);
+  const onIt = new Set([c.organisation_id, ...(c.parties || []).filter((p) => p.id !== party?.id).map((p) => p.organisation_id)].filter(Boolean));
+
+  function pickOrg(orgId) {
+    const org = orgs.find((o) => o.id === orgId);
+    setForm((f) => ({
+      ...f,
+      organisation_id: orgId,
+      org_name: org ? org.name : f.org_name,
+      org_type: org ? org.type : f.org_type,
+    }));
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const blank = (v) => (v === '' ? null : v);
+    const body = {
+      organisation_id: blank(form.organisation_id),
+      org_name: form.org_name.trim(),
+      org_type: form.org_type,
+      relationship: blank(form.relationship.trim()),
+      reference: blank(form.reference.trim()),
+      raised_on: form.raised_on,
+      acknowledged_on: blank(form.acknowledged_on),
+      responded_on: blank(form.responded_on),
+      final_response_on: blank(form.final_response_on),
+    };
+    try {
+      if (party) {
+        await api.complaints.updateParty(c.id, party.id, {
+          ...body,
+          stage_started_on: party.stage === 'stage_1' ? undefined : blank(form.stage_started_on),
+        });
+      } else {
+        await api.complaints.addParty(c.id, {
+          ...body,
+          stage: form.stage,
+          stage_started_on: form.stage === 'stage_1' ? null : blank(form.stage_started_on),
+        });
+      }
+      await onSaved();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  const stage = party ? party.stage : form.stage;
+  const dateField = (k, label, hint) => (
+    <label className="field">
+      <span className="lbl">{label}</span>
+      <input type="date" value={form[k]} max={todayISO()} onChange={(e) => set(k, e.target.value)} />
+      {hint && <span className="muted" style={{ fontSize: 12 }}>{hint}</span>}
+    </label>
+  );
+
+  return (
+    <Modal title={party ? `Edit ${party.org_name}’s details` : 'Add another organisation to this complaint'} onClose={onClose}>
+      {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        {party
+          ? 'Every change is recorded on the timeline with the old and new value, and their deadlines are recalculated.'
+          : <>For the same issue with a second organisation, for example a debt collector and the
+            supplier it is collecting for. It keeps its own reference, dates and complaints procedure,
+            and shares this complaint’s emails, documents and timeline with {c.org_name}.</>}
+      </p>
+      <form onSubmit={save}>
+        <label className="field">
+          <span className="lbl">Organisation (its procedure sets their deadlines)</span>
+          <select value={form.organisation_id} onChange={(e) => pickOrg(e.target.value)}>
+            <option value="">— Not saved yet (general timescales) —</option>
+            {orgs.filter((o) => !onIt.has(o.id)).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Not listed? Add it on the <Link to="/organisations">Organisations</Link> page so its own procedure is used, or type the name below.
+          </span>
+        </label>
+        <div className="form-grid">
+          <label className="field">
+            <span className="lbl">Organisation name *</span>
+            <input required value={form.org_name} onChange={(e) => set('org_name', e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">Type</span>
+            <select value={form.org_type} disabled={Boolean(form.organisation_id)}
+              onChange={(e) => set('org_type', e.target.value)}>
+              {Object.entries(ORG_TYPE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label className="field full">
+            <span className="lbl">How they’re involved (optional)</span>
+            <input value={form.relationship} onChange={(e) => set('relationship', e.target.value)}
+              placeholder={`e.g. Debt collector acting for ${c.org_name}`} />
+          </label>
+          <label className="field">
+            <span className="lbl">Their reference</span>
+            <input value={form.reference} onChange={(e) => set('reference', e.target.value)} />
+            <span className="muted" style={{ fontSize: 12 }}>The mailboxes are searched for it, and emails quoting it are brought onto this complaint.</span>
+          </label>
+          {dateField('raised_on', 'Complaint made to them on *')}
+          {!party && (
+            <label className="field">
+              <span className="lbl">Where it stands with them</span>
+              <select value={form.stage} onChange={(e) => set('stage', e.target.value)}>
+                <option value="stage_1">Stage 1 (just made, or waiting for their answer)</option>
+                <option value="stage_2">Stage 2 (asked them for a review)</option>
+                <option value="ombudsman">Referred to the ombudsman</option>
+              </select>
+            </label>
+          )}
+          {stage !== 'stage_1' && dateField('stage_started_on', 'Stage 2 requested on', 'Their Stage 2 deadline counts from this')}
+          {dateField('acknowledged_on', 'They acknowledged on')}
+          {dateField('responded_on', `They responded on (${STAGE_LABEL[stage] || 'current stage'})`)}
+          {dateField('final_response_on', 'Their final response', 'The referral window often counts from this')}
+        </div>
+        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : party ? 'Save changes' : 'Add organisation'}</button>
         </div>
       </form>
     </Modal>

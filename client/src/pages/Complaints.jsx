@@ -4,6 +4,8 @@ import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 import EmailAutomation from '../components/EmailAutomation.jsx';
 import TidyUp from '../components/TidyUp.jsx';
+import BouncedEmails from '../components/BouncedEmails.jsx';
+import RecheckAll from '../components/RecheckAll.jsx';
 
 const STAGE_LABEL = {
   stage_1: 'Stage 1',
@@ -521,7 +523,9 @@ export default function Complaints() {
     return <div className="spinner">Loading complaints…</div>;
   }
 
-  const overdue = items.filter((c) => c.needs_chasing);
+  // Any organisation on a complaint needing chasing counts (a complaint can be
+  // with more than one: the debt collector and the supplier).
+  const overdue = items.filter((c) => c.any_needs_chasing ?? c.needs_chasing);
   const open = items.filter((c) => c.state === 'open');
   const byFilter =
     filter === 'overdue' ? overdue :
@@ -536,13 +540,16 @@ export default function Complaints() {
   const q = search.trim().toLowerCase();
   const qk = q.replace(/[^a-z0-9]/g, '');
   const shown = !q ? byFilter : items.filter((c) =>
-    [c.subject, c.org_name, c.property, c.ref_code, c.reference, c.our_reference, c.category]
+    [c.subject, c.org_name, c.property, c.ref_code, c.reference, c.our_reference, c.category,
+      ...(c.parties || []).flatMap((p) => [p.org_name, p.reference])]
       .some((v) => String(v || '').toLowerCase().includes(q)) ||
     (qk.length >= 4 && (c.account_numbers || []).some((a) => String(a).toLowerCase().replace(/[^a-z0-9]/g, '').includes(qk))));
 
   return (
     <>
       <EmailAutomation onChanged={() => { load(); loadUnfiled(); setTidyKey((k) => k + 1); }} />
+      <RecheckAll onChanged={load} />
+      <BouncedEmails refreshKey={tidyKey} />
       <TidyUp refreshKey={tidyKey} onChanged={load} />
 
       {unfiled.length > 0 && (
@@ -566,7 +573,7 @@ export default function Complaints() {
                   <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}>
                     <option value="">Choose the complaint…</option>
                     {open.map((c) => (
-                      <option key={c.id} value={c.id}>{c.org_name}: {c.subject}</option>
+                      <option key={c.id} value={c.id}>{(c.org_names || [c.org_name]).join(' + ')}: {c.subject}</option>
                     ))}
                   </select>
                   <button className="btn-primary btn-sm"
@@ -676,14 +683,27 @@ export default function Complaints() {
                     )}
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}
                   </td>
-                  <td className="muted">{c.org_name}</td>
-                  <td><span className="badge navy">{STAGE_LABEL[c.stage] || c.stage}</span></td>
-                  <td className={`due ${c.needs_chasing ? 'overdue' : ''}`}>
-                    {c.status === 'ack_overdue' || c.status === 'awaiting_ack'
-                      ? <>{formatDate(c.ack_due)}<div className="muted" style={{ fontSize: 11 }}>acknowledgement</div></>
-                      : formatDate(c.response_due)}
+                  {/* One line per organisation when it is with more than one. */}
+                  <td className="muted">
+                    {[c, ...(c.parties || [])].map((t) => <div key={t.id}>{t.org_name}</div>)}
                   </td>
-                  <td><StatusBadge c={c} /></td>
+                  <td>
+                    {[c, ...(c.parties || [])].map((t) => (
+                      <div key={t.id}><span className="badge navy">{STAGE_LABEL[t.stage] || t.stage}</span></div>
+                    ))}
+                  </td>
+                  <td className="due">
+                    {[c, ...(c.parties || [])].map((t) => (
+                      <div key={t.id} className={t.needs_chasing ? 'overdue' : ''}>
+                        {t.status === 'ack_overdue' || t.status === 'awaiting_ack'
+                          ? <>{formatDate(t.ack_due)}<div className="muted" style={{ fontSize: 11 }}>acknowledgement</div></>
+                          : formatDate(t.response_due)}
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    {[c, ...(c.parties || [])].map((t) => <div key={t.id}><StatusBadge c={t} /></div>)}
+                  </td>
                 </tr>
               ))}
             </tbody>
