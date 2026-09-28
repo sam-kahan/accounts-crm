@@ -16,13 +16,18 @@ export { reviewSignature };
 // ---------------------------------------------------------------------------
 
 const REVIEW_INSTRUCTION =
-  'Write the standing review of this complaint as it is TODAY. In "summary" (3-5 sentences): where ' +
+  'Write the standing review of this complaint as it is TODAY. FIRST add a key "headline": ONE short ' +
+  'plain-English instruction, at most 15 words, starting with a verb, saying exactly what to do next ' +
+  'and by when (e.g. "Email E.ON Next asking for the final bill by 8 Oct." or "Nothing to do until ' +
+  '5 Oct: wait for their Stage 1 answer."). No reasons in it; the reasons go in "summary". ' +
+  'In "summary" (2-3 short sentences): where ' +
   'it stands, what the organisation most recently said (with its date), and whether they are keeping ' +
   'to the timescales of their procedure — naming any deadline they have missed. In ' +
   '"recommended_action": the single next thing Greenco should do, and by when. In "steps": the next ' +
-  'few steps in order. In "email": the email for that next step, ready to check and send — or, if ' +
-  'nothing needs sending yet, the email to send if they miss their next deadline, and say so in ' +
-  '"caution". Use the facts and dates in the context only. ALSO add a key "next_action": ' +
+  'few steps in order. In "email": the email for that next step, complete from greeting to sign-off ' +
+  'so it can be pasted as a reply in their existing email thread as it stands — or, if nothing needs ' +
+  'sending yet, the email to send if they miss their next deadline. Add "email_now": true if it ' +
+  'should be sent now, false if it is only kept ready. Use the facts and dates in the context only. ALSO add a key "next_action": ' +
   '{"type": one of "send_email" (the draft should go now), "escalate_stage2", "refer_ombudsman", ' +
   '"record_acknowledgement" or "record_response" (an email or document on file shows they have, but ' +
   'it is not recorded), "resolve", "wait" (nothing to do until a date), "by": "YYYY-MM-DD" or null}. ' +
@@ -35,7 +40,10 @@ export async function refreshReview(id) {
   const ctx = await gatherContext(id, undefined, { files: 2 });
   try {
     const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION });
-    const review = { ...raw, next_action: normaliseNextAction(raw.next_action) };
+    const headline = typeof raw.headline === 'string' && raw.headline.trim()
+      ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
+      : null;
+    const review = { ...raw, headline, next_action: normaliseNextAction(raw.next_action) };
     await query(
       `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
               ai_review_error = NULL WHERE id = $1`,

@@ -77,6 +77,25 @@ const RESOLVE = (t, multi) => ({
     : 'The date it was resolved, and the outcome. This is the record of how it ended.',
   defaultNote: 'Complaint resolved', noteLabel: 'Outcome',
 });
+// The one-line instruction from the AI review. Reviews written before the
+// headline existed fall back to the first sentence of the recommended action.
+function headlineOf(r) {
+  if (!r) return null;
+  if (r.headline) return r.headline;
+  const a = String(r.recommended_action || '').trim();
+  const first = a.match(/^.*?[.!?](\s|$)/)?.[0]?.trim() || a;
+  return first.length > 180 ? `${first.slice(0, 177)}…` : first;
+}
+
+// The email to reply to so a follow-up stays in the same thread: their most
+// recent one (not ours, not sent from here).
+function replyTarget(c) {
+  const ours = String(c.email_address || '').split('@')[1]?.toLowerCase();
+  const theirs = (c.emails || []).filter((e) => e.direction !== 'outbound' &&
+    e.sender_email && !(ours && e.sender_email.toLowerCase().endsWith(`@${ours}`)));
+  return theirs.sort((a, b) => new Date(b.received_at) - new Date(a.received_at))[0] || null;
+}
+
 // Is this organisation's part still running? (complaintRules.js#trackOpen)
 const trackOpen = (t) => t.state === 'open' && !['resolved', 'closed'].includes(t.stage);
 
@@ -166,6 +185,16 @@ export default function ComplaintDetail() {
   }
   function copyText(t) {
     if (t) navigator.clipboard?.writeText(t).catch(() => {});
+  }
+  // "✓ Copied" on the button pressed, for a moment.
+  const [copied, setCopied] = useState(null);
+  function flashCopied(what) {
+    setCopied(what);
+    setTimeout(() => setCopied((w) => (w === what ? null : w)), 2000);
+  }
+  function copyEmail(em) {
+    copyText(em.body);
+    flashCopied('email');
   }
   async function saveDraftToTimeline() {
     if (!ai?.email) return;
@@ -567,17 +596,34 @@ export default function ComplaintDetail() {
           {/* One next step: the AI's when its review is up to date, otherwise
               the one worked out from the deadlines. */}
           {(() => {
-            const aiStep = c.ai_review_current && c.ai_review?.recommended_action;
+            const aiStep = c.ai_review_current && headlineOf(c.ai_review);
             // Without the AI's view, each organisation's own next step, named.
             const text = aiStep || (multi
               ? tracks.filter((t) => t.nextAction).map((t) => `${t.org_name}: ${t.nextAction}`).join(' ')
               : c.nextAction);
             if (!text) return null;
-            const btn = aiStep && c.state === 'open' ? actionButton(c.ai_review.next_action) : null;
+            const live = aiStep && c.state === 'open';
+            const draft = live && c.ai_review?.email?.body ? c.ai_review.email : null;
+            // The email is offered right here whenever there is one; a step
+            // that isn't an email gets its own button too.
+            const btn = live && c.ai_review.next_action?.type !== 'send_email' ? actionButton(c.ai_review.next_action) : null;
             return (
               <div className={`inline-note ${c.any_needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
-                <strong>Next step:</strong> {text}
-                {btn && <div style={{ marginTop: 8 }}>{btn}</div>}
+                <div style={{ fontSize: 16 }}><strong>Next step:</strong> {text}</div>
+                {(draft || btn) && (
+                  <div className="btn-row" style={{ marginTop: 8 }}>
+                    {draft && (
+                      <>
+                        <button className="btn-primary btn-sm" onClick={() => copyEmail(draft)}>
+                          {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+                        </button>
+                        <a className="btn btn-sm" href="#ai-email">See the email</a>
+                        <button className="btn btn-sm" onClick={() => openSend(draft)}>Send from here…</button>
+                      </>
+                    )}
+                    {btn}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -646,11 +692,12 @@ export default function ComplaintDetail() {
         </div>
       )}
 
-      {/* The assistant's standing review */}
+      {/* The assistant's standing review: what to do (one line), the email
+          ready to copy, and the reasons folded away. */}
       {aiEnabled && (
-        <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>
+        <div id="ai-review" className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>
           <div className="card-head">
-            <h2>✨ AI review</h2>
+            <h2>✨ What to do next</h2>
             <div className="btn-row">
               {c.ai_reviewed_at && (
                 <span className="muted" style={{ fontSize: 12 }}>
@@ -671,45 +718,78 @@ export default function ComplaintDetail() {
               </div>
             ) : (
               <>
-                <p style={{ marginTop: 0 }}>{c.ai_review.summary}</p>
+                <div style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.4 }}>{headlineOf(c.ai_review)}</div>
                 {!c.ai_review_current && (
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                     Something has changed since this was written, so it’s being updated…
                   </div>
                 )}
-                {c.ai_review.steps?.length > 0 && (
-                  <ol style={{ margin: '0 0 10px', paddingLeft: 20 }}>
-                    {c.ai_review.steps.map((st, i) => <li key={i} style={{ marginBottom: 4 }}>{st}</li>)}
-                  </ol>
-                )}
-                {c.ai_review.caution && (
-                  <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
-                    <strong>Check:</strong> {c.ai_review.caution}
-                  </div>
-                )}
-                {c.ai_review.email?.body && (
-                  <details>
-                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                      Draft email ready: {c.ai_review.email.subject}
-                    </summary>
-                    <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '8px 0' }}>
-                      {c.ai_review.email.body}
-                    </pre>
-                    <div className="btn-row">
-                      <button className="btn btn-sm"
-                        onClick={() => copyText(`Subject: ${c.ai_review.email.subject}\n\n${c.ai_review.email.body}`)}>
-                        Copy
-                      </button>
-                      <button className="btn-primary btn-sm" onClick={() => openSend(c.ai_review.email)}>
-                        Review &amp; send…
-                      </button>
+
+                {c.ai_review.email?.body && (() => {
+                  const em = c.ai_review.email;
+                  const later = c.ai_review.email_now === false;
+                  const reply = replyTarget(c);
+                  return (
+                    <div id="ai-email" style={{ marginTop: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, padding: 14 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                        {later ? 'Keep this ready: send it only if they miss their date' : 'The email to send'}
+                      </div>
+                      <ol style={{ margin: '0 0 10px', paddingLeft: 20, fontSize: 14 }}>
+                        {reply ? (
+                          <li>
+                            In Outlook, open their email <strong>“{reply.subject || '(no subject)'}”</strong> from{' '}
+                            {reply.sender_name || reply.sender_email} ({formatDate(londonDay(reply.received_at))}) and press{' '}
+                            <strong>Reply all</strong>, so it stays in the same thread.
+                          </li>
+                        ) : (
+                          <li>
+                            Start a new email to <strong>{c.org_email || 'their complaints address'}</strong>
+                            {c.org_email && <> <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(c.org_email)}>Copy address</button></>}.
+                          </li>
+                        )}
+                        <li>
+                          Copy this in{!reply && <>, with the subject</>}.{' '}
+                          <span className="muted">Copy in <code>{c.email_address}</code> too, so their reply files itself here.</span>
+                        </li>
+                      </ol>
+                      {!reply && (
+                        <div style={{ fontSize: 14, marginBottom: 6 }}>
+                          <span className="muted">Subject:</span> <strong>{em.subject}</strong>{' '}
+                          <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => { copyText(em.subject); flashCopied('subject'); }}>
+                            {copied === 'subject' ? '✓ Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      )}
+                      <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
+                        {em.body}
+                      </pre>
+                      <div className="btn-row">
+                        <button className="btn-primary btn-sm" onClick={() => copyEmail(em)}>
+                          {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+                        </button>
+                        <button className="btn btn-sm" onClick={() => openSend(em)}>Or send it from here…</button>
+                      </div>
                     </div>
-                  </details>
-                )}
+                  );
+                })()}
+
+                <details style={{ marginTop: 14 }}>
+                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Why, and the full picture</summary>
+                  <p>{c.ai_review.summary}</p>
+                  {c.ai_review.steps?.length > 0 && (
+                    <ol style={{ margin: '0 0 10px', paddingLeft: 20 }}>
+                      {c.ai_review.steps.map((st, i) => <li key={i} style={{ marginBottom: 4 }}>{st}</li>)}
+                    </ol>
+                  )}
+                  {c.ai_review.caution && (
+                    <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+                      <strong>Check:</strong> {c.ai_review.caution}
+                    </div>
+                  )}
+                </details>
                 <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                  Written by AI from this complaint’s procedure, emails and documents. Check any
-                  figure or date against the documents before relying on it. Nothing is sent
-                  unless you press Send.
+                  Written by AI from this complaint’s procedure, emails and documents. Check any figure or
+                  date before relying on it. Nothing is sent unless you send it.
                 </div>
               </>
             )}
@@ -858,7 +938,7 @@ export default function ComplaintDetail() {
                     </a>
                     <div className="muted" style={{ fontSize: 12 }}>
                       {(a.size_bytes / 1024).toFixed(0)} KB
-                      {a.source_email_id ? ' · attached to an email' : ''}
+                      {a.source_email_id ? ` · attached to ${a.copies > 1 ? `${a.copies} emails (shown once)` : 'an email'}` : a.copies > 1 ? ` · on file ${a.copies} times (shown once)` : ''}
                       {a.ai_readable ? ' · read by the AI assistant' : ' · not readable by the AI'}
                     </div>
                   </td>

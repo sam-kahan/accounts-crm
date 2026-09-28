@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import multer from 'multer';
 import { query } from '../db/pool.js';
@@ -71,15 +72,44 @@ async function extractText(filePath, mimetype) {
 // Everything else it can only read if text was extracted on upload.
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const isPdf = (a) => a.mimetype === 'application/pdf' || /\.pdf$/i.test(a.filename || '');
-const isImage = (a) => IMAGE_TYPES.includes(a.mimetype);
+// The type a photo really is. Mail systems often label one
+// "application/octet-stream" or "image/jpg", which the AI refuses, so the
+// file name decides when the label doesn't.
+const EXT_IMAGE = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+export function imageTypeOf(a) {
+  const t = String(a?.mimetype || '').toLowerCase();
+  if (IMAGE_TYPES.includes(t)) return t;
+  if (t === 'image/jpg' || t === 'image/pjpeg') return 'image/jpeg';
+  const ext = String(a?.filename || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return EXT_IMAGE[ext] || null;
+}
+const isImage = (a) => Boolean(imageTypeOf(a));
+
+// The same document is one document: by its content hash, or (for one not
+// hashed yet) by name and size. Keeps the first of each, and counts copies.
+export function onePerDocument(rows) {
+  const seen = new Map();
+  const out = [];
+  for (const a of rows) {
+    const key = a.sha256 || `${a.filename}|${a.size_bytes}`;
+    if (seen.has(key)) {
+      seen.get(key).copies += 1;
+      continue;
+    }
+    const first = { ...a, copies: 1 };
+    seen.set(key, first);
+    out.push(first);
+  }
+  return out;
+}
 
 export function listAttachments(complaintId) {
   return query(
-    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, source_email_id,
+    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, source_email_id, sha256,
             (extracted_text IS NOT NULL) AS has_text
        FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at DESC`,
     [complaintId],
-  ).then((r) => r.rows.map((a) => ({ ...a, ai_readable: a.has_text || isPdf(a) || isImage(a) })));
+  ).then((r) => onePerDocument(r.rows).map((a) => ({ ...a, ai_readable: a.has_text || isPdf(a) || isImage(a) })));
 }
 
 // The PDFs and photos on a complaint as content blocks for the AI, oldest
@@ -94,15 +124,18 @@ const MAX_BLOCK_BYTES = 20 * 1024 * 1024;
 // asked for by a person sends them all, oldest first.
 export async function attachmentBlocks(complaintId, { maxFiles = MAX_BLOCK_FILES, newest = false } = {}) {
   const { rows } = await query(
-    `SELECT filename, mimetype, size_bytes, storage_path FROM complaint_attachments
+    `SELECT filename, mimetype, size_bytes, storage_path, sha256 FROM complaint_attachments
       WHERE complaint_id = $1 AND extracted_text IS NULL ORDER BY uploaded_at ${newest ? 'DESC' : 'ASC'}`,
     [complaintId],
   );
+  // Each document once: the same scan on ten emails is one document, and
+  // sending it ten times would only cost ten times as much.
+  const unique = onePerDocument(rows);
   const blocks = [];
   const skipped = [];
   let bytes = 0;
   let files = 0;
-  for (const a of rows.filter((r) => isPdf(r) || isImage(r))) {
+  for (const a of unique.filter((r) => isPdf(r) || isImage(r))) {
     if (files >= Math.min(maxFiles, MAX_BLOCK_FILES) || bytes + (a.size_bytes || 0) > MAX_BLOCK_BYTES) {
       skipped.push(a.filename);
       continue;
@@ -120,7 +153,7 @@ export async function attachmentBlocks(complaintId, { maxFiles = MAX_BLOCK_FILES
     blocks.push(
       isPdf(a)
         ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } }
-        : { type: 'image', source: { type: 'base64', media_type: a.mimetype, data: buf.toString('base64') } },
+        : { type: 'image', source: { type: 'base64', media_type: imageTypeOf(a), data: buf.toString('base64') } },
     );
   }
   if (skipped.length) {
@@ -141,15 +174,33 @@ export function attachmentTexts(complaintId) {
   ).then((r) => r.rows);
 }
 
+const sha256Of = (buf) => createHash('sha256').update(buf).digest('hex');
+
+// The document already on this complaint with the same content, if any.
+async function alreadyOn(complaintId, hash) {
+  return (await query(
+    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, (extracted_text IS NOT NULL) AS has_text
+       FROM complaint_attachments WHERE complaint_id = $1 AND sha256 = $2 LIMIT 1`,
+    [complaintId, hash],
+  )).rows[0] || null;
+}
+
 export async function saveAttachment(complaintId, file) {
+  const hash = sha256Of(await fs.readFile(file.path));
+  const existing = await alreadyOn(complaintId, hash);
+  if (existing) {
+    // Already on file: the new copy is removed rather than kept twice.
+    await fs.unlink(file.path).catch(() => {});
+    return { ...existing, duplicate: true };
+  }
   const text = await extractText(file.path, file.mimetype);
   const { rows } = await query(
     `INSERT INTO complaint_attachments
-       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text)
-     VALUES ($1,$2,$3,$4,$5,$6)
+       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, sha256)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
      RETURNING id, complaint_id, filename, mimetype, size_bytes, uploaded_at,
                (extracted_text IS NOT NULL) AS has_text`,
-    [complaintId, file.originalname, file.mimetype, file.size, file.path, text],
+    [complaintId, file.originalname, file.mimetype, file.size, file.path, text, hash],
   );
   return rows[0];
 }
@@ -161,6 +212,10 @@ export async function saveAttachmentBuffer(complaintId, { filename, mimetype, bu
   const dir = path.join(UPLOAD_ROOT, complaintId);
   const rel = path.relative(UPLOAD_ROOT, dir);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid upload path');
+  // The same file on another email of this complaint is already on file.
+  const hash = sha256Of(buffer);
+  const existing = await alreadyOn(complaintId, hash);
+  if (existing) return { id: existing.id, filename: existing.filename, duplicate: true };
   await fs.mkdir(dir, { recursive: true });
   const safe = String(filename || 'attachment').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
   const filePath = path.join(dir, `${globalThis.crypto.randomUUID().slice(0, 8)}__${safe}`);
@@ -168,12 +223,32 @@ export async function saveAttachmentBuffer(complaintId, { filename, mimetype, bu
   const text = await extractText(filePath, mimetype);
   const { rows } = await query(
     `INSERT INTO complaint_attachments
-       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, source_email_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, source_email_id, sha256)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING id, filename`,
-    [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null],
+    [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null, hash],
   );
   return rows[0];
+}
+
+// Documents saved before hashes were kept: hashed in the background, a batch
+// at a time (reading files, no AI), so duplicates already on file are shown
+// and sent once. Returns how many were hashed.
+export async function backfillAttachmentHashes({ limit = 500 } = {}) {
+  const { rows } = await query(
+    'SELECT id, storage_path FROM complaint_attachments WHERE sha256 IS NULL ORDER BY uploaded_at LIMIT $1', [limit],
+  );
+  let n = 0;
+  for (const r of rows) {
+    try {
+      await query('UPDATE complaint_attachments SET sha256 = $2 WHERE id = $1', [r.id, sha256Of(await fs.readFile(r.storage_path))]);
+      n += 1;
+    } catch {
+      // A missing file: marked so it isn't tried again every start-up.
+      await query(`UPDATE complaint_attachments SET sha256 = 'missing:' || id WHERE id = $1`, [r.id]).catch(() => {});
+    }
+  }
+  return n;
 }
 
 export async function getAttachment(attId) {

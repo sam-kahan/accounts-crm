@@ -188,6 +188,12 @@ app.listen(config.port, () => {
     .then(() => searchAccountEmails().catch((err) => console.error('  Account search:', err.message)))
     .then(() => runAutoImport())
     .catch((err) => console.error('  Automatic import could not carry on:', err.message));
+  // Documents saved before hashes were kept: hashed so duplicates show once
+  // (reading files only; no AI).
+  import('./services/attachments.js')
+    .then(({ backfillAttachmentHashes }) => backfillAttachmentHashes({ limit: 5000 }))
+    .then((n) => n && console.log(`  Documents hashed: ${n}`))
+    .catch((err) => console.error('  Document hashes:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));
