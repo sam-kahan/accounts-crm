@@ -25,7 +25,6 @@ export default function EmailAutomation({ onChanged }) {
   const [mailboxes, setMailboxes] = useState('');
   const [scanOpen, setScanOpen] = useState(false);
   const [scanBoxes, setScanBoxes] = useState('');
-  const [months, setMonths] = useState(24);
   const [cands, setCands] = useState([]);
   const [busyId, setBusyId] = useState(null);
 
@@ -68,7 +67,7 @@ export default function EmailAutomation({ onChanged }) {
     tone = 'warn';
     status = <>Last checked {ago(lc.at)}, with a problem: {lc.errors?.[0]}</>;
   } else {
-    status = <>✓ Emails are checked automatically every 5 minutes. Last checked {ago(lc.at)}.</>;
+    status = <>✓ New emails are checked every 5 minutes (only new ones, each read once). Last checked {ago(lc.at)}.</>;
   }
 
   async function saveWatched() {
@@ -84,7 +83,7 @@ export default function EmailAutomation({ onChanged }) {
   async function startScan() {
     try {
       const list = scanBoxes.split(/[,\s;]+/).map((m) => m.trim()).filter(Boolean);
-      await api.complaints.startPastScan(list, Number(months));
+      await api.complaints.startPastScan(list, 12);
       setScanOpen(false);
       await load();
     } catch (e) {
@@ -175,16 +174,12 @@ export default function EmailAutomation({ onChanged }) {
                 <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
                   Searches these mailboxes for complaint emails, reads each thread, and lists the
                   complaints it finds for you to import or skip. Nothing is created until you choose.
+                  It looks at the last 12 months only (an ombudsman won’t normally take anything older), and
+                  never reads the same thread twice, so running it again only reads new threads.
                 </div>
                 <div className="btn-row">
                   <input value={scanBoxes} onChange={(e) => setScanBoxes(e.target.value)} style={{ maxWidth: 380 }}
                     placeholder="accounts@greenco.co.uk, your.name@greenco.co.uk" />
-                  <select value={months} onChange={(e) => setMonths(e.target.value)}>
-                    <option value={12}>Last 12 months</option>
-                    <option value={24}>Last 2 years</option>
-                    <option value={36}>Last 3 years</option>
-                    <option value={60}>Last 5 years</option>
-                  </select>
                   <button className="btn-primary btn-sm" onClick={startScan} disabled={!a.mailbox_connected || !a.ai}>Start</button>
                   <button className="btn-ghost btn-sm" onClick={() => setScanOpen(false)}>Cancel</button>
                 </div>

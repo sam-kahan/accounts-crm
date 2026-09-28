@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { fetchMailboxSince } from './graphMail.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting, watchedMailboxes } from './settings.js';
+import { postcodeOf } from './orgMatch.js';
 
 // ---------------------------------------------------------------------------
 // Watching a mailbox people already copy (accounts@), so nothing has to be
@@ -11,9 +12,12 @@ import { getSetting, setSetting, watchedMailboxes } from './settings.js';
 // left alone and never stored:
 //   thread  a reply in the same email thread as one already on a complaint:
 //           filed on that complaint with certainty
-//   watch   to or from an organisation we have an open complaint with: the AI
-//           decides whether it is about the complaint (and it is discarded if
-//           not)
+//   watch   to or from an organisation we have an open complaint with AND
+//           mentioning a complaint (the word, a stage, an ombudsman, a final
+//           response) or one of its references or its property's postcode:
+//           the AI decides whether it is about the complaint (discarded if
+//           not). An ordinary bill or reminder from British Gas is never read
+//           by the AI just because we have a complaint open with them.
 //   new     sent by us with "complaint" in it: possibly a new complaint, which
 //           the AI can create
 // routeWatchedEmail() is the rule, pure and tested; the rest fetches and stores.
@@ -29,18 +33,28 @@ const PUBLIC_DOMAINS = new Set([
 
 export const domainOf = (addr) => String(addr || '').toLowerCase().split('@')[1] || '';
 
-export function routeWatchedEmail(e, { ourDomain, threads, orgDomains }) {
+// Words that make an email worth the AI's time. Checked on the subject and
+// the preview Microsoft sends with the message list, so ruling an email out
+// costs nothing.
+const COMPLAINT_WORDS = /complain|ombudsman|stage\s*(?:1|2|one|two)\b|final\s+(?:response|viewpoint|decision)|deadlock|escalat|redress/i;
+
+export function routeWatchedEmail(e, { ourDomain, threads, orgDomains, markers = [] }) {
   if (e.conversationId && threads.has(e.conversationId)) {
     return { method: 'thread', complaintId: threads.get(e.conversationId) };
   }
   const people = [e.senderEmail, ...(e.toAddresses || [])].filter(Boolean);
-  if (people.some((a) => orgDomains.has(domainOf(a)))) return { method: 'watch', complaintId: null };
+  const text = `${e.subject || ''} ${e.bodyPreview || ''}`;
+  if (people.some((a) => orgDomains.has(domainOf(a)))) {
+    const lower = text.toLowerCase();
+    if (COMPLAINT_WORDS.test(text) || markers.some((m) => lower.includes(m))) return { method: 'watch', complaintId: null };
+    return null;
+  }
   const fromUs = domainOf(e.senderEmail) === ourDomain;
   const external = people.some((a) => {
     const d = domainOf(a);
     return d && d !== ourDomain;
   });
-  if (fromUs && external && /complain/i.test(`${e.subject || ''} ${e.bodyPreview || ''}`)) {
+  if (fromUs && external && /complain/i.test(text)) {
     return { method: 'watch_new', complaintId: null };
   }
   return null;
@@ -72,7 +86,15 @@ async function watchContext() {
   const orgDomains = new Set(
     addrs.map(domainOf).filter((d) => d && d !== ourDomain && !PUBLIC_DOMAINS.has(d)),
   );
-  return { ourDomain, threads, orgDomains };
+  // What identifies an open complaint in an email that doesn't use the word:
+  // our reference, theirs, and the property postcode.
+  const open = (await query(
+    `SELECT ref_code, reference, our_reference, property FROM complaints WHERE state = 'open'`,
+  )).rows;
+  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, postcodeOf(c.property)])
+    .filter((m) => m && String(m).trim().length >= 5)
+    .map((m) => String(m).trim().toLowerCase()))];
+  return { ourDomain, threads, orgDomains, markers };
 }
 
 // Look at the new mail in every watched mailbox. Returns the ids stored, for

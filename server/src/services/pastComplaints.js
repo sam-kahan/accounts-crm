@@ -95,6 +95,11 @@ export function couldBeOurComplaint(msgs, ourDomain) {
 async function runScan({ mailboxes, months, carry = null }) {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - months);
+  // Only complaints still live are worth bringing in: every ombudsman we deal
+  // with must be approached within 12 months (of the final response, or of
+  // the problem), so a thread with nothing in the last year is left alone.
+  const activeSince = new Date();
+  activeSince.setMonth(activeSince.getMonth() - 12);
   const errors = [];
 
   // 1. Search, and group into threads not already known.
@@ -168,7 +173,12 @@ async function runScan({ mailboxes, months, carry = null }) {
       }
       let extracted;
       const text = threadText(msgs);
-      if (!couldBeOurComplaint(msgs, config.complaintEmail.domain.toLowerCase())) {
+      const lastAt = new Date(msgs[msgs.length - 1].receivedAt);
+      if (lastAt < activeSince) {
+        // Nothing has happened on it for a year: past every ombudsman's
+        // referral window, so not worth reading. Remembered, never re-read.
+        extracted = { is_complaint: false, why: 'no activity in the last 12 months' };
+      } else if (!couldBeOurComplaint(msgs, config.complaintEmail.domain.toLowerCase())) {
         extracted = { is_complaint: false, why: 'no email from Greenco to an outside party' };
       } else if (!(await triageComplaintThread(text).catch(() => true))) {
         extracted = { is_complaint: false, why: 'quick look: not a complaint Greenco made' };
@@ -603,7 +613,7 @@ export async function resumeInterruptedScan() {
   }
   running = true;
   await progress({ stage: 'Carrying on after a restart' });
-  runScan({ mailboxes: s.mailboxes || [], months: s.months || 24, carry: { read: s.read || 0, found: s.found || 0 } })
+  runScan({ mailboxes: s.mailboxes || [], months: s.months || 12, carry: { read: s.read || 0, found: s.found || 0 } })
     .catch(async (err) => progress({ status: 'failed', error: err.message }))
     .finally(() => { running = false; });
   return true;

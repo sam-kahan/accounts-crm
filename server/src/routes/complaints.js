@@ -517,7 +517,9 @@ router.put(
 
 const scanInput = z.object({
   mailboxes: z.array(z.string().trim().toLowerCase().regex(EMAIL, 'Not an email address')).min(1).max(10),
-  months: z.number().int().min(1).max(84),
+  // A year is as far back as is worth going: an ombudsman won't take a
+  // complaint older than that.
+  months: z.number().int().min(1).max(12),
 });
 router.post(
   '/past/scan',

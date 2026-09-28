@@ -17,11 +17,20 @@ test('a reply in a thread already on a complaint is filed there with certainty',
     { method: 'thread', complaintId: 'complaint-1' });
 });
 
-test('mail to or from an organisation with an open complaint is kept for the AI', () => {
-  assert.equal(routeWatchedEmail(email({ senderEmail: 'crm@livingcity.co.uk' }), ctx).method, 'watch');
+test('mail with an organisation we have a complaint with goes to the AI only if it is about a complaint', () => {
+  const withMarkers = { ...ctx, markers: ['gc-c-rb2ngy', 'l8 7ad'] };
+  // an ordinary bill or reminder: never read by the AI
+  assert.equal(routeWatchedEmail(email({ senderEmail: 'crm@livingcity.co.uk', subject: 'Your statement' }), withMarkers), null);
   assert.equal(routeWatchedEmail(email({
-    senderEmail: 'sam.kahan@greenco.co.uk', toAddresses: ['info@LivingCity.co.uk'],
-  }), ctx).method, 'watch');
+    senderEmail: 'sam.kahan@greenco.co.uk', toAddresses: ['info@LivingCity.co.uk'], subject: 'Payment',
+  }), withMarkers), null);
+  // about a complaint: by its words, its reference, or its property postcode
+  assert.equal(routeWatchedEmail(email({ senderEmail: 'crm@livingcity.co.uk', subject: 'Your complaint' }), withMarkers).method, 'watch');
+  assert.equal(routeWatchedEmail(email({ senderEmail: 'crm@livingcity.co.uk', subject: 'Stage 2 review' }), withMarkers).method, 'watch');
+  assert.equal(routeWatchedEmail(email({ senderEmail: 'crm@livingcity.co.uk', bodyPreview: 'Re GC-C-RB2NGY: we have looked into' }), withMarkers).method, 'watch');
+  assert.equal(routeWatchedEmail(email({
+    senderEmail: 'sam.kahan@greenco.co.uk', toAddresses: ['info@LivingCity.co.uk'], subject: 'Apt 78, L8 7AD',
+  }), withMarkers).method, 'watch');
 });
 
 test('our own email to an outside address mentioning a complaint may be a new complaint', () => {

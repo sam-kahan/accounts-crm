@@ -548,6 +548,17 @@ the page says how far each date can be trusted.
   2 Moorfields) are two complaints (`unitOf`), and a thread with no postcode
   can't join two properties together.
 - Tidy up keeps the **open** complaint when merging an open and a closed one.
+- **The search looks back 12 months, no further**, and a thread with nothing
+  in the last 12 months is ruled out before any AI reads it (remembered, never
+  re-read): every ombudsman we deal with normally needs a complaint within 12
+  months, so older ones aren't worth bringing in. It only ever runs when a
+  person presses it (or to finish one a restart interrupted).
+- **The 5-minute watcher is cheap by rule.** It reads only mail newer than its
+  last check. Mail with an organisation we have an open complaint with reaches
+  the AI only if the subject or preview mentions a complaint (the word, a
+  stage, an ombudsman, a final response) or one of its references or property
+  postcodes (`routeWatchedEmail`); their ordinary bills and reminders are
+  never read. Replies in a thread already on a complaint are still filed.
 
 ### 2026-09-28 — the system watches accounts@, and finds past complaints
 - **Nothing to forward**: complaint emails already copy accounts@, so the system
