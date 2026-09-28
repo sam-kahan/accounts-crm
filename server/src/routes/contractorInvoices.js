@@ -17,6 +17,8 @@ import {
   commissionStatus,
   commissionableCeiling,
   carriedLineSql,
+  monthEndLinesSql,
+  amountsDisagree,
   invoiceTotalsFromLines,
   matchContractorByName,
   contractorSuggestionFrom,
@@ -450,7 +452,7 @@ async function summarise({ from, to }) {
     `SELECT i.contractor_id, i.region, i.commission_amount, i.commission_vat_inclusive
        FROM contractor_invoices i
       WHERE ${pending}
-        AND ((${inWindow} AND NOT ${carried}) OR i.invoice_date < $1)`,
+        AND ${monthEndLinesSql('i', '$1', '$2')}`,
     [from, to],
   );
   const raises = new Map();
@@ -676,6 +678,8 @@ router.post(
     try {
       d = parse(input, stripEmpty(req.body));
       const contractor = await getContractor(d.contractor_id);
+      const mismatch = amountsDisagree(d);
+      if (mismatch) throw new HttpError(400, mismatch);
       const amounts = reconcileAmounts(d);
       const commission = resolveCommission(contractor, d, amounts, d.commissionable_amount ?? null);
       const { region } = resolveRegion(d.region, d.property, contractor);
@@ -749,6 +753,12 @@ router.put(
     }
 
     const contractor = await getContractor(current.contractor_id);
+    const mismatch = amountsDisagree({
+      net_amount: d.net_amount ?? current.net_amount,
+      vat_amount: d.vat_amount ?? current.vat_amount,
+      total_amount: d.total_amount,
+    });
+    if (mismatch) throw new HttpError(400, mismatch);
     // Amounts fall back to what is already stored, so editing just the property
     // doesn't zero the money.
     const amounts = reconcileAmounts({
@@ -788,7 +798,7 @@ router.put(
            paid_from = COALESCE($16, paid_from), paid_on = $17, notes = $18,
            region = COALESCE($19, region), commission_fixed = $20,
            commissionable_amount = $21, commissionable_note = $22
-         WHERE id = $1 RETURNING id`,
+         WHERE id = $1 AND commission_invoice_id IS NULL RETURNING id`,
         [
           req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
           d.property ?? current.property, d.landlord_ref ?? current.landlord_ref,
@@ -825,6 +835,12 @@ router.put(
         );
       }
       throw err;
+    }
+    // Raised onto a commission invoice between the check above and the save
+    // (the raise locks the line, so the save waits and then finds it billed):
+    // refused, so a billed line never changes under its invoice.
+    if (!rows[0]) {
+      throw new HttpError(409, 'This invoice was put on a commission invoice while you were editing it. Void that invoice first if it needs changing.');
     }
     const { rows: full } = await query(`SELECT ${JOINED} ${FROM} WHERE i.id = $1`, [rows[0].id]);
     res.json(decorate(full[0]));

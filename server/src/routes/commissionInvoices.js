@@ -601,10 +601,15 @@ router.post(
       `UPDATE commission_invoices
           SET status = $2,
               paid_on = CASE WHEN $2 = 'paid' THEN COALESCE($3::date, CURRENT_DATE) ELSE NULL END
-        WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
+        WHERE id = $1 AND status <> 'void' RETURNING ${COLS.replaceAll('ci.', '')}`,
       [req.params.id, d.status, d.paid_on || null],
     );
-    if (!rows[0]) throw new HttpError(404, 'Commission invoice not found');
+    // A void invoice's lines were released; bringing it back would leave an
+    // invoice with nothing on it and hide its month's lines from month end.
+    if (!rows[0]) {
+      const ex = (await query('SELECT status FROM commission_invoices WHERE id = $1', [req.params.id])).rows[0];
+      throw ex ? new HttpError(409, 'A void invoice can’t be brought back. Raise the month end again instead.') : new HttpError(404, 'Commission invoice not found');
+    }
     return res.json(decorate(rows[0]));
   }),
 );
@@ -654,16 +659,20 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') RETURNING id",
+      // Never one that went across to Greenco Invoicing: it is numbered and
+      // sent there, and deleting it here would leave it standing over there.
+      "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL RETURNING id",
       [req.params.id],
     );
     if (!rows[0]) {
-      const { rows: exists } = await query('SELECT status FROM commission_invoices WHERE id = $1', [
+      const { rows: exists } = await query('SELECT status, external_id FROM commission_invoices WHERE id = $1', [
         req.params.id,
       ]);
-      throw exists[0]
-        ? new HttpError(409, `A ${exists[0].status} invoice can’t be deleted — void it instead.`)
-        : new HttpError(404, 'Commission invoice not found');
+      throw !exists[0]
+        ? new HttpError(404, 'Commission invoice not found')
+        : exists[0].external_id
+          ? new HttpError(409, 'This invoice went across to Greenco Invoicing, so it is kept as the record. Void it instead.')
+          : new HttpError(409, `A ${exists[0].status} invoice can’t be deleted — void it instead.`);
     }
     res.status(204).end();
   }),

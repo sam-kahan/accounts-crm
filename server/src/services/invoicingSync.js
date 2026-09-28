@@ -196,12 +196,14 @@ async function releaseOrphanedLines() {
 export async function syncInvoicing() {
   // The orphan sweep is ours alone — no network, no configuration — so it runs
   // whether or not the bridge is switched on.
-  const orphans = await releaseOrphanedLines();
   if (!config.invoicing.enabled) {
-    return { skipped: 'Greenco Invoicing is not configured', orphans };
+    return { skipped: 'Greenco Invoicing is not configured', orphans: await releaseOrphanedLines() };
   }
   const pushes = await pushStranded();
   const withdrawals = await withdrawVoided();
   const refreshes = await refreshOpen();
+  // Last, so an invoice the refresh has just found cancelled over there
+  // hands its lines back tonight rather than tomorrow.
+  const orphans = await releaseOrphanedLines();
   return { pushes, withdrawals, refreshes, orphans };
 }

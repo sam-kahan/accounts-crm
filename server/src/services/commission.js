@@ -127,6 +127,20 @@ export function reconcileAmounts({ net_amount, vat_amount, total_amount }) {
   };
 }
 
+// When all three amounts are stated they must add up: net + VAT = total. A
+// total left over from reading the document after the net was corrected
+// would otherwise cost a gross deal on the wrong figure and put the wrong
+// total on the commission invoice. Returns a sentence to show, or null.
+export function amountsDisagree({ net_amount, vat_amount, total_amount }) {
+  const net = toPence(net_amount);
+  const vat = toPence(vat_amount);
+  const total = toPence(total_amount);
+  if (net === null || vat === null || total === null) return null;
+  if (net + vat === total) return null;
+  return `The net (${formatPence(net)}) and VAT (${formatPence(vat)}) add up to ${formatPence(net + vat)}, ` +
+    `not the total of ${formatPence(total)}. Correct whichever is wrong.`;
+}
+
 // The VAT and gross of a commission invoice we raise (net = the commission
 // total for the period).
 export function invoiceTotals(netAmount, vatRate) {
