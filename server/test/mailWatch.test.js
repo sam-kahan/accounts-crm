@@ -47,3 +47,16 @@ test('domainOf is case-insensitive and safe on junk', () => {
   assert.equal(domainOf(null), '');
   assert.equal(domainOf('nodomain'), '');
 });
+
+import { couldBeOurComplaint } from '../src/services/pastComplaints.js';
+
+test('past search: only threads with an email from us to an outside party are read', () => {
+  const us = 'greenco.co.uk';
+  assert.equal(couldBeOurComplaint([
+    { senderEmail: 'sam.kahan@greenco.co.uk', toAddresses: ['crm@livingcity.co.uk'] },
+  ], us), true);
+  assert.equal(couldBeOurComplaint([
+    { senderEmail: 'sam.kahan@greenco.co.uk', toAddresses: ['accounts@greenco.co.uk'] },
+    { senderEmail: 'tenant@gmail.com', toAddresses: ['accounts@greenco.co.uk'] },
+  ], us), false);
+});

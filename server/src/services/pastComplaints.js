@@ -2,7 +2,8 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
 import { searchMailbox, fetchConversation } from './graphMail.js';
-import { parseImportedComplaint } from './complaintAssistant.js';
+import { parseImportedComplaint, triageComplaintThread } from './complaintAssistant.js';
+import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
@@ -61,7 +62,20 @@ function threadText(msgs) {
       `to ${(m.toAddresses || []).join(', ')} — "${m.subject || ''}"\n` +
       String(m.bodyText || m.bodyPreview || '').slice(0, 6000))
     .join('\n\n')
-    .slice(0, 60000);
+    .slice(0, 30000);
+}
+
+// A complaint Greenco made has at least one email from Greenco to someone
+// outside it. Threads without one (internal chat, newsletters, someone
+// complaining TO us) are ruled out without being read by the AI at all.
+export function couldBeOurComplaint(msgs, ourDomain) {
+  return msgs.some((m) => {
+    if (domainOf(m.senderEmail) !== ourDomain) return false;
+    return (m.toAddresses || []).some((a) => {
+      const d = domainOf(a);
+      return d && d !== ourDomain;
+    });
+  });
 }
 
 async function runScan({ mailboxes, months }) {
@@ -105,13 +119,20 @@ async function runScan({ mailboxes, months }) {
       const msgs = await fetchConversation(t.mailbox, t.conversationId);
       if (!msgs.length) continue;
       let extracted;
-      try {
-        extracted = await parseImportedComplaint({
-          text: threadText(msgs),
-          hint: 'This is an email thread found in a Greenco mailbox. Decide first whether it is a complaint Greenco made.',
-        });
-      } catch {
-        extracted = { is_complaint: false };
+      const text = threadText(msgs);
+      if (!couldBeOurComplaint(msgs, config.complaintEmail.domain.toLowerCase())) {
+        extracted = { is_complaint: false, why: 'no email from Greenco to an outside party' };
+      } else if (!(await triageComplaintThread(text).catch(() => true))) {
+        extracted = { is_complaint: false, why: 'quick look: not a complaint Greenco made' };
+      } else {
+        try {
+          extracted = await parseImportedComplaint({
+            text,
+            hint: 'This is an email thread found in a Greenco mailbox. Decide first whether it is a complaint Greenco made.',
+          });
+        } catch {
+          extracted = { is_complaint: false, why: 'could not be read' };
+        }
       }
       const isComplaint = extracted.is_complaint !== false && Boolean(extracted.subject);
       if (isComplaint) found += 1;
