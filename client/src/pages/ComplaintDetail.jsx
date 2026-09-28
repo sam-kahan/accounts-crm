@@ -67,7 +67,6 @@ export default function ComplaintDetail() {
   // A dated action (acknowledged / response / escalate / resolved) being recorded.
   const [action, setAction] = useState(null);
   const [editing, setEditing] = useState(false);
-  const [inbox, setInbox] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   // The date to record for each new email, starting from what the AI read.
   const [emailDates, setEmailDates] = useState({});
@@ -82,7 +81,6 @@ export default function ComplaintDetail() {
   useEffect(() => {
     load();
     api.complaints.aiConfig().then((r) => setAiEnabled(r.enabled)).catch(() => {});
-    api.complaints.emailConfig().then((r) => setInbox(r.inbox)).catch(() => {});
   }, [id]);
 
   async function runAssistant() {
@@ -346,6 +344,12 @@ export default function ComplaintDetail() {
             <Info label="Our reference" value={c.ref_code} />
             <Info label="Their reference" value={c.reference || '—'} />
             <Info label="Sent by" value={c.channel || '—'} />
+            <Info label="Email address for this complaint" value={
+              <span style={{ wordBreak: 'break-all' }}>
+                {c.email_address}{' '}
+                <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(c.email_address)}>Copy</button>
+              </span>
+            } />
           </div>
 
           {open && (
@@ -600,15 +604,14 @@ export default function ComplaintDetail() {
         </div>
         <div className="card-body" style={{ paddingBottom: 0 }}>
           <div className="inline-note" style={{ marginBottom: 12 }}>
-            <strong>Just forward anything about this complaint</strong> to{' '}
-            <code style={{ fontWeight: 600, wordBreak: 'break-all' }}>{inbox || c.email_address}</code>
-            {inbox && <button className="btn-ghost btn-sm" onClick={() => copyText(inbox)}>Copy</button>}
+            <strong>This complaint’s email address:</strong>{' '}
+            <code style={{ fontWeight: 600, wordBreak: 'break-all' }}>{c.email_address}</code>{' '}
+            <button className="btn-ghost btn-sm" onClick={() => copyText(c.email_address)}>Copy</button>
             <div style={{ fontSize: 12, marginTop: 4 }}>
-              It’s read in full, filed here with its attachments, and their acknowledgement or
-              response is recorded on the date they sent it. Tip: copy{' '}
-              <code>{c.email_address}</code>{' '}
-              <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(c.email_address)}>Copy</button>{' '}
-              into emails you send them, and replies to all arrive here without forwarding.
+              Forward anything about this complaint to it, and copy it in whenever you email
+              them, so their replies arrive here by themselves. Each email is read in full, its
+              attachments saved, and their acknowledgement or response recorded on the date they
+              sent it.
             </div>
           </div>
         </div>

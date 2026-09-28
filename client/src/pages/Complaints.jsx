@@ -499,13 +499,13 @@ export default function Complaints() {
     <>
       {inbox && (
         <div className="inline-note" style={{ marginBottom: 16 }}>
-          <strong>Forward any email about a complaint to{' '}
-            <code style={{ wordBreak: 'break-all' }}>{inbox}</code></strong>{' '}
+          <strong>Not sure which complaint an email is about?</strong> Forward it to{' '}
+          <code style={{ wordBreak: 'break-all' }}>{inbox}</code>{' '}
           <button className="btn-ghost btn-sm" onClick={() => navigator.clipboard?.writeText(inbox).catch(() => {})}>Copy</button>
           <div style={{ fontSize: 12, marginTop: 4 }}>
-            The system reads it, works out which complaint it belongs to, saves its attachments,
-            records their acknowledgement or response on the date they sent it, and updates the
-            AI review. Anything it isn’t sure of waits for you here or on the complaint.
+            The system works out which complaint it belongs to and files it. When you know the
+            complaint, use its own address instead (shown on the complaint), which is always
+            filed in the right place.
           </div>
         </div>
       )}

@@ -409,8 +409,11 @@ the page says how far each date can be trusted.
   as document/image blocks (`attachmentBlocks`, capped at 10 files / 20 MB, and
   it's told by name which it didn't get), with the same untrusted-content rule.
   It is told which timescales are defaults so it doesn't quote them as theirs.
-- **Forward it and the system does the rest** (migration `020`). Anything about
-  any complaint can be forwarded to ONE address, `complaint-inbox@<domain>`
+- **Forward it and the system does the rest** (migration `020`). The complaint
+  page shows ONE address, the complaint's own — forward to it, CC it on emails
+  to them — because it files with certainty. The general address is a fallback,
+  shown only on the Complaints list, for when you don't know which complaint an
+  email is about: anything can be forwarded to `complaint-inbox@<domain>`
   (`complaintInboxAddress()`; "inbox" is five letters so it can't collide with
   a six-character code). `services/complaintEmailProcessor.js#processEmail` then,
   per new email: fetches the whole body and file attachments from Graph
