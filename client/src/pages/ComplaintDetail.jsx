@@ -230,8 +230,10 @@ export default function ComplaintDetail() {
   // in): record it on the timeline as sent today, then have the next step
   // worked out again, so it moves on instead of repeating itself.
   const [markingSent, setMarkingSent] = useState(false);
-  async function markSent(em) {
-    const on = prompt('The date you sent it (YYYY-MM-DD):', todayISO());
+  async function markSent(em, escalate = false) {
+    const on = prompt(escalate
+      ? 'The date you sent the Stage 2 request (YYYY-MM-DD). Their Stage 2 deadline counts from it:'
+      : 'The date you sent it (YYYY-MM-DD):', todayISO());
     if (!on) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(on) || on > todayISO()) { setMsg('Enter the date as YYYY-MM-DD, not in the future.'); return; }
     setMarkingSent(true);
@@ -241,6 +243,7 @@ export default function ComplaintDetail() {
         event_date: on, type: 'chased',
         note: `Sent the email "${em.subject || 'the drafted email'}" from Outlook.`,
       });
+      if (escalate) await api.complaints.escalate(id, on);
       setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
       setMsg('Recorded as sent. The next step has been worked out again.');
     } catch (e) {
@@ -266,22 +269,27 @@ export default function ComplaintDetail() {
   }
 
   // Open the compose modal, optionally pre-filled from an AI draft.
-  function openSend(draft) {
+  // `then: 'escalate'`: the email is the Stage 2 request, so sending it also
+  // moves the complaint to Stage 2 (one press, not two).
+  function openSend(draft, then = null) {
     setSend({
       to: c.org_email || '',
       cc: '',
       subject: draft?.subject || `Re: ${c.subject} [${c.ref_code}]`,
       body: draft?.body || '',
+      then,
     });
   }
   async function doSend() {
     setSending(true);
     setMsg(null);
     try {
-      await api.complaints.sendEmail(id, send);
+      const r = await api.complaints.sendEmail(id, send);
       setSend(null);
       await load();
-      setMsg('Email sent and logged to this complaint.');
+      setMsg(r?.escalated
+        ? 'Sent, and the complaint is now at Stage 2 (from today). Their Stage 2 deadline is on the checklist.'
+        : 'Email sent and logged to this complaint.');
     } catch (e) {
       setMsg(e.message);
     } finally {
@@ -542,11 +550,14 @@ export default function ComplaintDetail() {
     return hits.length === 1 ? (partyIdOf(hits[0]) || 'main') : undefined;
   };
   // The step buttons for one organisation's part.
-  const trackButtons = (t) => {
+  // `secondary`: under the next step, so these read as "or do it yourself"
+  // rather than a second set of instructions.
+  const trackButtons = (t, secondary = false) => {
     const tAt = t.stage === 'stage_1' || t.stage === 'stage_2';
     if (!trackOpen(t)) return null;
     return (
-      <div className="btn-row" style={{ marginTop: 4 }}>
+      <div className="btn-row" style={{ marginTop: 4, alignItems: 'center' }}>
+        {secondary && <span className="muted" style={{ fontSize: 12 }}>Or record a step yourself:</span>}
         {t.stage === 'stage_1' && !t.acknowledged_on && !t.responded_on && (
           <button className="btn btn-sm" onClick={() => setAction(ACK(t, multi))}>Record acknowledgement…</button>
         )}
@@ -554,7 +565,7 @@ export default function ComplaintDetail() {
           <button className="btn btn-sm" onClick={() => setAction(RESPONSE(t, multi))}>Record their response…</button>
         )}
         {tAt && (
-          <button className="btn-navy btn-sm" onClick={() => setAction(ESCALATE(t, multi))}>
+          <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => setAction(ESCALATE(t, multi))}>
             {t.stage === 'stage_1' ? 'Escalate to Stage 2…' : 'Refer to ombudsman…'}
           </button>
         )}
@@ -667,24 +678,39 @@ export default function ComplaintDetail() {
             // The email is offered right here whenever there is one; a step
             // that isn't an email gets its own button too.
             const btn = live && c.ai_review.next_action?.type !== 'send_email' ? actionButton(c.ai_review.next_action) : null;
+            // Asking for Stage 2 is done BY the email: one button for both.
+            const withEscalate = Boolean(draft) && !multi && c.stage === 'stage_1' &&
+              c.ai_review.next_action?.type === 'escalate_stage2';
             return (
               <div className={`inline-note ${c.any_needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 16 }}><strong>Next step:</strong> {text}</div>
                 {(draft || btn) && (
                   <div className="btn-row" style={{ marginTop: 8 }}>
-                    {draft && (
+                    {draft && withEscalate ? (
+                      // The email IS the Stage 2 request: one press sends it
+                      // and escalates.
                       <>
-                        <button className="btn-primary btn-sm" onClick={() => copyEmail(draft)}>
+                        <button className="btn-primary btn-sm" onClick={() => openSend(draft, 'escalate')}>
+                          Send it and escalate to Stage 2…
+                        </button>
+                        <button className="btn btn-sm" onClick={() => copyEmail(draft)}>
                           {copied === 'email' ? '✓ Copied' : 'Copy the email'}
                         </button>
-                        <a className="btn btn-sm" href="#ai-email">See the email</a>
-                        <button className="btn btn-sm" onClick={() => openSend(draft)}>Send from here…</button>
-                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(draft)}>
-                          {markingSent ? 'Updating…' : '✓ I’ve sent it'}
+                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(draft, true)}>
+                          {markingSent ? 'Updating…' : 'Sent it from Outlook: escalate…'}
                         </button>
                       </>
-                    )}
-                    {btn}
+                    ) : draft ? (
+                      <>
+                        <button className="btn-primary btn-sm" onClick={() => openSend(draft)}>Send it from here…</button>
+                        <button className="btn btn-sm" onClick={() => copyEmail(draft)}>
+                          {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+                        </button>
+                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(draft)}>
+                          {markingSent ? 'Updating…' : '✓ I sent it from Outlook'}
+                        </button>
+                      </>
+                    ) : btn}
                   </div>
                 )}
               </div>
@@ -724,7 +750,7 @@ export default function ComplaintDetail() {
 
           {/* One organisation: its steps are here. More than one: each
               organisation's steps are in its own section below. */}
-          {!multi && trackButtons(c)}
+          {!multi && trackButtons(c, true)}
         </div>
       </div>
 
@@ -907,16 +933,23 @@ export default function ComplaintDetail() {
                       <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
                         {em.body}
                       </pre>
-                      <div className="btn-row">
-                        <button className="btn-primary btn-sm" onClick={() => copyEmail(em)}>
-                          {copied === 'email' ? '✓ Copied' : 'Copy the email'}
-                        </button>
-                        <button className="btn btn-sm" onClick={() => openSend(em)}>Or send it from here…</button>
-                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(em)}
-                          title="You sent it from Outlook: it's recorded on the timeline and the next step is worked out again">
-                          {markingSent ? 'Updating the next step…' : '✓ I’ve sent it'}
-                        </button>
-                      </div>
+                      {(() => {
+                        const esc = !later && !multi && c.stage === 'stage_1' && c.ai_review.next_action?.type === 'escalate_stage2';
+                        return (
+                          <div className="btn-row">
+                            <button className="btn-primary btn-sm" onClick={() => openSend(em, esc ? 'escalate' : null)}>
+                              {esc ? 'Send it and escalate to Stage 2…' : 'Send it from here…'}
+                            </button>
+                            <button className="btn btn-sm" onClick={() => copyEmail(em)}>
+                              {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+                            </button>
+                            <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(em, esc)}
+                              title="You sent it from Outlook: it's recorded on the timeline and the next step is worked out again">
+                              {markingSent ? 'Updating the next step…' : esc ? 'Sent it from Outlook: escalate…' : '✓ I sent it from Outlook'}
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                   // Waiting: the follow-up is kept ready but folded away, so
@@ -1467,7 +1500,7 @@ export default function ComplaintDetail() {
       {/* Compose / send modal */}
       {send && (
         <Modal
-          title="Send email"
+          title={send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}
           onClose={() => setSend(null)}
           footer={
             <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
@@ -1477,7 +1510,7 @@ export default function ComplaintDetail() {
                 onClick={doSend}
                 disabled={sending || !send.to || !send.subject || !send.body}
               >
-                {sending ? 'Sending…' : 'Send'}
+                {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : 'Send'}
               </button>
             </div>
           }

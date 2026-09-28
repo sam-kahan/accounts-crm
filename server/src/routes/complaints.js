@@ -248,6 +248,9 @@ const sendInput = z.object({
   cc: z.string().optional().nullable(),
   subject: z.string().min(1),
   body: z.string().min(1),
+  // The email IS the Stage 2 request: sending it escalates the complaint, in
+  // the same press (dated today).
+  then: z.enum(['escalate']).optional().nullable(),
 });
 
 // A permissive-but-real email check. Rejects addresses with CR/LF (header
@@ -269,6 +272,11 @@ router.post(
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const complaint = await decorate(rows[0]);
+    // Checked before anything is sent, so an email never goes out for a step
+    // that then can't be recorded.
+    if (d.then === 'escalate' && complaint.stage !== 'stage_1') {
+      throw new HttpError(400, 'Only a complaint at Stage 1 can be escalated to Stage 2 this way.');
+    }
 
     const to = parseRecipients(d.to);
     const cc = parseRecipients(d.cc);
@@ -291,9 +299,10 @@ router.post(
       body: d.body,
       sentBy: who(req),
     });
+    if (d.then === 'escalate') await escalateTrack(complaint.id, null, todayISO(), who(req));
     const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
     scheduleReview(complaint.id);
-    res.json({ sent: true, complaint: await decorate(updated) });
+    res.json({ sent: true, escalated: d.then === 'escalate', complaint: await decorate(updated) });
   }),
 );
 
@@ -1133,7 +1142,16 @@ router.post(
   '/:id/escalate',
   asyncHandler(async (req, res) => {
     const d = parse(escalateInput, req.body || {});
-    const track = await loadTrack(req.params.id, d.party_id);
+    await escalateTrack(req.params.id, d.party_id, d.date, who(req));
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// Move one organisation's track on to its next stage (Stage 2, then the
+// ombudsman), its clock starting on `date`. Shared by the Escalate button
+// and "Send it and escalate to Stage 2".
+async function escalateTrack(complaintId, partyId, date, by) {
+    const track = await loadTrack(complaintId, partyId);
     const complaint = track.row;
 
     const next =
@@ -1141,7 +1159,8 @@ router.post(
       complaint.stage === 'stage_2' ? 'ombudsman' : null;
     if (!next) throw new HttpError(400, 'Complaint cannot be escalated further');
 
-    const escalatedOn = d.date || todayISO();
+    const escalatedOn = date || todayISO();
+    if (escalatedOn > todayISO()) throw new HttpError(400, 'That date is in the future');
     const { rule } = await ruleForComplaint(complaint);
 
     // Assignments read the row as it was, so a Stage 2 response recorded as
@@ -1159,19 +1178,17 @@ router.post(
       `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
        VALUES ($1,$2,$3,'escalated',$4,$5)`,
       [
-        req.params.id, track.party?.id || null, escalatedOn,
+        complaintId, track.party?.id || null, escalatedOn,
         next === 'ombudsman'
           ? `Referred to ${theOmbudsman(rule.ombudsman)}`
           : 'Escalated to Stage 2',
-        who(req),
+        by,
       ],
     );
 
     await recomputeTrack(track);
-    scheduleReview(req.params.id);
-    res.json(await decoratedById(req.params.id));
-  }),
-);
+    scheduleReview(complaintId);
+}
 
 router.put(
   '/:id',
