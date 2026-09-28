@@ -463,6 +463,7 @@ export default function Complaints() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
   const [search, setSearch] = useState('');
+  const [copiedAccount, setCopiedAccount] = useState(null);
   const [tidyKey, setTidyKey] = useState(0);
   const [showNew, setShowNew] = useState(false);
   // An email from the general inbox being turned into a new complaint.
@@ -526,6 +527,11 @@ export default function Complaints() {
   // Any organisation on a complaint needing chasing counts (a complaint can be
   // with more than one: the debt collector and the supplier).
   const overdue = items.filter((c) => c.any_needs_chasing ?? c.needs_chasing);
+  function copyAccount(a) {
+    navigator.clipboard?.writeText(a).catch(() => {});
+    setCopiedAccount(a);
+    setTimeout(() => setCopiedAccount((x) => (x === a ? null : x)), 1500);
+  }
   const open = items.filter((c) => c.state === 'open');
   const byFilter =
     filter === 'overdue' ? overdue :
@@ -651,6 +657,7 @@ export default function Complaints() {
             <thead>
               <tr>
                 <th>Subject</th>
+                <th>Account number</th>
                 <th>Organisation</th>
                 <th>Stage</th>
                 <th>Next deadline</th>
@@ -665,7 +672,8 @@ export default function Complaints() {
                   role="button"
                   tabIndex={0}
                   aria-label={`Open complaint: ${c.subject}`}
-                  onClick={() => navigate(`/complaints/${c.id}`)}
+                  // Selecting text (an account number to copy) isn't a click to open.
+                  onClick={() => { if (!window.getSelection()?.toString()) navigate(`/complaints/${c.id}`); }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
@@ -676,12 +684,27 @@ export default function Complaints() {
                   <td>
                     <strong>{c.subject}</strong>
                     {c.needs_check && <span className="badge amber" style={{ marginLeft: 6 }}>To check</span>}
-                    {c.state === 'open' && c.ai_review?.recommended_action && (
+                    {c.state === 'open' && (c.ai_review?.headline || c.ai_review?.recommended_action) && (
                       <div style={{ fontSize: 12, marginTop: 2 }}>
-                        <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.recommended_action}
+                        <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.headline || c.ai_review.recommended_action}
                       </div>
                     )}
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}
+                  </td>
+                  {/* The account number: the key to every complaint, shown to
+                      copy without opening it. */}
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {(c.account_numbers || []).length ? c.account_numbers.map((a) => (
+                      <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontWeight: 700, fontSize: 14, userSelect: 'all' }}>{a}</span>
+                        <button type="button" className="btn-ghost btn-sm" style={{ padding: '0 4px', fontSize: 12 }}
+                          aria-label={`Copy account number ${a}`}
+                          onClick={(e) => { e.stopPropagation(); copyAccount(a); }}
+                          onKeyDown={(e) => e.stopPropagation()}>
+                          {copiedAccount === a ? '✓' : 'Copy'}
+                        </button>
+                      </div>
+                    )) : <span className="muted">—</span>}
                   </td>
                   {/* One line per organisation when it is with more than one. */}
                   <td className="muted">
