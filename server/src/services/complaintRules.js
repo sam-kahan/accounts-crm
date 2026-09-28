@@ -245,6 +245,9 @@ export function effectiveRule(org, type) {
   rule.sourceOf = {};
   for (const [key, col] of Object.entries(ORG_FIELDS)) {
     if (org.procedure_sources?.[col]) rule.sourceOf[key] = org.procedure_sources[col];
+    // A standard figure filled in because they publish none is still the
+    // standard, and is said to be (not passed off as their own).
+    if (org.procedure_sources?.[col] === 'standard' && !rule.defaulted.includes(key)) rule.defaulted.push(key);
   }
   // A named scheme with no website typed: use the known one for that name —
   // never the type default's, which would point at a different scheme.

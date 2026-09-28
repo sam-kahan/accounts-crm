@@ -30,7 +30,9 @@ const REVIEW_INSTRUCTION =
 
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
-  const ctx = await gatherContext(id);
+  // The two newest files only: the rest were read by earlier reviews, and
+  // re-sending every PDF on every refresh is where the AI cost went.
+  const ctx = await gatherContext(id, undefined, { files: 2 });
   try {
     const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION });
     const review = { ...raw, next_action: normaliseNextAction(raw.next_action) };
@@ -46,10 +48,11 @@ export async function refreshReview(id) {
   }
 }
 
-// Fire-and-forget refresh after a change. Several changes in quick succession
-// (an email with three attachments, say) collapse into one review.
+// Fire-and-forget refresh after a change. Every change within a couple of
+// minutes (an import, the emails found for it, their attachments) collapses
+// into ONE review, rather than one per change.
 const pending = new Map();
-export function scheduleReview(id, delayMs = 4000) {
+export function scheduleReview(id, delayMs = 120000) {
   if (!config.anthropic.enabled || !id) return;
   clearTimeout(pending.get(id));
   pending.set(

@@ -40,20 +40,22 @@ const input = z.object({
   phone: z.string().optional().nullable(),
   ombudsman_name: z.string().optional().nullable(),
   ombudsman_url: z.string().optional().nullable(),
-  ombudsman_referral_months: z.number().int().min(0).max(120).optional().nullable(),
-  stage1_response_days: z.number().int().min(0).max(400).optional().nullable(),
-  stage2_response_days: z.number().int().min(0).max(400).optional().nullable(),
-  ack_days: z.number().int().min(0).max(400).optional().nullable(),
+  ombudsman_referral_months: z.number().int().min(1).max(120).optional().nullable(),
+  stage1_response_days: z.number().int().min(1).max(400).optional().nullable(),
+  stage2_response_days: z.number().int().min(1).max(400).optional().nullable(),
+  ack_days: z.number().int().min(1).max(400).optional().nullable(),
   procedure_ref: z.string().max(200).optional().nullable(),
   stage1_clock: z.enum(['receipt', 'acknowledgement']).optional().nullable(),
-  ombudsman_after_weeks: z.number().int().min(0).max(104).optional().nullable(),
+  ombudsman_after_weeks: z.number().int().min(1).max(104).optional().nullable(),
   referral_from: z.enum(['raised', 'final_response']).optional().nullable(),
   procedure_summary: z.string().optional().nullable(),
   legal_basis: z.string().optional().nullable(),
   sources: z.array(z.object({ title: z.string(), url: z.string() })).optional().nullable(),
   unconfirmed: z.array(z.string()).optional().nullable(),
   procedure_evidence: z.record(z.string()).optional().nullable(),
-  procedure_sources: z.record(z.enum(['document', 'research', 'entered'])).optional().nullable(),
+  procedure_sources: z.record(z.enum(['document', 'research', 'entered', 'standard'])).optional().nullable(),
+  // Their website was researched just now (recorded, so nobody is asked to do it again).
+  researched_now: z.boolean().optional(),
   research_status: z.enum(['none', 'researched', 'document', 'manual']).optional(),
   // "I have checked these against their published procedure." Sent on every
   // save: ticking it stamps who and when; saving without it clears the stamp,
@@ -72,10 +74,14 @@ const who = (req) => req.user?.name || req.user?.email || null;
 
 // Where each figure came from (migration 027), saved alongside the figures.
 async function saveSources(row, d) {
-  if (!row || d.procedure_sources === undefined) return row;
+  if (!row || (d.procedure_sources === undefined && !d.researched_now)) return row;
   const { rows } = await query(
-    `UPDATE organisations SET procedure_sources = $2 WHERE id = $1 RETURNING ${COLS}`,
-    [row.id, d.procedure_sources && Object.keys(d.procedure_sources).length ? JSON.stringify(d.procedure_sources) : null],
+    `UPDATE organisations
+        SET procedure_sources = CASE WHEN $3 THEN $2::jsonb ELSE procedure_sources END,
+            researched_at = CASE WHEN $4 THEN now() ELSE researched_at END
+      WHERE id = $1 RETURNING ${COLS}`,
+    [row.id, d.procedure_sources && Object.keys(d.procedure_sources).length ? JSON.stringify(d.procedure_sources) : null,
+      d.procedure_sources !== undefined, Boolean(d.researched_now)],
   );
   return rows[0];
 }

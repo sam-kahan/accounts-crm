@@ -105,9 +105,14 @@ function cleanUrl(v) {
     return null;
   }
 }
+// A figure the source gave, or null. Nothing stated is null, never 0
+// (Number(null) is 0, which saved "0 days" as their timescale), and a figure
+// below the smallest real one is taken as not stated rather than clamped up.
 function clampInt(v, min, max) {
+  if (v === null || v === undefined || v === '') return null;
   const n = Math.round(Number(v));
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
+  if (!Number.isFinite(n) || n < min) return null;
+  return Math.min(max, n);
 }
 const PROFILE_KEYS = [
   'procedure_ref', 'complaints_email', 'complaints_url', 'phone', 'ombudsman_name', 'ombudsman_url',
@@ -128,7 +133,7 @@ export function normaliseProfile(p) {
   return {
     procedure_ref: cleanStr(p.procedure_ref, 200),
     referral_from: oneOf(p.referral_from, ['raised', 'final_response']),
-    ombudsman_after_weeks: clampInt(p.ombudsman_after_weeks, 0, 104),
+    ombudsman_after_weeks: clampInt(p.ombudsman_after_weeks, 1, 104),
     stage1_clock: oneOf(p.stage1_clock, ['receipt', 'acknowledgement']),
     evidence,
     unconfirmed: Array.isArray(p.unconfirmed)
@@ -139,10 +144,10 @@ export function normaliseProfile(p) {
     phone: cleanStr(p.phone, 64),
     ombudsman_name: cleanStr(p.ombudsman_name, 200),
     ombudsman_url: cleanUrl(p.ombudsman_url),
-    ombudsman_referral_months: clampInt(p.ombudsman_referral_months, 0, 120),
-    stage1_response_days: clampInt(p.stage1_response_days, 0, 400),
-    stage2_response_days: clampInt(p.stage2_response_days, 0, 400),
-    ack_days: clampInt(p.ack_days, 0, 400),
+    ombudsman_referral_months: clampInt(p.ombudsman_referral_months, 1, 120),
+    stage1_response_days: clampInt(p.stage1_response_days, 1, 400),
+    stage2_response_days: clampInt(p.stage2_response_days, 1, 400),
+    ack_days: clampInt(p.ack_days, 1, 400),
     procedure_summary: cleanStr(p.procedure_summary, 8000) || '',
     legal_basis: cleanStr(p.legal_basis, 8000) || '',
     sources: Array.isArray(p.sources)

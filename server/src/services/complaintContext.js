@@ -70,7 +70,7 @@ export function decorateWithOrg(c, org) {
 
 // Gather a complaint's full context (row + rule + timeline + emails + attachment
 // text) for the AI endpoints. Throws 404 if the complaint doesn't exist.
-export async function gatherContext(id, extraContext) {
+export async function gatherContext(id, extraContext, { files } = {}) {
   const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [id]);
   if (!rows[0]) throw new HttpError(404, 'Complaint not found');
   const complaint = await decorate(rows[0]);
@@ -88,7 +88,7 @@ export async function gatherContext(id, extraContext) {
   const merged = [extraContext, docText].filter(Boolean).join('\n\n');
   // PDFs and photos can't be turned into text here, so they go to the model
   // as documents in their own right — letters and statements are mostly PDFs.
-  const blocks = await attachmentBlocks(id);
+  const blocks = await attachmentBlocks(id, files === undefined ? {} : { maxFiles: files, newest: true });
   return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks };
 }
 

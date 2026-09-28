@@ -89,10 +89,13 @@ export function listAttachments(complaintId) {
 const MAX_BLOCK_FILES = 10;
 const MAX_BLOCK_BYTES = 20 * 1024 * 1024;
 
-export async function attachmentBlocks(complaintId) {
+// maxFiles / newest: the automatic review sends only the latest couple of
+// files (every PDF page costs AI credits on every review); the assistant
+// asked for by a person sends them all, oldest first.
+export async function attachmentBlocks(complaintId, { maxFiles = MAX_BLOCK_FILES, newest = false } = {}) {
   const { rows } = await query(
     `SELECT filename, mimetype, size_bytes, storage_path FROM complaint_attachments
-      WHERE complaint_id = $1 AND extracted_text IS NULL ORDER BY uploaded_at`,
+      WHERE complaint_id = $1 AND extracted_text IS NULL ORDER BY uploaded_at ${newest ? 'DESC' : 'ASC'}`,
     [complaintId],
   );
   const blocks = [];
@@ -100,7 +103,7 @@ export async function attachmentBlocks(complaintId) {
   let bytes = 0;
   let files = 0;
   for (const a of rows.filter((r) => isPdf(r) || isImage(r))) {
-    if (files >= MAX_BLOCK_FILES || bytes + (a.size_bytes || 0) > MAX_BLOCK_BYTES) {
+    if (files >= Math.min(maxFiles, MAX_BLOCK_FILES) || bytes + (a.size_bytes || 0) > MAX_BLOCK_BYTES) {
       skipped.push(a.filename);
       continue;
     }

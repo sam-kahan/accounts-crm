@@ -11,8 +11,16 @@ test('clamps out-of-range integers and coerces numeric strings', () => {
   });
   assert.equal(p.stage1_response_days, 10);
   assert.equal(p.stage2_response_days, 400); // clamped to max
-  assert.equal(p.ack_days, 0); // clamped to min
+  assert.equal(p.ack_days, null); // below any real figure: not stated
   assert.equal(p.ombudsman_referral_months, 12);
+});
+
+test('a figure the source did not give is null, never 0', () => {
+  const p = normaliseProfile({ ack_days: null, stage1_response_days: '', stage2_response_days: 0 });
+  assert.equal(p.ack_days, null);
+  assert.equal(p.stage1_response_days, null);
+  assert.equal(p.stage2_response_days, null);
+  assert.equal(p.ombudsman_after_weeks, null);
 });
 
 test('rejects non-http(s) URLs (e.g. javascript:)', () => {

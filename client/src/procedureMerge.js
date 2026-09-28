@@ -4,7 +4,39 @@ export const FIGURES = [
   'ack_days', 'stage1_response_days', 'stage2_response_days', 'stage1_clock',
   'ombudsman_name', 'ombudsman_url', 'ombudsman_referral_months', 'referral_from', 'ombudsman_after_weeks',
 ];
-export const blank = (x) => x === '' || x === null || x === undefined;
+// 0 is never a real timescale: it is what an unstated figure used to become.
+export const blank = (x) => x === '' || x === null || x === undefined || x === 0 || x === '0';
+
+// The standard for this kind of organisation (from GET /organisations/defaults),
+// by form field.
+const STANDARD_KEY = {
+  ack_days: 'ackDays', stage1_response_days: 'stage1Days', stage2_response_days: 'stage2Days',
+  ombudsman_name: 'ombudsman', ombudsman_url: 'ombudsmanUrl', ombudsman_referral_months: 'referralMonths',
+  ombudsman_after_weeks: 'ombudsmanAfterWeeks',
+};
+
+// Fill every figure nobody has given with the standard one, marked
+// 'standard', so the form shows real figures (as it did when first set up)
+// and says plainly they are the standard. A figure already standard follows a
+// change of type.
+export function fillStandard(f, defaults) {
+  if (!defaults) return f;
+  const out = { ...f };
+  const sources = { ...(f.procedure_sources || {}) };
+  let changed = false;
+  for (const [k, dk] of Object.entries(STANDARD_KEY)) {
+    const std = defaults[dk];
+    if (std === null || std === undefined || std === '') continue;
+    if (blank(out[k]) || sources[k] === 'standard') {
+      if (out[k] !== std || sources[k] !== 'standard') changed = true;
+      out[k] = std;
+      sources[k] = 'standard';
+    }
+  }
+  if (!changed) return f;
+  out.procedure_sources = sources;
+  return out;
+}
 
 // Merge a researched or read profile into the form, figure by figure:
 //   - their procedure DOCUMENT wins wherever it states a figure;
@@ -23,7 +55,7 @@ export function mergeProfile(f, p, source) {
     if (blank(v)) continue;
     const current = sources[k];
     const mayReplace = source === 'document' ? true
-      : blank(f[k]) || current === 'research' || (!current && f.research_status === 'researched');
+      : blank(f[k]) || current === 'research' || current === 'standard' || (!current && f.research_status === 'researched');
     if (!mayReplace) continue;
     out[k] = v;
     sources[k] = source;
@@ -31,6 +63,7 @@ export function mergeProfile(f, p, source) {
     else delete evidence[k];
     took.push(k);
   }
+  if (source === 'research') out.researched_now = true;
   if (source === 'document' && p.procedure_ref) out.procedure_ref = p.procedure_ref;
   else if (blank(f.procedure_ref) && p.procedure_ref) out.procedure_ref = p.procedure_ref;
   if (p.evidence?.procedure_ref) evidence.procedure_ref = p.evidence.procedure_ref;
@@ -47,7 +80,7 @@ export function mergeProfile(f, p, source) {
   out.procedure_sources = sources;
   // Only what is still blank after both is "not stated" (and then the
   // standard for this kind of organisation applies, and says so).
-  out.unconfirmed = FIGURES.filter((k) => blank(out[k]));
+  out.unconfirmed = FIGURES.filter((k) => blank(out[k]) || out.procedure_sources?.[k] === 'standard');
   out.research_status = source === 'document' || f.research_status === 'document' ? 'document' : source === 'research' ? 'researched' : f.research_status;
   out.verified = false; // new figures have not been checked by anyone yet
   return { form: out, took };

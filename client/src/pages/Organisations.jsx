@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
-import { FIGURES, blank, mergeProfile } from '../procedureMerge.js';
+import { FIGURES, blank, mergeProfile, fillStandard } from '../procedureMerge.js';
 
 const EMPTY = {
   name: '', type: 'council', location: '', complaints_email: '', complaints_url: '',
@@ -50,7 +50,10 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   });
 
   useEffect(() => {
-    api.organisations.defaults(form.type).then(setDefaults).catch(() => setDefaults(null));
+    api.organisations.defaults(form.type).then((d) => {
+      setDefaults(d);
+      setForm((f) => fillStandard(f, d)); // figures nobody gives show the standard, marked as such
+    }).catch(() => setDefaults(null));
   }, [form.type]);
   useEffect(() => {
     if (initial?.id) api.organisations.documents(initial.id).then(setDocs).catch(() => setDocs([]));
@@ -58,6 +61,8 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
 
   async function research() {
     if (!form.name.trim()) { setError('Enter the organisation name first.'); return; }
+    if ((form.researched_at || Object.values(form.procedure_sources || {}).includes('research')) &&
+        !confirm('Their website has already been researched. Research it again? (Only worth it if their procedure has changed: it uses AI credits.)')) return;
     setResearching(true);
     setError(null);
     setInfo(null);
@@ -65,7 +70,8 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       const p = await api.organisations.research({
         name: form.name, type: form.type, location: form.location,
       });
-      const { form: next, took } = mergeProfile(form, p, 'research');
+      const { form: merged, took } = mergeProfile(form, p, 'research');
+      const next = fillStandard({ ...merged, researched_at: new Date().toISOString() }, defaults);
       setForm(next);
       setInfo(took.length
         ? `Researched from their website: ${took.length} figure${took.length === 1 ? '' : 's'} filled in, each with the source it came from. Anything from their own procedure document was kept.`
@@ -90,7 +96,10 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       // Whatever neither the document nor earlier research gave is researched
       // now, so a gap is filled with their real figure where one is published.
       let researched = [];
-      if (next.unconfirmed.length && researchEnabled && next.name.trim()) {
+      // Research only if it has never been done: research already done is
+      // kept (and paid for once), never repeated.
+      const researchedBefore = Boolean(form.researched_at) || Object.values(form.procedure_sources || {}).includes('research');
+      if (!researchedBefore && next.unconfirmed.length && researchEnabled && next.name.trim()) {
         setForm(next);
         setInfo(`Read from “${file.name}”. Researching the ${next.unconfirmed.length} figure${next.unconfirmed.length === 1 ? '' : 's'} it doesn't give…`);
         try {
@@ -100,12 +109,13 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
           /* research failing leaves the standard figures to apply */
         }
       }
+      next = fillStandard(next, defaults);
       setForm(next);
       const parts = [
         `${took.length} from “${file.name}”`,
         kept.length ? `${kept.length} kept from before (the document doesn't mention ${kept.length === 1 ? 'it' : 'them'})` : null,
         researched.length ? `${researched.length} found by research` : null,
-        next.unconfirmed.length ? `${next.unconfirmed.length} not published anywhere, so the standard for this kind of organisation applies` : null,
+        next.unconfirmed.length ? `${next.unconfirmed.length} not published by them, so the standard for this kind of organisation is used` : null,
       ].filter(Boolean);
       setInfo(`Figures: ${parts.join('; ')}. Each says where it came from. The document is kept on this organisation when you save.`);
     } catch (err) {
@@ -158,6 +168,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       unconfirmed: form.unconfirmed || [],
       procedure_evidence: form.procedure_evidence || {},
       procedure_sources: form.procedure_sources || {},
+      researched_now: Boolean(form.researched_now),
       // Typing any timescale in by hand makes it a procedure someone entered.
       research_status:
         form.research_status === 'none' &&
@@ -182,7 +193,10 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
 
   // A figure's source: the quote it came from, or a plain statement that the
   // general default applies because their procedure doesn't say.
-  const FROM = { document: 'From their procedure document', research: 'Researched from their website', entered: 'Typed in' };
+  const FROM = {
+    document: 'From their procedure document', research: 'Researched from their website', entered: 'Typed in',
+    standard: 'Standard for this kind of organisation (they don’t publish their own)',
+  };
   const Evidence = ({ k, dflt }) => {
     const q = form.procedure_evidence?.[k];
     const src = form.procedure_sources?.[k];
@@ -259,14 +273,27 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
               </button>
             </div>
           )}
-          {researchEnabled && FIGURES.some((k) => blank(form[k])) && !researching && !reading && (
-            <div className="inline-note" style={{ marginTop: 10, fontSize: 13 }}>
-              {FIGURES.filter((k) => blank(form[k])).length} of these figures aren’t filled in, so the standard
-              for this kind of organisation is used for them. <strong>Research their website</strong> to fill
-              them with their real figures. It won’t change anything taken from their procedure document or
-              typed in.
-            </div>
-          )}
+          {(() => {
+            const researchedAt = form.researched_at;
+            const standard = FIGURES.filter((k) => form.procedure_sources?.[k] === 'standard' || blank(form[k]));
+            if (researching || reading) return null;
+            if (researchedAt || Object.values(form.procedure_sources || {}).includes('research')) {
+              return (
+                <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                  ✓ Their website was researched{researchedAt ? ` on ${formatDate(String(researchedAt).slice(0, 10))}` : ''}.
+                  {standard.length ? ` ${standard.length} figure${standard.length === 1 ? ' isn’t' : 's aren’t'} published by them, so the standard is used. No need to research again.` : ''}
+                </div>
+              );
+            }
+            if (!researchEnabled || !standard.length) return null;
+            return (
+              <div className="inline-note" style={{ marginTop: 10, fontSize: 13 }}>
+                Not researched yet: {standard.length} figure{standard.length === 1 ? ' is' : 's are'} the standard for this kind of
+                organisation. <strong>Research their website</strong> once to find their own; it won’t change anything from their
+                procedure document or typed in.
+              </div>
+            );
+          })()}
           {!researchEnabled && (
             <div className="inline-note warn" style={{ marginTop: 10 }}>
               Reading and research need <code>ANTHROPIC_API_KEY</code> on the server. You can still

@@ -526,6 +526,30 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-28 — spending less on AI; research remembered; no "0 days"
+- **The AI costs far less** (the owner asked for economy):
+  - default model `claude-sonnet-5-5` (was `claude-opus-4-8`; `ANTHROPIC_MODEL`
+    still overrides) — well under half the price per token;
+  - the automatic review sends only the **two newest** PDFs/photos
+    (`gatherContext(..., { files: 2 })`), not up to ten on every refresh;
+    the assistant a person asks for still reads them all;
+  - `scheduleReview` waits **2 minutes**, so an import, the emails found for
+    it and their attachments make one review, not one per change;
+  - emails found by the account-number search are kept in full without an AI
+    read each (`processHistoricalEmail`); the one review afterwards reads them.
+- **Research is remembered and never repeated by itself**: the organisation
+  form says "Their website was researched on <date>"; reading a procedure
+  document researches gaps only if it has never been researched; pressing
+  Research again asks first (it costs credits). `researched_now` stamps
+  `researched_at`.
+- **Figures nobody publishes are filled with the standard, visibly**
+  (`procedureMerge.js#fillStandard`, source `standard`, counted as defaulted
+  by `effectiveRule`), as when an organisation was first set up; research
+  replaces a standard figure, a document replaces anything it states.
+- **0 is never a timescale**: `orgResearch.js#clampInt` turned an unstated
+  figure into 0 (`Number(null)`), saving "0 days"; now null, and the API
+  refuses 0. Migration `028` cleared the 0s already saved.
+
 ### 2026-09-28 — forwards start complaints; addresses without postcodes match
 - **Forwarding to the complaints inbox means "track this"**: an inbox email
   not on a complaint is made into one (or joins the one it certainly matches)

@@ -56,7 +56,9 @@ export const config = {
   // Anthropic API — used to research an organisation's complaints procedure.
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    // Sonnet 5.5: reads emails, letters and procedures accurately at well
+    // under half the price of an Opus model. Set ANTHROPIC_MODEL to change it.
+    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
     get enabled() {
       return Boolean(this.apiKey);
     },

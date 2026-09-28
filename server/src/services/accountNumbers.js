@@ -163,7 +163,7 @@ const quotes = (msgs, key) => msgs.some((m) =>
 async function searchOne(c, number, mailboxes) {
   const { searchMailbox } = await import('./graphMail.js');
   const { storeEmail } = await import('./emailIngest.js');
-  const { processEmail, processHistoricalEmail } = await import('./complaintEmailProcessor.js');
+  const { processHistoricalEmail } = await import('./complaintEmailProcessor.js');
   const key = keyOf(number);
   const terms = [...new Set([key, String(number).replace(/\s+/g, '')])];
   const convs = new Map(); // conversationId -> mailbox
@@ -197,9 +197,10 @@ async function searchOne(c, number, mailboxes) {
       if (!id) continue; // already on this or another complaint
       here += 1;
       try {
-        const after = !c.raised_on || londonDateOf(new Date(m.receivedAt)) >= c.raised_on;
-        if (after) await processEmail(id);
-        else await processHistoricalEmail(id);
+        // Kept in full with attachments, without an AI read of each one: the
+        // complaint's review (once, afterwards) reads them together and says
+        // if a step among them isn't recorded. One read, not one per email.
+        await processHistoricalEmail(id);
       } catch (err) {
         console.error(`[complaints] email found by account ${number} not read:`, err.message);
       }
