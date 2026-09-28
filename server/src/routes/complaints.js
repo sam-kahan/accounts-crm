@@ -7,7 +7,7 @@ import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
 import { describeChanges, theOmbudsman } from '../services/complaintRules.js';
-import { decorate, gatherContext } from '../services/complaintContext.js';
+import { decorate, decorateMany, gatherContext } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
@@ -331,7 +331,7 @@ router.post(
     const open = (
       await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY response_due ASC NULLS LAST`)
     ).rows;
-    const decorated = await Promise.all(open.map(decorate));
+    const decorated = await decorateMany(open);
     const overdue = decorated.filter((c) => c.needs_chasing).slice(0, 12);
 
     const drafts = [];
@@ -424,7 +424,7 @@ router.get(
     const open = (
       await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY response_due ASC NULLS LAST`)
     ).rows;
-    const decorated = await Promise.all(open.map(decorate));
+    const decorated = await decorateMany(open);
 
     const overdue = decorated.filter((c) => c.needs_chasing);
     const awaiting = decorated.filter((c) => !c.needs_chasing);
@@ -464,7 +464,7 @@ router.get(
       `SELECT * FROM complaints ${where} ORDER BY (state <> 'open'), raised_on DESC`,
       params,
     );
-    res.json(await Promise.all(rows.map(decorate)));
+    res.json(await decorateMany(rows));
   }),
 );
 

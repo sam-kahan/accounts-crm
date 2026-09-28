@@ -505,6 +505,14 @@ the page says how far each date can be trusted.
 - **Easier throughout**: a complaint can be started from its own email or
   letter; one "Next step" with a one-click action from the AI review; less-used
   tools folded away; the review updates on screen.
+- **Morning email says what to do**: each complaint item carries the next step
+  (the AI's when its review is current) and a link to it; item text is
+  HTML-escaped, since a subject can come from an email.
+- **Search** on the complaints list (every state); the list and dashboard load
+  organisations in one query (`decorateMany`).
+- **Past search costs less**: threads without an email from Greenco to an
+  outside party are ruled out without the AI, then a low-effort quick look,
+  and only then the full read (capped at 30k characters). Same model.
 - **Fixed from a full review**: Undo can't wipe a later date; nothing uncertain
   is filed unseen; marking an email is once-only and never a silent overwrite;
   UK day for arrival dates; email-derived text passed to the AI as untrusted;

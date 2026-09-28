@@ -459,6 +459,7 @@ export default function Complaints() {
   const [researchEnabled, setResearchEnabled] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [filter, setFilter] = useState('open');
+  const [search, setSearch] = useState('');
   const [showNew, setShowNew] = useState(false);
   // An email from the general inbox being turned into a new complaint.
   const [newFromEmail, setNewFromEmail] = useState(null);
@@ -520,11 +521,18 @@ export default function Complaints() {
 
   const overdue = items.filter((c) => c.needs_chasing);
   const open = items.filter((c) => c.state === 'open');
-  const shown =
+  const byFilter =
     filter === 'overdue' ? overdue :
     filter === 'open' ? open :
     filter === 'resolved' ? items.filter((c) => c.state === 'resolved') :
     items;
+  // Search across everything a complaint is known by: subject, organisation,
+  // property, our reference and theirs. Searching looks in every state, so an
+  // old resolved one is found without changing the filter.
+  const q = search.trim().toLowerCase();
+  const shown = !q ? byFilter : items.filter((c) =>
+    [c.subject, c.org_name, c.property, c.ref_code, c.reference, c.our_reference, c.category]
+      .some((v) => String(v || '').toLowerCase().includes(q)));
 
   return (
     <>
@@ -584,6 +592,18 @@ export default function Complaints() {
           <div className="label">Total logged</div>
           <div className="value">{items.length}</div>
         </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by organisation, property, subject or reference…"
+          aria-label="Search complaints"
+          style={{ maxWidth: 460 }}
+        />
+        {q && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{shown.length} found, across every state</span>}
       </div>
 
       <div className="toolbar flex-between">

@@ -7,6 +7,7 @@ import {
   deriveStatus,
   procedureSteps,
   reviewSignature,
+  effectiveRule,
 } from './complaintRules.js';
 import { ruleForComplaint } from './complaintDeadlines.js';
 import { listComplaintEmails } from './emailIngest.js';
@@ -21,7 +22,22 @@ import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
 // Attach derived status + rule + procedure checklist + org context to a row.
 export async function decorate(c) {
-  const { org, rule } = await ruleForComplaint(c);
+  const { org } = await ruleForComplaint(c);
+  return decorateWithOrg(c, org);
+}
+
+// Many at once (the list, the dashboard): the organisations are read in one
+// query rather than one per complaint.
+export async function decorateMany(rows) {
+  const ids = [...new Set(rows.map((r) => r.organisation_id).filter(Boolean))];
+  const orgs = ids.length
+    ? new Map((await query('SELECT * FROM organisations WHERE id = ANY($1::uuid[])', [ids])).rows.map((o) => [o.id, o]))
+    : new Map();
+  return rows.map((r) => decorateWithOrg(r, r.organisation_id ? orgs.get(r.organisation_id) || null : null));
+}
+
+export function decorateWithOrg(c, org) {
+  const rule = effectiveRule(org, c.org_type);
   const derived = deriveStatus(c, rule);
   return {
     ...c,

@@ -51,7 +51,7 @@ const cronFile = '/etc/cron.d/accounts-crm';
 if (existsSync(cronFile)) {
   const lines = readFileSync(cronFile, 'utf8').split('\n').filter((l) => /^\S/.test(l) && !l.startsWith('#') && /curl|auto-pull/.test(l));
   p('Scheduled jobs:', lines.length ? '' : 'none found');
-  for (const l of lines) p('  ', l.replace(/X-Cron-Key: \S+/, 'X-Cron-Key: <hidden>').replace(/key=[^&"\s]+/, 'key=<hidden>'));
+  for (const l of lines) p('  ', l.replace(/X-Cron-Key: [^"]*/, 'X-Cron-Key: <hidden>').replace(/key=[^&"\s]+/, 'key=<hidden>'));
 } else {
   p('Scheduled jobs: /etc/cron.d/accounts-crm NOT FOUND — nothing runs automatically');
 }

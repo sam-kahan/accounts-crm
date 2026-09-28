@@ -139,7 +139,15 @@ function escapeText(value) {
     .replace(/>/g, '&gt;');
 }
 
-// Build a simple digest email body from a list of due/overdue items.
+// Item text can come from outside (a complaint subject read off an email), so
+// it is escaped before it goes into the HTML.
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[ch]);
+const safeLink = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : null);
+
+// Build a simple digest email body from a list of due/overdue items. An item
+// may carry `detail` (what to do) and `link` (where to do it).
 export function buildDigest(items) {
   if (items.length === 0) {
     return {
@@ -154,7 +162,7 @@ export function buildDigest(items) {
       (i) =>
         `- ${i.due_date}  ${i.label}${i.company_name ? ` (${i.company_name})` : ''}${
           i.overdue ? '  [OVERDUE]' : ''
-        }`,
+        }${i.detail ? `\n    Next: ${i.detail}` : ''}${safeLink(i.link) ? `\n    ${i.link}` : ''}`,
     )
     .join('\n');
 
@@ -164,10 +172,12 @@ export function buildDigest(items) {
       <tr>
         <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;white-space:nowrap;color:${
           i.overdue ? '#b91c1c' : '#1e2235'
-        };font-weight:600;">${i.due_date}</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${i.label}</td>
+        };font-weight:600;">${esc(i.due_date)}</td>
+        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${
+          safeLink(i.link) ? `<a href="${esc(i.link)}" style="color:#1e2235;">${esc(i.label)}</a>` : esc(i.label)
+        }${i.detail ? `<div style="color:#6b7280;font-size:13px;margin-top:2px;">Next: ${esc(i.detail)}</div>` : ''}</td>
         <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${
-          i.company_name || ''
+          esc(i.company_name || '')
         }</td>
       </tr>`,
     )

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { config } from '../config.js';
 import { query } from '../db/pool.js';
 import { asyncHandler } from '../lib/http.js';
 import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
@@ -9,7 +10,7 @@ import {
   mailerStatus,
 } from '../services/mailer.js';
 import { carriedLineSql } from '../services/commission.js';
-import { effectiveRule, deriveStatus, computeAckDue } from '../services/complaintRules.js';
+import { effectiveRule, deriveStatus, computeAckDue, reviewSignature } from '../services/complaintRules.js';
 import { syncAllCompanies } from '../services/companySync.js';
 import { syncInvoicing } from '../services/invoicingSync.js';
 import { refreshStaleReviews } from '../services/complaintReview.js';
@@ -84,7 +85,13 @@ async function collectComplaintDueItems(days = 30) {
   const items = [];
   for (const c of rows) {
     const rule = effectiveRule(c.org, c.org_type);
-    const { status, overdue } = deriveStatus(c, rule);
+    const derived = deriveStatus(c, rule);
+    const { status, overdue } = derived;
+    // What to do about it, and a link straight to it: the AI's next step when
+    // its review is up to date, otherwise the one worked out from the dates.
+    const current = c.ai_review && c.ai_review_status === reviewSignature({ ...c, ...derived });
+    const detail = (current && c.ai_review?.recommended_action) || derived.nextAction || null;
+    const link = `${config.appUrl.replace(/\/+$/, '')}/complaints/${c.id}`;
     if (status === 'responded' || status === 'with_ombudsman') continue; // nothing due from them
     if (status === 'ack_overdue') {
       items.push({
@@ -94,6 +101,8 @@ async function collectComplaintDueItems(days = 30) {
         due_date: computeAckDue(c, rule),
         company_name: c.org_name,
         overdue: true,
+        detail,
+        link,
       });
       continue;
     }
@@ -105,6 +114,8 @@ async function collectComplaintDueItems(days = 30) {
       due_date: c.response_due,
       company_name: c.org_name,
       overdue,
+      detail,
+      link,
     });
   }
   return items;
