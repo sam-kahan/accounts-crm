@@ -20,7 +20,8 @@ const REVIEW_INSTRUCTION =
   'Write the standing review of this complaint as it is TODAY. FIRST add a key "headline": ONE short ' +
   'plain-English instruction, at most 15 words, starting with a verb, saying exactly what to do next ' +
   'and by when (e.g. "Email E.ON Next asking for the final bill by 8 Oct." or "Nothing to do until ' +
-  '5 Oct: wait for their Stage 1 answer."). No reasons in it; the reasons go in "summary". ' +
+  '5 Oct: wait for their Stage 1 answer."). It must say what TO do: never only what not to do ("Do not ' +
+  'escalate." on its own tells nobody anything). No reasons in it; the reasons go in "summary". ' +
   'The complaint has ALREADY been made (see the context): never recommend "raising" or "making" a complaint, ' +
   'and never draft an email that raises one or threatens one. ' +
   'In "summary" (2-3 short sentences): where ' +

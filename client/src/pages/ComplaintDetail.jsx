@@ -94,7 +94,7 @@ function emailIsForNow(r) {
   if (!r?.email?.body) return false;
   if (r.email_now === false) return false;
   if (r.next_action?.type === 'wait') return false;
-  if (/^\s*(do not send|don['’]t send|nothing to (do|send)|no action|wait\b)/i.test(r.headline || '')) return false;
+  if (/^\s*(do not|don['’]t|no need|nothing|no action|no further|not yet|wait\b|hold\b)/i.test(r.headline || '')) return false;
   return true;
 }
 

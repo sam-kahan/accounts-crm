@@ -71,3 +71,15 @@ test('our email a fortnight ago and no reply: a follow-up is allowed once the fa
   const g = guardReview(r, { anyOverdue: false, nextDue: null, lastSentOn: '2026-09-10', lastTheirsOn: '2026-09-01', today: '2026-09-29' });
   assert.equal(g, r);
 });
+
+test('"Do not escalate." with an email: made whole, and the email is kept ready, not sent', () => {
+  const r = { headline: 'Do not escalate.', next_action: { type: 'send_email' }, email: { subject: 's', body: 'Dear…' } };
+  const g = guardReview(r, { anyOverdue: false, nextDue: { date: '2026-10-05', what: 'their Stage 1 response' }, lastSentOn: null, today: '2026-09-29' });
+  assert.equal(g.email_now, false);
+  assert.equal(g.next_action.type, 'wait');
+  assert.equal(g.headline, 'Do not escalate. Nothing to send now: wait for their Stage 1 response, due Mon 5 Oct 2026.');
+  // already whole: left as written
+  const w = guardReview({ headline: 'Nothing to send yet: wait until Mon 5 Oct.', email: { body: 'x' } }, { anyOverdue: false, today: '2026-09-29' });
+  assert.equal(w.headline, 'Nothing to send yet: wait until Mon 5 Oct.');
+  assert.equal(w.email_now, false);
+});

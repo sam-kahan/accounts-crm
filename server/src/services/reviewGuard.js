@@ -39,10 +39,18 @@ export function nextDueFromThem(tracks) {
   return due.sort((a, b) => a.date.localeCompare(b.date))[0] || null;
 }
 
+// A headline that says NOT to act ("Do not escalate.", "No need to chase",
+// "Nothing to send", "Wait…"): the email that came with it is the one kept
+// ready for later, never one to send now.
+const HOLD_WORDS = /^\s*(do not|don['’]t|no need|nothing|no action|no further|not yet|wait\b|hold\b)/i;
+export function saysHold(r) {
+  return HOLD_WORDS.test(r?.headline || '');
+}
+
 // Does a review tell Greenco to send an email NOW (whatever it is about)?
 export function wantsToSendNow(r) {
   if (!r) return false;
-  if (r.next_action?.type === 'wait' || r.email_now === false) return false;
+  if (r.next_action?.type === 'wait' || r.email_now === false || saysHold(r)) return false;
   return r.next_action?.type === 'send_email' || Boolean(r.email?.body) || recommendsChasing(r);
 }
 
@@ -53,6 +61,23 @@ export function wantsToSendNow(r) {
 export function guardReview(review, facts) {
   if (!review) return review;
   const today = facts.today || todayISO();
+  // "Do not escalate." says what not to do and nothing about what to do, and
+  // the email beside it read as one to send. The advice is made whole: hold,
+  // with what is being waited for and until when; the email is kept ready.
+  if (saysHold(review)) {
+    const bare = !/\b(wait|until|due|by \w+ \d|nothing to send)\b/i.test(review.headline);
+    const tail = facts.nextDue
+      ? ` Nothing to send now: wait for ${facts.nextDue.what}, due ${ukDate(facts.nextDue.date)}.`
+      : ' Nothing to send now: wait for their reply.';
+    const headline = bare ? `${review.headline.replace(/[.\s]*$/, '.')}${tail}` : review.headline;
+    return {
+      ...review,
+      headline,
+      recommended_action: bare ? headline : review.recommended_action,
+      next_action: { type: 'wait', by: review.next_action?.by || facts.nextDue?.date || null },
+      email_now: false,
+    };
+  }
   let headline = null;
   let by = null;
   let why = null;
