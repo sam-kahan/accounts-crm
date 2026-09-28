@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
+import { accountOrReference, api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 import EmailAutomation from '../components/EmailAutomation.jsx';
 import TidyUp from '../components/TidyUp.jsx';
@@ -709,9 +709,10 @@ export default function Complaints() {
                   {/* The account number: the key to every complaint, shown to
                       copy without opening it. */}
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {(c.account_numbers || []).length ? c.account_numbers.map((a) => (
+                    {(() => { const k = accountOrReference(c); return k.values.length ? k.values.map((a) => (
                       <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         <span style={{ fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontWeight: 700, fontSize: 14, userSelect: 'all' }}>{a}</span>
+                        {k.isReference && <span className="muted" style={{ fontSize: 11 }}>their ref</span>}
                         <button type="button" className="btn-ghost btn-sm" style={{ padding: '0 4px', fontSize: 12 }}
                           aria-label={`Copy account number ${a}`}
                           onClick={(e) => { e.stopPropagation(); copyAccount(a); }}
@@ -719,7 +720,7 @@ export default function Complaints() {
                           {copiedAccount === a ? '✓' : 'Copy'}
                         </button>
                       </div>
-                    )) : <span className="muted">—</span>}
+                    )) : <span className="muted">—</span>; })()}
                   </td>
                   {/* One line per organisation when it is with more than one. */}
                   <td className="muted">

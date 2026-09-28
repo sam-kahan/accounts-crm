@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference } from '../api';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
 
@@ -686,7 +686,20 @@ export default function ComplaintDetail() {
 
           <div className="form-grid">
             <Info label="Raised" value={formatDate(c.raised_on)} />
-            <Info label="Account number" value={c.account_numbers?.length ? c.account_numbers.join(', ') : '—'} />
+            {(() => {
+              const k = accountOrReference(c);
+              return (
+                <Info
+                  label={k.isReference ? 'Account number (none: their reference)' : 'Account number'}
+                  value={k.values.length ? (
+                    <span>
+                      <strong style={{ fontFamily: 'ui-monospace, Menlo, Consolas, monospace' }}>{k.values.join(', ')}</strong>{' '}
+                      <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(k.values.join(', '))}>Copy</button>
+                    </span>
+                  ) : '—'}
+                />
+              );
+            })()}
             <Info label="Our reference" value={c.ref_code} />
             {multi
               ? tracks.map((t) => (

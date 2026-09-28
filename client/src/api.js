@@ -464,6 +464,19 @@ export function londonDay(ts) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date(ts));
 }
 
+// What a complaint is known by, for the "Account number" column and field:
+// its account numbers, or — when it has none (not every complaint is about an
+// account) — their reference(s) instead, marked as such. Display only: a
+// reference is never stored as an account number, because the same account
+// number means the same complaint even across organisations, and a reference
+// is only one organisation's.
+export function accountOrReference(c) {
+  const accounts = (c?.account_numbers || []).filter(Boolean);
+  if (accounts.length) return { values: accounts, isReference: false };
+  const refs = [...new Set([c?.reference, ...(c?.parties || []).map((p) => p.reference)].filter(Boolean))];
+  return { values: refs, isReference: refs.length > 0 };
+}
+
 export function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));
