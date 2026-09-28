@@ -501,36 +501,43 @@ export default function ComplaintDetail() {
               + Another organisation
             </button>
             {aiEnabled && (
-              <button className="btn btn-sm" disabled={rechecking}
-                title="Search by every account number and reference, read all its emails, and set its stage and dates from them"
+              <button className="btn-primary btn-sm" disabled={rechecking}
+                title="Search your mailboxes by every account number and reference, read all its emails, set its stage and dates from them, and update the AI review's next steps"
                 onClick={async () => {
-                  if (!confirm('Re-check this complaint against its emails? It searches the mailboxes for its numbers, reads every email on it (one AI read), and moves its stage and dates to what the emails show. Changes can be undone.')) return;
+                  if (!confirm('Re-check this complaint and update its next steps?\n\nIt searches your mailboxes for its account numbers and references, reads every email on it, moves its stage and dates to what the emails show (changes can be undone), then updates the AI review with the next steps. It takes a minute or two.')) return;
                   setRechecking(true);
                   setMsg(null);
-                  const since = c.rechecked_at;
-                  const failedBefore = (c.events || []).filter((e) => /^Re-check against its emails failed/.test(e.note || '')).length;
+                  const FAILED = /^(Re-check against its emails failed|The AI review couldn’t be updated after the re-check)/;
+                  const failedBefore = (c.events || []).filter((e) => FAILED.test(e.note || '')).length;
                   try {
                     await api.complaints.recheck(id);
-                    setMsg('Re-checking: searching the mailboxes and reading its emails. This can take a minute or two.');
-                    // Watch for it finishing (or failing) for up to 10 minutes.
+                    setMsg('Re-checking: searching your mailboxes, reading its emails, then updating the next steps. This takes a minute or two; you can stay on this page.');
+                    // Done when the review has been rewritten (or something
+                    // failed, which is written on the timeline). Up to 10 minutes.
                     let n = 0;
                     const t = setInterval(async () => {
                       n += 1;
                       try {
                         const fresh = await api.complaints.get(id);
-                        const failed = (fresh.events || []).filter((e) => /^Re-check against its emails failed/.test(e.note || '')).length > failedBefore;
-                        if (fresh.rechecked_at !== since || failed || n > 120) {
+                        const failed = (fresh.events || []).filter((e) => FAILED.test(e.note || '')).length > failedBefore;
+                        // Server times only (a PC clock can be off): the
+                        // re-check has finished and the review was written after it.
+                        const reviewed = fresh.rechecked_at && fresh.rechecked_at !== c.rechecked_at &&
+                          fresh.ai_reviewed_at && new Date(fresh.ai_reviewed_at) >= new Date(fresh.rechecked_at);
+                        if (reviewed || failed || n > 120) {
                           clearInterval(t);
                           setC(fresh);
                           setRechecking(false);
-                          const note = (fresh.events || []).find((e) => /^Re-check/.test(e.note || ''));
-                          setMsg(n > 120 ? 'Still re-checking; the result will appear on the timeline.' : note?.note || null);
+                          const note = (fresh.events || []).find((e) => /^(Re-check|The AI review couldn)/.test(e.note || ''));
+                          setMsg(n > 120
+                            ? 'Still working; the result will appear on the timeline and in the AI review.'
+                            : `${note?.note || 'Re-checked.'}${reviewed ? ' The AI review below has the next steps.' : ''}`);
                         }
                       } catch { /* try again next tick */ }
                     }, 5000);
                   } catch (e) { setMsg(e.message); setRechecking(false); }
                 }}>
-                {rechecking ? 'Re-checking…' : 'Re-check from emails'}
+                {rechecking ? 'Re-checking…' : 'Re-check & update next steps'}
               </button>
             )}
             <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit details</button>

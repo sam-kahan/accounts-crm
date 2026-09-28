@@ -171,7 +171,27 @@ async function search(c, by) {
 }
 
 // Re-check one complaint. Returns what happened, for the run's report.
-export async function recheckComplaint(id, { by = RECHECK_BY, force = false } = {}) {
+// Write the complaint's AI review now (the page's one-press re-check). A
+// failure is put on the timeline rather than lost.
+async function reviewNow(id, by) {
+  const { refreshReview, cancelScheduledReview } = await import('./complaintReview.js');
+  cancelScheduledReview(id); // e.g. one queued by the email search
+  try {
+    await refreshReview(id);
+  } catch (err) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [id, todayISO(), `The AI review couldn’t be updated after the re-check: ${String(err.message).slice(0, 300)}. Press Refresh on the review to try again.`, by],
+    );
+  }
+  cancelScheduledReview(id);
+}
+
+// `review: 'now'` (the complaint page's button): the AI review is written
+// straight after, whatever changed, so one press gives the stage AND the next
+// steps. Otherwise (the run over every complaint) it is refreshed only when
+// something moved.
+export async function recheckComplaint(id, { by = RECHECK_BY, force = false, review = 'if_changed' } = {}) {
   let c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
   if (!c) return { id, result: 'failed', text: 'No longer exists' };
   const brief = { id, ref_code: c.ref_code, subject: c.subject, org_name: c.org_name };
@@ -187,6 +207,7 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false } = 
   let msgs = await emailsOf(id);
   if (!msgs.length) {
     await query('UPDATE complaints SET rechecked_at = now(), recheck_signature = $2 WHERE id = $1', [id, sig]);
+    if (review === 'now') await reviewNow(id, by);
     return { ...brief, result: 'unchanged', text: 'No emails on file to read' };
   }
   let x = await reconstructComplaint(msgs);
@@ -269,7 +290,8 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false } = 
   }
   // Its standing review is refreshed only when something moved (an AI call
   // each; the owner watches the bill).
-  if (cols.length || added) {
+  if (review === 'now') await reviewNow(id, by);
+  else if (cols.length || added) {
     const { scheduleReview } = await import('./complaintReview.js');
     scheduleReview(id);
   }

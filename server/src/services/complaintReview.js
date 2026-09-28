@@ -52,6 +52,14 @@ export async function refreshReview(id) {
 // minutes (an import, the emails found for it, their attachments) collapses
 // into ONE review, rather than one per change.
 const pending = new Map();
+
+// A review is being written now, so one already queued for this complaint
+// would only repeat it (and be paid for twice).
+export function cancelScheduledReview(id) {
+  clearTimeout(pending.get(id));
+  pending.delete(id);
+}
+
 export function scheduleReview(id, delayMs = 120000) {
   if (!config.anthropic.enabled || !id) return;
   clearTimeout(pending.get(id));

@@ -1417,7 +1417,7 @@ router.post(
     // than the browser waits. The page watches rechecked_at for it finishing;
     // a failure is written on the timeline so it is never silent.
     const by = who(req);
-    recheckComplaint(req.params.id, { by, force: true }).catch(async (err) => {
+    recheckComplaint(req.params.id, { by, force: true, review: 'now' }).catch(async (err) => {
       console.error(`[complaints] re-check ${req.params.id} failed:`, err.message);
       await query(
         `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,

@@ -555,7 +555,11 @@ the page says how far each date can be trusted.
   timeline + Undo record in one transaction (`last_recheck`), marks To check.
   `POST /complaints/recheck` runs every open one in the background
   (`app_settings.recheck_run`, only ever started by a person);
-  `POST /:id/recheck` (202) and `/:id/recheck/undo` for one.
+  `POST /:id/recheck` (202) and `/:id/recheck/undo` for one. The complaint
+  page's **Re-check & update next steps** is one press for both: it re-checks
+  with `review: 'now'`, which writes the AI review straight after (cancelling
+  any queued one, so it is paid for once); the page waits until
+  `ai_reviewed_at >= rechecked_at` (server times) or a failure note.
 - **Bounced emails are flagged** (migration `030`, `services/bounces.js`). A
   bounce message in a mailbox we read (watched + catch-all) is recognised by
   `readBounce()` (pure, tested: sender mailer-daemon/postmaster/Exchange, or a
