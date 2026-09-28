@@ -92,7 +92,7 @@ export default function ComplaintDetail() {
       await api.complaints.addEvent(id, {
         event_date: today,
         type: 'note',
-        note: `AI draft (not sent) — ${ai.email.subject}\n\n${ai.email.body}`,
+        note: `AI draft (not sent): ${ai.email.subject}\n\n${ai.email.body}`,
       });
       await load();
       setMsg('Draft saved to the timeline.');
@@ -192,8 +192,8 @@ export default function ComplaintDetail() {
       const r = await api.complaints.fetchEmails();
       await load();
       setMsg(
-        `Inbox checked — ${r.inserted} new email(s) logged` +
-          (r.configured ? '.' : ' (test inbox only — the mailbox connection isn’t configured).'),
+        `Inbox checked: ${r.inserted} new email(s) logged` +
+          (r.configured ? '.' : ' (test inbox only, as the mailbox connection isn’t configured).'),
       );
     } catch (e) {
       setMsg(e.message);
@@ -348,7 +348,7 @@ export default function ComplaintDetail() {
               )}
               <button className="btn-primary btn-sm" onClick={() => setAction({
                 kind: 'resolved', title: 'Mark the complaint resolved',
-                intro: 'The date it was resolved, and the outcome — this is the record of how it ended.',
+                intro: 'The date it was resolved, and the outcome. This is the record of how it ended.',
                 defaultNote: 'Complaint resolved', noteLabel: 'Outcome',
               })}>
                 Mark resolved…
@@ -455,7 +455,7 @@ export default function ComplaintDetail() {
           </table>
         ) : (
           <div className="empty">
-            No documents yet. Upload the letters, emails (saved as PDF), statements and photos — every
+            No documents yet. Upload the letters, emails (saved as PDF), statements and photos. Every
             one is kept here as the record, and PDFs, photos, Word and text files are read by the AI
             assistant.
           </div>
@@ -488,7 +488,7 @@ export default function ComplaintDetail() {
             )}
             <div style={{ fontSize: 12, marginTop: 4 }}>
               Replies are picked up when they reply to all, or quote {c.ref_code}. An email that
-              didn’t include it won’t appear — upload it under Documents instead. The inbox is
+              didn’t include it won’t appear, so upload it under Documents instead. The inbox is
               checked every 5 minutes.
             </div>
           </div>
@@ -601,14 +601,14 @@ export default function ComplaintDetail() {
         <div className="card-body">
           {!aiEnabled ? (
             <div className="inline-note warn">
-              The AI assistant isn’t configured yet — set <code>ANTHROPIC_API_KEY</code> in the
+              The AI assistant isn’t configured yet. Set <code>ANTHROPIC_API_KEY</code> in the
               server environment to enable it.
             </div>
           ) : (
             <>
               <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
                 It reads this complaint’s procedure, deadlines, timeline, emails and documents, and
-                drafts the next email. Nothing is sent until you press Send — always check the
+                drafts the next email. Nothing is sent until you press Send. Always check the
                 facts and figures in a draft against the documents first.
               </p>
               <div className="form-grid">
@@ -807,7 +807,7 @@ export default function ComplaintDetail() {
       {/* Referral pack modal */}
       {referral && (
         <Modal
-          title={`Referral pack — ${referral.ombudsman || 'ombudsman'}`}
+          title={`Referral pack: ${referral.ombudsman || 'ombudsman'}`}
           onClose={() => setReferral(null)}
           footer={
             <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
@@ -845,7 +845,7 @@ function ProcedureCard({ c }) {
       <div className="inline-note" style={{ marginBottom: 12 }}>
         ✓ Dates follow {p.procedure_ref ? <strong>{p.procedure_ref}</strong> : 'their procedure'} —
         checked by {p.verified_by || 'a colleague'} on {formatDate(String(p.verified_at).slice(0, 10))}.
-        {timingDefaults.length > 0 && ' Some timescales aren’t stated in it and use the general default — marked below.'}
+        {timingDefaults.length > 0 && ' Some timescales aren’t stated in it and use the general default, marked below.'}
       </div>
     );
   } else {
@@ -865,7 +865,7 @@ function ProcedureCard({ c }) {
   return (
     <div className="card" style={{ marginBottom: 20 }}>
       <div className="card-head">
-        <h2>Their complaints procedure — step by step</h2>
+        <h2>Their complaints procedure, step by step</h2>
         {p?.procedure_ref && <span className="badge navy">{p.procedure_ref}</span>}
       </div>
       <div className="card-body" style={{ paddingBottom: 0 }}>{trust}</div>
@@ -1103,7 +1103,7 @@ function EditComplaintModal({ c, onClose, onSaved }) {
           {dateField('acknowledged_on', 'They acknowledged on')}
           {dateField('responded_on', `They responded on (${STAGE_LABEL[c.stage] || 'current stage'})`)}
           {dateField('final_response_on', 'Their final response', 'The referral window often counts from this')}
-          {dateField('due_override', 'Response due — override', 'Leave blank to use their procedure (recommended)')}
+          {dateField('due_override', 'Response due (override)', 'Leave blank to use their procedure (recommended)')}
           <label className="field full">
             <span className="lbl">Details</span>
             <textarea value={form.description} onChange={(e) => set('description', e.target.value)} />

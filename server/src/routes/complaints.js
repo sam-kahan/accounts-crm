@@ -264,10 +264,10 @@ router.get(
     const c = ctx.complaint;
     const grounds = await draftReferralGrounds(ctx);
     const lines = [];
-    lines.push(`OMBUDSMAN / ADR REFERRAL — ${c.ref_code}`);
+    lines.push(`OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
     lines.push('='.repeat(48));
     lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
-    lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` — ${c.rule.ombudsmanUrl}` : ''}`);
+    lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
     if (c.property) lines.push(`Property / account: ${c.property}`);
     if (c.reference) lines.push(`Their reference: ${c.reference}`);
     lines.push(`Subject: ${c.subject}`);
@@ -294,7 +294,7 @@ router.get(
       for (const em of [...ctx.emails].reverse()) {
         lines.push(
           `${(em.received_at || '').slice(0, 10)}  ${em.direction === 'outbound' ? 'SENT' : 'RECEIVED'}  ` +
-            `${em.subject || '(no subject)'} — ${em.sender_name || em.sender_email || ''}`,
+            `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}`,
         );
       }
     } else {
@@ -781,7 +781,7 @@ router.put(
       await query(
         `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
          VALUES ($1, $2, 'note', $3, $4)`,
-        [req.params.id, todayISO(), `Details corrected — ${changes.join('; ')}`, who(req)],
+        [req.params.id, todayISO(), `Details corrected: ${changes.join('; ')}`, who(req)],
       );
     }
     res.json(await decorate(updated));

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config } from '../config.js';
-import { ruleFor } from '../services/complaintRules.js';
+import { ruleFor, ombudsmanUrlFor } from '../services/complaintRules.js';
 import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
 import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
 import {
@@ -74,7 +74,9 @@ function values(d) {
   return [
     d.name, d.type || 'council', d.location || null, d.complaints_email || null,
     d.complaints_url || null, d.phone || null, d.ombudsman_name || null,
-    d.ombudsman_url || null, d.ombudsman_referral_months ?? null,
+    // Left blank for a scheme we know, the website is filled in from its name.
+    d.ombudsman_url || ombudsmanUrlFor(d.ombudsman_name) || null,
+    d.ombudsman_referral_months ?? null,
     d.stage1_response_days ?? null, d.stage2_response_days ?? null, d.ack_days ?? null,
     d.procedure_ref || null, d.stage1_clock || null, d.ombudsman_after_weeks ?? null,
     d.referral_from || null, d.procedure_summary || null, d.legal_basis || null,

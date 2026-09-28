@@ -73,11 +73,11 @@ function NewComplaintModal({
       setForm((f) => ({ ...f, organisation_id: org.id, org_name: org.name, org_type: org.type }));
       setNote(
         org.existed
-          ? `Linked to “${org.name}”, already saved — its procedure will set the deadlines.`
+          ? `Linked to “${org.name}”, already saved. Its procedure will set the deadlines.`
           : `Found and saved “${org.name}”${org.procedure_ref ? ` (${org.procedure_ref})` : ''}: ` +
             `acknowledge ${org.ack_days ?? '?'} · Stage 1 ${org.stage1_response_days ?? '?'} · ` +
             `Stage 2 ${org.stage2_response_days ?? '?'} working days` +
-            (org.unconfirmed?.length ? ` — not confirmed: ${org.unconfirmed.join(', ')}` : '') +
+            (org.unconfirmed?.length ? `. Not confirmed: ${org.unconfirmed.join(', ')}` : '') +
             '. This is AI research: check it against their procedure on the Organisations page ' +
             'before relying on the dates. If you have their procedure document, upload it there instead.',
       );
@@ -112,7 +112,7 @@ function NewComplaintModal({
     <Modal title={importMode ? 'Review imported complaint' : 'Log a complaint'} onClose={onClose}>
       {importMode && (
         <div className="inline-note" style={{ marginBottom: 14 }}>
-          The AI worked these out from what you pasted — <strong>check the date raised, stage and
+          The AI worked these out from what you pasted. <strong>check the date raised, stage and
           any response dates</strong> before saving. Deadlines are recalculated from them.
           {importNotes && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{importNotes}</div>}
         </div>
@@ -171,7 +171,7 @@ function NewComplaintModal({
           {note && <div className="inline-note full" style={{ marginBottom: 12 }}>{note}</div>}
           {form.organisation_id && !note && (
             <div className="inline-note full" style={{ marginBottom: 12 }}>
-              ✓ Linked to a saved organisation — its procedure sets the deadlines.
+              ✓ Linked to a saved organisation, so its procedure sets the deadlines.
             </div>
           )}
           {!form.organisation_id && (
@@ -318,7 +318,7 @@ function ImportModal({ onClose, onParsed }) {
       <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
         Paste the email thread, letters or notes for a complaint you started before using this
         system. The AI will work out the organisation, when it was raised, any references, and what
-        stage you’re at — then show it for you to check before saving.
+        stage you’re at, then show it for you to check before saving.
       </p>
       <label className="field">
         <span className="lbl">Anything to note? (optional)</span>
@@ -353,7 +353,7 @@ function OverdueDraftsModal({ onClose }) {
     <Modal title="Chasers for overdue complaints" onClose={onClose}>
       {error && <div className="login-error">{error}</div>}
       {!data && !error && <div className="spinner">Drafting chasers…</div>}
-      {data && data.count === 0 && <div className="empty">No overdue complaints — nothing to chase. 🎉</div>}
+      {data && data.count === 0 && <div className="empty">No overdue complaints, so nothing to chase. 🎉</div>}
       {data?.drafts?.map((d) => (
         <div className="card" key={d.id} style={{ marginBottom: 12 }}>
           <div className="card-head">

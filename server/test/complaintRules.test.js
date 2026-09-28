@@ -93,6 +93,7 @@ import {
   describeChanges,
   theOmbudsman,
   ukDate,
+  ombudsmanUrlFor,
 } from '../src/services/complaintRules.js';
 
 // LivingCity's PRO39 V7: acknowledge in 3 working days; Stage 1 outcome 15
@@ -234,4 +235,21 @@ test('theOmbudsman never doubles "the"', () => {
 test('ukDate reads as people write it', () => {
   assert.equal(ukDate('2026-10-01'), 'Thu 1 Oct 2026');
   assert.equal(ukDate('2026-09-25'), 'Fri 25 Sep 2026');
+});
+
+test('ombudsmanUrlFor knows the schemes by name or initials', () => {
+  assert.equal(ombudsmanUrlFor('The Property Ombudsman'), 'https://www.tpos.co.uk/');
+  assert.equal(ombudsmanUrlFor('TPO'), 'https://www.tpos.co.uk/');
+  assert.equal(ombudsmanUrlFor('Property Redress Scheme'), 'https://www.theprs.co.uk/');
+  assert.equal(ombudsmanUrlFor('Housing Ombudsman Service'), 'https://www.housing-ombudsman.org.uk/');
+  assert.equal(ombudsmanUrlFor('Local Government & Social Care Ombudsman'), 'https://www.lgo.org.uk/');
+  assert.equal(ombudsmanUrlFor('Some Other Scheme'), null);
+  assert.equal(ombudsmanUrlFor(null), null);
+});
+
+test('a named scheme with no website gets its own, never the type default', () => {
+  const tpo = effectiveRule({ ombudsman_name: 'The Property Ombudsman' }, 'council');
+  assert.equal(tpo.ombudsmanUrl, 'https://www.tpos.co.uk/');
+  const unknown = effectiveRule({ ombudsman_name: 'Some Other Scheme' }, 'council');
+  assert.equal(unknown.ombudsmanUrl, '', 'not the LGSCO default');
 });

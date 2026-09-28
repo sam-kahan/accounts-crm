@@ -78,7 +78,7 @@ export async function ingestEmails(emails) {
           [
             m.complaintId,
             londonDateOf(e.receivedAt),
-            `Email logged: ${e.subject || '(no subject)'} — from ${e.senderName || e.senderEmail || 'unknown'}`,
+            `Email logged: ${e.subject || '(no subject)'}, from ${e.senderName || e.senderEmail || 'unknown'}`,
           ],
         );
       }
@@ -125,7 +125,7 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
        VALUES ($1, $2, 'chased', $3, $4)`,
       [
         complaintId, todayISO(),
-        `Email sent: ${subject || '(no subject)'} — to ${recipients.join(', ')}`,
+        `Email sent: ${subject || '(no subject)'}, to ${recipients.join(', ')}`,
         sentBy || null,
       ],
     );

@@ -120,6 +120,12 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
+    // Saving unchecked figures is allowed, but never by accident: until the box
+    // is ticked every complaint against them says "not checked yet".
+    if (!form.verified && !confirm(
+      'You haven’t ticked “I have checked these figures against their published procedure”.\n\n' +
+        'Save anyway? Complaints against them will show the procedure as not checked until someone does.',
+    )) return;
     setBusy(true);
     setError(null);
     const payload = {
@@ -173,10 +179,10 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
     if (q) return <span className="muted" style={{ fontSize: 12, fontStyle: 'italic' }}>“{q}”</span>;
     const empty = form[k] === '' || form[k] === null || form[k] === undefined;
     if (empty && dflt !== undefined && dflt !== null) {
-      return <span className="muted" style={{ fontSize: 12 }}>Blank — the general default ({String(dflt)}) will be used.</span>;
+      return <span className="muted" style={{ fontSize: 12 }}>Blank, so the general default ({String(dflt)}) will be used.</span>;
     }
     if (form.unconfirmed?.includes(k)) {
-      return <span style={{ fontSize: 12, color: 'var(--warn)' }}>Not stated in the source — check.</span>;
+      return <span style={{ fontSize: 12, color: 'var(--warn)' }}>Not stated in the source. Please check.</span>;
     }
     return null;
   };
@@ -263,7 +269,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
             <Evidence k="stage1_response_days" dflt={defaults?.stage1Days} /></label>
           <label className="field"><span className="lbl">Stage 1 counted from</span>
             <select value={form.stage1_clock || ''} onChange={(e) => set('stage1_clock', e.target.value)}>
-              <option value="">Not stated — use when they receive it</option>
+              <option value="">Not stated (use when they receive it)</option>
               <option value="receipt">When they receive it</option>
               <option value="acknowledgement">When they acknowledge it</option>
             </select>
@@ -276,7 +282,15 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
             <input value={form.ombudsman_name || ''} onChange={(e) => set('ombudsman_name', e.target.value)} />
             <Evidence k="ombudsman_name" dflt={defaults?.ombudsman} /></label>
           <label className="field"><span className="lbl">Ombudsman website</span>
-            <input value={form.ombudsman_url || ''} onChange={(e) => set('ombudsman_url', e.target.value)} /></label>
+            <input value={form.ombudsman_url || ''} onChange={(e) => set('ombudsman_url', e.target.value)}
+              placeholder="Filled in automatically" />
+            {!form.ombudsman_url && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Leave blank. It’s filled in when you save for recognised schemes (The Property
+                Ombudsman, Property Redress Scheme, Housing Ombudsman, LGSCO, Energy Ombudsman,
+                CCW and others).
+              </span>
+            )}</label>
           <label className="field"><span className="lbl">Can refer after (weeks, if unresolved)</span>
             <input type="number" min="0" value={form.ombudsman_after_weeks ?? ''} onChange={(e) => set('ombudsman_after_weeks', e.target.value)} />
             <Evidence k="ombudsman_after_weeks" dflt={defaults?.ombudsmanAfterWeeks ?? undefined} /></label>
@@ -315,7 +329,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
             <strong>I have checked these figures against their published procedure.</strong>
             <span style={{ display: 'block', fontSize: 12 }}>
               Complaints show the procedure as checked, with your name and the date. Leave it
-              unticked if you haven’t — they will say it still needs checking.
+              unticked if you haven’t, and they will say it still needs checking.
             </span>
           </span>
         </label>
@@ -331,9 +345,9 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
 
 function ProcedureBadge({ o }) {
   if (o.verified_at) return <span className="badge ok" title={`Checked by ${o.verified_by || '—'}`}>Checked</span>;
-  if (o.research_status === 'document') return <span className="badge amber">From document — not checked</span>;
-  if (o.research_status === 'researched') return <span className="badge amber">Researched — not checked</span>;
-  if (o.research_status === 'manual') return <span className="badge amber">Entered — not checked</span>;
+  if (o.research_status === 'document') return <span className="badge amber">From document, not checked</span>;
+  if (o.research_status === 'researched') return <span className="badge amber">Researched, not checked</span>;
+  if (o.research_status === 'manual') return <span className="badge amber">Entered, not checked</span>;
   return <span className="badge grey">Not set</span>;
 }
 

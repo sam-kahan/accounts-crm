@@ -89,7 +89,7 @@ async function collectComplaintDueItems(days = 30) {
       items.push({
         type: 'complaint',
         id: c.id,
-        label: `Complaint NOT ACKNOWLEDGED — ${c.subject}`,
+        label: `Complaint NOT ACKNOWLEDGED: ${c.subject}`,
         due_date: computeAckDue(c, rule),
         company_name: c.org_name,
         overdue: true,
@@ -100,7 +100,7 @@ async function collectComplaintDueItems(days = 30) {
     items.push({
       type: 'complaint',
       id: c.id,
-      label: `Complaint ${overdue ? 'response OVERDUE' : 'response due'} — ${c.subject}`,
+      label: `Complaint ${overdue ? 'response OVERDUE' : 'response due'}: ${c.subject}`,
       due_date: c.response_due,
       company_name: c.org_name,
       overdue,

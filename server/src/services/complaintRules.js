@@ -95,7 +95,7 @@ export const RULES = {
     ombudsmanUrl: 'https://www.lgo.org.uk/',
     referralMonths: 12,
     legalBasis:
-      'Council complaint timescales vary by authority (commonly ~10 working days at Stage 1, ~20 at Stage 2). The LGSCO can investigate once the council’s process is exhausted — normally refer within 12 months of becoming aware of the problem.',
+      'Council complaint timescales vary by authority (commonly ~10 working days at Stage 1, ~20 at Stage 2). The LGSCO can investigate once the council’s process is exhausted; normally refer within 12 months of becoming aware of the problem.',
   },
   housing_association: {
     label: 'Housing association / social landlord',
@@ -140,14 +140,14 @@ export const RULES = {
     ombudsmanUrl: '',
     referralMonths: 12,
     legalBasis:
-      'No single statutory timescale — a reasonable response is around 10 working days. Check whether the supplier belongs to an ADR/ombudsman scheme; consider Trading Standards if ignored.',
+      'No single statutory timescale; a reasonable response is around 10 working days. Check whether the supplier belongs to an ADR/ombudsman scheme; consider Trading Standards if ignored.',
   },
   managing_agent: {
     label: 'Managing agent / freeholder',
     stage1Days: 15,
     stage2Days: 15,
     ackDays: 3,
-    ombudsman: 'The Property Ombudsman (TPO) or the Property Redress Scheme — whichever the agent belongs to',
+    ombudsman: 'The Property Ombudsman (TPO) or the Property Redress Scheme, whichever the agent belongs to',
     ombudsmanUrl: 'https://www.tpos.co.uk/',
     referralMonths: 12,
     referralFrom: 'final_response',
@@ -171,6 +171,28 @@ export const RULES = {
 export function theOmbudsman(name) {
   const n = String(name || 'ombudsman');
   return /^the\s/i.test(n) ? n : `the ${n}`;
+}
+
+// The UK ombudsman / redress schemes the team deals with, so the website is
+// known from the name rather than typed in each time. Matched on the name as
+// people write it (full name or initials). First match wins.
+const KNOWN_OMBUDSMEN = [
+  [/property ombudsman|\bTPOS?\b/i, 'https://www.tpos.co.uk/'],
+  [/property redress|\bPRS\b/i, 'https://www.theprs.co.uk/'],
+  [/housing ombudsman/i, 'https://www.housing-ombudsman.org.uk/'],
+  [/local government|\bLGSCO\b|\bLGO\b/i, 'https://www.lgo.org.uk/'],
+  [/energy ombudsman/i, 'https://www.energyombudsman.org/'],
+  [/consumer council for water|\bCCW\b/i, 'https://www.ccw.org.uk/'],
+  [/\bWATRS\b|water redress/i, 'https://www.watrs.org/'],
+  [/financial ombudsman/i, 'https://www.financial-ombudsman.org.uk/'],
+  [/parliamentary and health|\bPHSO\b/i, 'https://www.ombudsman.org.uk/'],
+  [/ombudsman (for )?wales|public services ombudsman/i, 'https://www.ombudsman.wales/'],
+];
+
+export function ombudsmanUrlFor(name) {
+  if (!name) return null;
+  const hit = KNOWN_OMBUDSMEN.find(([re]) => re.test(name));
+  return hit ? hit[1] : null;
 }
 
 export function ruleFor(type) {
@@ -211,6 +233,12 @@ export function effectiveRule(org, type) {
     else rule[key] = v;
   }
   rule.defaulted = defaulted;
+  // A named scheme with no website typed: use the known one for that name —
+  // never the type default's, which would point at a different scheme.
+  if (org.ombudsman_name && !org.ombudsman_url) {
+    rule.ombudsmanUrl = ombudsmanUrlFor(org.ombudsman_name) || '';
+    rule.defaulted = defaulted.filter((k) => k !== 'ombudsmanUrl');
+  }
   rule.procedureRef = org.procedure_ref || null;
   return rule;
 }
@@ -231,7 +259,7 @@ export function ukDate(iso) {
 // Where a timescale comes from, said honestly: their named procedure, or the
 // general default for this kind of body when their own hasn't been confirmed.
 function basisOf(rule, key) {
-  if (rule.defaulted?.includes(key)) return 'the usual timescale — not confirmed from their own procedure';
+  if (rule.defaulted?.includes(key)) return 'the usual timescale, not confirmed from their own procedure';
   return rule.procedureRef || 'their procedure';
 }
 
@@ -339,7 +367,7 @@ export function deriveStatus(complaint, rule) {
     return {
       ...base,
       status: 'response_overdue',
-      label: `No response — ${plural(Math.abs(wd), 'overdue')}`,
+      label: `No response, ${plural(Math.abs(wd), 'overdue')}`,
       nextAction,
       overdue: true,
       ack_overdue: ackOverdue,
@@ -351,9 +379,9 @@ export function deriveStatus(complaint, rule) {
     return {
       ...base,
       status: 'ack_overdue',
-      label: `Not acknowledged — ${plural(Math.abs(ackWd), 'overdue')}`,
+      label: `Not acknowledged, ${plural(Math.abs(ackWd), 'overdue')}`,
       nextAction:
-        `They should have acknowledged it by ${ukDate(ackDue)} (${rule.ackDays} working days — ` +
+        `They should have acknowledged it by ${ukDate(ackDue)} (${rule.ackDays} working days, ` +
         `${basisOf(rule, 'ackDays')}). Chase for an acknowledgement; the Stage 1 outcome is still ` +
         `due by ${due ? ukDate(due) : 'the date shown'}.`,
       ack_overdue: true,
@@ -365,12 +393,12 @@ export function deriveStatus(complaint, rule) {
     return {
       ...base,
       status: 'awaiting_ack',
-      label: `Awaiting acknowledgement — due in ${plural(ackWd)}`,
+      label: `Awaiting acknowledgement, due in ${plural(ackWd)}`,
       nextAction: null,
     };
   }
   const label =
-    wd !== null ? `Awaiting response — due in ${plural(wd)}` : 'Awaiting response';
+    wd !== null ? `Awaiting response, due in ${plural(wd)}` : 'Awaiting response';
   return { ...base, status: 'awaiting_response', label, nextAction: referNote.trim() || null };
 }
 
@@ -412,7 +440,7 @@ export function procedureSteps(complaint, rule) {
   const s1Note =
     rule.stage1Clock === 'acknowledgement'
       ? `${rule.stage1Days} working days from their acknowledgement` +
-        (complaint.acknowledged_on ? '' : ' — the latest date, if they acknowledge on time')
+        (complaint.acknowledged_on ? '' : '. This is the latest date, if they acknowledge on time')
       : `${rule.stage1Days} working days from receipt`;
   steps.push(
     at === 1
@@ -430,7 +458,7 @@ export function procedureSteps(complaint, rule) {
     steps.push({
       key: 'stage2', label: 'Stage 2 final response', date: null,
       state: closed ? 'past' : 'upcoming',
-      note: `If needed: ask for Stage 2 in writing — they then have ${rule.stage2Days} working days`,
+      note: `If needed: ask for Stage 2 in writing and they then have ${rule.stage2Days} working days`,
     });
   } else if (at === 2) {
     steps.push({
@@ -465,7 +493,7 @@ export function procedureSteps(complaint, rule) {
     note:
       rule.referralFrom === 'final_response'
         ? `${rule.referralMonths} months from their final response` +
-          (complaint.final_response_on ? '' : ' — dated once it arrives')
+          (complaint.final_response_on ? '' : ', dated once it arrives')
         : `${rule.referralMonths} months from when the complaint was made`,
   });
   return steps;
