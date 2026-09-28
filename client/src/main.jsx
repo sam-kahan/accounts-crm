@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
 import './index.css';
 import { AuthProvider, useAuth } from './auth.jsx';
 import App from './App.jsx';
@@ -12,6 +12,14 @@ import CompanyDetail from './pages/CompanyDetail.jsx';
 import Tasks from './pages/Tasks.jsx';
 import Complaints from './pages/Complaints.jsx';
 import ComplaintDetail from './pages/ComplaintDetail.jsx';
+
+// A fresh page for each complaint: going straight from one to the next (as
+// "Looks right, next" does) must not carry anything over, such as a draft
+// email or an open form, from the one before.
+function KeyedComplaintDetail() {
+  const { id } = useParams();
+  return <ComplaintDetail key={id} />;
+}
 import Organisations from './pages/Organisations.jsx';
 import Contractors from './pages/Contractors.jsx';
 import ContractorInvoices from './pages/ContractorInvoices.jsx';
@@ -58,7 +66,7 @@ function Gate() {
         <Route path="companies/:id" element={<Restricted section="companies"><CompanyDetail /></Restricted>} />
         <Route path="tasks" element={<Restricted section="tasks"><Tasks /></Restricted>} />
         <Route path="complaints" element={<Restricted section="complaints"><Complaints /></Restricted>} />
-        <Route path="complaints/:id" element={<Restricted section="complaints"><ComplaintDetail /></Restricted>} />
+        <Route path="complaints/:id" element={<Restricted section="complaints"><KeyedComplaintDetail /></Restricted>} />
         <Route path="organisations" element={<Restricted section="complaints"><Organisations /></Restricted>} />
         <Route path="commission/contractors" element={<Restricted section="commission"><Contractors /></Restricted>} />
         <Route path="commission/invoices" element={<Restricted section="commission"><ContractorInvoices /></Restricted>} />

@@ -879,7 +879,12 @@ router.post(
     }
     const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
     if (!c) throw new HttpError(404, 'Complaint not found');
-    res.json(await decorate(c));
+    // The next one waiting, so a batch of imports is checked one after another.
+    const left = (await query(
+      `SELECT id FROM complaints WHERE needs_check AND id <> $1 ORDER BY raised_on DESC, created_at`,
+      [req.params.id],
+    )).rows;
+    res.json({ ...(await decorate(c)), next_to_check: left[0]?.id || null, left_to_check: left.length });
   }),
 );
 

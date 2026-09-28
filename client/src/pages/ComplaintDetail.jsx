@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 
@@ -70,7 +70,8 @@ export default function ComplaintDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [c, setC] = useState(null);
-  const [msg, setMsg] = useState(null);
+  const location = useLocation();
+  const [msg, setMsg] = useState(location.state?.msg || null);
   const [loadError, setLoadError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -448,9 +449,18 @@ export default function ComplaintDetail() {
             organisation, dates and timeline (use Edit details for anything wrong), then confirm.
           </span>
           <button className="btn-primary btn-sm" onClick={async () => {
-            try { await api.complaints.markChecked(id); await load(); } catch (e) { setMsg(e.message); }
+            try {
+              const r = await api.complaints.markChecked(id);
+              // Straight on to the next one waiting, so a batch is quick to go through.
+              if (r?.next_to_check) {
+                navigate(`/complaints/${r.next_to_check}`, { state: { msg: `Checked. ${r.left_to_check} more to check, starting with this one.` } });
+              } else {
+                await load();
+                setMsg('Checked. That was the last one to check.');
+              }
+            } catch (e) { setMsg(e.message); }
           }}>
-            Looks right
+            Looks right, next ›
           </button>
         </div>
       )}
