@@ -32,7 +32,9 @@ import {
   deleteAttachment,
   attachmentUpload,
   attachmentBlocks,
+  procedureMemoryUpload,
 } from '../services/attachments.js';
+import { contentFor } from '../services/invoiceExtract.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -267,15 +269,36 @@ router.get(
 // complaint can be brought in and continued. Returns fields for review; the user
 // confirms and POSTs to `/` to create it.
 const importInput = z.object({
-  text: z.string().min(20),
+  text: z.string().max(60000).optional().nullable(),
   hint: z.string().max(500).optional().nullable(),
+  // An email waiting in the general inbox that is itself a new complaint.
+  email_id: z.string().uuid().optional().nullable(),
 });
 
+// Fill the "Log complaint" form from the complaint itself: pasted text, an
+// uploaded email/letter (PDF, Word, photo), or an email waiting to be filed.
+// Nothing is saved; the form is shown to be checked first.
 router.post(
   '/import/parse',
+  procedureMemoryUpload.single('file'),
   asyncHandler(async (req, res) => {
-    const d = parse(importInput, req.body);
-    const parsed = await parseImportedComplaint({ text: d.text, hint: d.hint });
+    const d = parse(importInput, req.body || {});
+    let text = d.text?.trim() || null;
+    const blocks = [];
+    if (req.file) {
+      blocks.push({ type: 'text', text: `Attached (third-party document): ${req.file.originalname}` });
+      blocks.push(contentFor(req.file));
+    }
+    if (d.email_id) {
+      const em = (
+        await query('SELECT subject, sender_name, sender_email, received_at, body_text, body_preview FROM complaint_emails WHERE id = $1', [d.email_id])
+      ).rows[0];
+      if (!em) throw new HttpError(404, 'Email not found');
+      text = `Subject: ${em.subject || ''}\nFrom: ${em.sender_name || ''} <${em.sender_email || ''}>\n` +
+        `Received: ${em.received_at ? londonDateOf(new Date(em.received_at)) : ''}\n\n${em.body_text || em.body_preview || ''}`;
+    }
+    if (!text && !blocks.length) throw new HttpError(400, 'Paste the complaint, or attach the email or letter.');
+    const parsed = await parseImportedComplaint({ text, hint: d.hint, blocks });
     res.json(parsed);
   }),
 );
