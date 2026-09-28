@@ -295,6 +295,12 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ as, date: date || null, party_id: partyId }),
       }),
+    // Raise it with the supplier a debt collector is acting for: an AI draft,
+    // then send it from here (or record it sent from Outlook) and join them on.
+    supplierDraft: (id, data) =>
+      request(`/complaints/${id}/supplier/draft`, { method: 'POST', body: JSON.stringify(data) }),
+    supplierRaise: (id, data) =>
+      request(`/complaints/${id}/supplier/raise`, { method: 'POST', body: JSON.stringify(data) }),
     // Further organisations on one complaint (a debt collector and the supplier).
     addParty: (id, data) =>
       request(`/complaints/${id}/parties`, { method: 'POST', body: JSON.stringify(data) }),
@@ -389,6 +395,7 @@ export const ORG_TYPE_LABEL = {
   water: 'Water supplier',
   energy: 'Energy supplier',
   managing_agent: 'Managing agent / freeholder',
+  debt_collector: 'Debt collector',
   supplier: 'Supplier',
   other: 'Other',
 };

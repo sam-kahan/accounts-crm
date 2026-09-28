@@ -33,6 +33,11 @@ const REVIEW_INSTRUCTION =
   '"record_acknowledgement" or "record_response" (an email or document on file shows they have, but ' +
   'it is not recorded), "resolve", "wait" (nothing to do until a date), "by": "YYYY-MM-DD" or null}. ' +
   'Recommend escalate/refer only when their procedure allows it now. ' +
+  'ALSO add a key "supplier": when the complaint is against a debt collector, collections solicitor or ' +
+  'anyone else pursuing a bill ON BEHALF OF another company (the supplier or creditor that owns the ' +
+  'debt, e.g. LCS collecting for British Gas), and that company is NOT already one of the organisations ' +
+  'on this complaint, give {"name": the supplier as named in the emails, "why": one sentence on why the ' +
+  'complaint should be raised with them too}; otherwise null. ' +
   'BEFORE recommending anything, look at what Greenco has most recently done — its latest emails and ' +
   'the "Chased / sent" [chased] entries on the timeline. If Greenco has already done the step you ' +
   'would recommend (sent the chaser, asked for Stage 2, sent what they asked for), do NOT recommend it ' +
@@ -58,8 +63,12 @@ export async function refreshReview(id) {
       ...(ctx.events || []).filter((e) => e.type === 'chased').map((e) => e.event_date),
       ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at).map((e) => londonDay(e.received_at)),
     ].filter(Boolean).sort();
+    // The company a debt collector is acting for, to raise it with too.
+    const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()
+      ? { name: raw.supplier.name.trim().slice(0, 200), why: typeof raw.supplier.why === 'string' ? raw.supplier.why.trim().slice(0, 400) : null }
+      : null;
     const review = guardReview(
-      { ...raw, headline, next_action: normaliseNextAction(raw.next_action) },
+      { ...raw, headline, supplier, next_action: normaliseNextAction(raw.next_action) },
       {
         anyOverdue: Boolean(c.any_needs_chasing),
         nextDue: nextDueFromThem([c, ...(c.parties || [])]),

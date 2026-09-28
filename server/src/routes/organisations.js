@@ -27,6 +27,7 @@ const ORG_TYPES = [
   'water',
   'energy',
   'managing_agent',
+  'debt_collector',
   'supplier',
   'other',
 ];

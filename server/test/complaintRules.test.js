@@ -253,3 +253,18 @@ test('a named scheme with no website gets its own, never the type default', () =
   const unknown = effectiveRule({ ombudsman_name: 'Some Other Scheme' }, 'council');
   assert.equal(unknown.ombudsmanUrl, '', 'not the LGSCO default');
 });
+
+test('a debt collector: final response within 8 calendar WEEKS (FCA), then 6 months to the FOS', async () => {
+  const { effectiveRule, computeResponseDue, computeOmbudsmanDeadline, computeOmbudsmanFrom } = await import('../src/services/complaintRules.js');
+  const rule = effectiveRule(null, 'debt_collector');
+  const c = { stage: 'stage_1', raised_on: '2026-12-01', stage_started_on: '2026-12-01' };
+  // 8 weeks, straight through Christmas: never pushed later by bank holidays
+  assert.equal(computeResponseDue(c, rule), '2027-01-26');
+  assert.equal(computeOmbudsmanFrom(c, rule), '2027-01-26');
+  assert.equal(computeOmbudsmanDeadline(c, rule), null); // counted from their final response
+  assert.equal(computeOmbudsmanDeadline({ ...c, final_response_on: '2027-01-20' }, rule), '2027-07-20');
+  assert.match(rule.ombudsman, /Financial Ombudsman/);
+  // their own procedure's figure in working days replaces the weeks
+  const theirs = effectiveRule({ type: 'debt_collector', stage1_response_days: 15 }, 'debt_collector');
+  assert.equal(theirs.stage1Weeks, null);
+});

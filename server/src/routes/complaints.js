@@ -97,7 +97,7 @@ async function decoratedById(id) {
 
 
 const ORG_TYPES = [
-  'council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other',
+  'council', 'housing_association', 'water', 'energy', 'managing_agent', 'debt_collector', 'supplier', 'other',
 ];
 
 // A calendar date as the app stores it. Checked here so a malformed value is a
@@ -1295,58 +1295,163 @@ async function orgTypeFor(orgId) {
   return org.type;
 }
 
+// Add a further organisation to a complaint: its own track, dated from when
+// the complaint was made to them. Shared by "+ Another organisation" and
+// "Raise it with the supplier too".
+async function createParty(complaintId, d, by) {
+  checkPartyDates(d);
+  const c = (await query('SELECT * FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  if (!c) throw new HttpError(404, 'Complaint not found');
+  if (d.organisation_id && d.organisation_id === c.organisation_id) {
+    throw new HttpError(400, `${c.org_name} is already the main organisation on this complaint.`);
+  }
+  const type = (await orgTypeFor(d.organisation_id)) || d.org_type || 'other';
+  const stage = d.stage || 'stage_1';
+  // A complaint that had ended is open again with a new organisation's part
+  // running. Its main track is marked as ended first, so it doesn't read as
+  // back at the stage it finished on.
+  if (c.state !== 'open' && trackOpen({ ...c, state: 'open' })) {
+    await query('UPDATE complaints SET stage = state WHERE id = $1', [c.id]);
+  }
+  let party;
+  try {
+    party = (await query(
+      `INSERT INTO complaint_parties
+         (complaint_id, organisation_id, org_name, org_type, relationship, reference, raised_on, channel,
+          stage, stage_started_on, acknowledged_on, responded_on, final_response_on,
+          response_due, response_due_manual, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      [
+        c.id, d.organisation_id || null, d.org_name, type, d.relationship || null, d.reference || null,
+        d.raised_on, d.channel || null, stage,
+        d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
+        d.acknowledged_on || null, d.responded_on || null,
+        d.final_response_on || (stage === 'stage_2' ? d.responded_on || null : null),
+        d.response_due || null, Boolean(d.response_due), by,
+      ],
+    )).rows[0];
+  } catch (err) {
+    if (err.code === '23505') throw new HttpError(409, `${d.org_name} is already on this complaint.`);
+    throw err;
+  }
+  await recomputePartyDeadlines(party.id);
+  await query(
+    `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+     VALUES ($1,$2,$3,'raised',$4,$5)`,
+    [
+      c.id, party.id, d.raised_on,
+      d.raisedNote ||
+        `Complaint also made to ${d.org_name}${d.relationship ? ` (${d.relationship})` : ''}` +
+          `${d.reference ? `, their reference ${d.reference}` : ''}.`,
+      by,
+    ],
+  );
+  await settleOverall(c.id);
+  scheduleReview(c.id);
+  return party;
+}
+
 router.post(
   '/:id/parties',
   asyncHandler(async (req, res) => {
     const d = parse(partyInput, req.body);
-    checkPartyDates(d);
-    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
-    if (!c) throw new HttpError(404, 'Complaint not found');
-    if (d.organisation_id && d.organisation_id === c.organisation_id) {
-      throw new HttpError(400, `${c.org_name} is already the main organisation on this complaint.`);
+    await createParty(req.params.id, d, who(req));
+    res.status(201).json(await decoratedById(req.params.id));
+  }),
+);
+
+// --- Raise it with the supplier too ----------------------------------------
+// A complaint against a debt collector (LCS) is about a bill that belongs to
+// the supplier (British Gas): the supplier has to issue the right bill and can
+// recall the account from collection, so the complaint is raised with them as
+// well and joined to this one. The AI drafts that complaint from everything
+// on file; a person checks it, then either sends it from here (which adds the
+// supplier to the complaint, dated today) or sends it from Outlook and adds
+// them with the date it went.
+const supplierDraftInput = z.object({
+  organisation_id: z.string().uuid().optional().nullable(),
+  org_name: z.string().trim().min(1).max(200),
+});
+router.post(
+  '/:id/supplier/draft',
+  asyncHandler(async (req, res) => {
+    if (!config.anthropic.enabled) throw new HttpError(503, 'The AI isn’t configured, so the complaint can’t be drafted.');
+    const d = parse(supplierDraftInput, req.body);
+    const org = d.organisation_id
+      ? (await query('SELECT name, complaints_email FROM organisations WHERE id = $1', [d.organisation_id])).rows[0]
+      : null;
+    const ctx = await gatherContext(req.params.id, undefined, { files: 2 });
+    const c = ctx.complaint;
+    const name = org?.name || d.org_name;
+    const r = await assistComplaint({
+      ...ctx,
+      instruction:
+        `Draft a FORMAL COMPLAINT email from Greenco to ${name}, the company that owns this account, which ` +
+        `${c.org_name} is pursuing on their behalf. It is a NEW complaint to ${name} (not a reply to ${c.org_name}). ` +
+        'It must: say plainly that it is a formal complaint under their complaints procedure; quote the ' +
+        `account number(s) and ${c.org_name}'s reference; set out, with dates from the emails and documents, ` +
+        'what Greenco asked for, what was promised and what has still not been done (for example the full ' +
+        'or final bill never issued, fees or charges added, the account passed to collection while it was ' +
+        'disputed); and ask them, by a date 10 working days from today, to (1) put the account on hold and ' +
+        `recall it from ${c.org_name} while the complaint is open, (2) issue the correct full bill, (3) remove ` +
+        'any fees or charges added because of their error, and (4) acknowledge this complaint and give their ' +
+        'complaint reference. Firm, polite, UK business English, no long dashes. Use only facts in the ' +
+        'context; put [square brackets] only where a fact is genuinely unknown. In "email" give the subject ' +
+        'and the full body, greeting to sign-off (sign off as Greenco Property Group, Accounts).',
+    });
+    res.json({
+      to: org?.complaints_email || null,
+      subject: r.email?.subject || '',
+      body: r.email?.body || '',
+      caution: r.caution || null,
+    });
+  }),
+);
+
+const supplierRaiseInput = z.object({
+  organisation_id: z.string().uuid().optional().nullable(),
+  org_name: z.string().trim().min(1).max(200),
+  org_type: z.enum(ORG_TYPES).optional(),
+  // Send it from here now…
+  send: z.object({
+    to: z.string().min(3),
+    cc: z.string().optional().nullable(),
+    subject: z.string().min(1),
+    body: z.string().min(1),
+  }).optional().nullable(),
+  // …or it was sent from Outlook on this date.
+  sent_on: isoDate.optional().nullable(),
+});
+router.post(
+  '/:id/supplier/raise',
+  asyncHandler(async (req, res) => {
+    const d = parse(supplierRaiseInput, req.body);
+    if (!d.send && !d.sent_on) throw new HttpError(400, 'Send the complaint from here, or give the date it was sent.');
+    const c = await decoratedById(req.params.id);
+    const raisedOn = d.send ? todayISO() : d.sent_on;
+    if (raisedOn > todayISO()) throw new HttpError(400, 'That date is in the future');
+    if (d.send) {
+      const to = parseRecipients(d.send.to);
+      const cc = parseRecipients(d.send.cc);
+      if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
+      if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
+      for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
+      await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
+      await recordOutboundEmail({
+        complaintId: c.id, fromEmail: fromAddress(), to, cc,
+        subject: d.send.subject, body: d.send.body, sentBy: who(req),
+      });
     }
-    const type = (await orgTypeFor(d.organisation_id)) || d.org_type || 'other';
-    const stage = d.stage || 'stage_1';
-    // A complaint that had ended is open again with a new organisation's part
-    // running. Its main track is marked as ended first, so it doesn't read as
-    // back at the stage it finished on.
-    if (c.state !== 'open' && trackOpen({ ...c, state: 'open' })) {
-      await query('UPDATE complaints SET stage = state WHERE id = $1', [c.id]);
-    }
-    let party;
-    try {
-      party = (await query(
-        `INSERT INTO complaint_parties
-           (complaint_id, organisation_id, org_name, org_type, relationship, reference, raised_on, channel,
-            stage, stage_started_on, acknowledged_on, responded_on, final_response_on,
-            response_due, response_due_manual, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
-        [
-          c.id, d.organisation_id || null, d.org_name, type, d.relationship || null, d.reference || null,
-          d.raised_on, d.channel || null, stage,
-          d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
-          d.acknowledged_on || null, d.responded_on || null,
-          d.final_response_on || (stage === 'stage_2' ? d.responded_on || null : null),
-          d.response_due || null, Boolean(d.response_due), who(req),
-        ],
-      )).rows[0];
-    } catch (err) {
-      if (err.code === '23505') throw new HttpError(409, `${d.org_name} is already on this complaint.`);
-      throw err;
-    }
-    await recomputePartyDeadlines(party.id);
-    await query(
-      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-       VALUES ($1,$2,$3,'raised',$4,$5)`,
-      [
-        c.id, party.id, d.raised_on,
-        `Complaint also made to ${d.org_name}${d.relationship ? ` (${d.relationship})` : ''}` +
-          `${d.reference ? `, their reference ${d.reference}` : ''}.`,
-        who(req),
-      ],
-    );
-    await settleOverall(c.id);
-    scheduleReview(c.id);
+    await createParty(c.id, {
+      organisation_id: d.organisation_id || null,
+      org_name: d.org_name,
+      org_type: d.org_type || 'supplier',
+      relationship: `Owns the account ${c.org_name} is collecting`,
+      raised_on: raisedOn,
+      channel: 'email',
+      raisedNote: `Complaint raised with ${d.org_name} too (the account ${c.org_name} is collecting is theirs)` +
+        `${d.send ? ', sent from here' : ', sent from Outlook'}.`,
+    }, who(req));
     res.status(201).json(await decoratedById(c.id));
   }),
 );

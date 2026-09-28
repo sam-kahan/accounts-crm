@@ -155,6 +155,23 @@ export const RULES = {
     legalBasis:
       'Residential managing agents in England must belong to a government-approved redress scheme (The Property Ombudsman or the Property Redress Scheme). The schemes expect an acknowledgement within about 3 working days and a written outcome within about 15; you can refer once the agent’s own process is finished or 8 weeks have passed since the complaint was made, and within 12 months of their final response. Whether a service charge or administration charge is payable or reasonable is for the First-tier Tribunal (Property Chamber). Check these against the agent’s own procedure.',
   },
+  debt_collector: {
+    label: 'Debt collector',
+    ackDays: 5,
+    // The FCA's rule is a final response within 8 WEEKS (calendar), not a
+    // number of working days: counted as weeks so a bank holiday can never
+    // push the date later than the real one.
+    stage1Days: 40,
+    stage1Weeks: 8,
+    stage2Days: 20,
+    ombudsman: 'Financial Ombudsman Service',
+    ombudsmanUrl: 'https://www.financial-ombudsman.org.uk/',
+    referralMonths: 6,
+    referralFrom: 'final_response',
+    ombudsmanAfterWeeks: 8,
+    legalBasis:
+      'Debt collection is regulated by the Financial Conduct Authority. Under its complaint rules (DISP) the firm must acknowledge a complaint promptly and send a final response within 8 weeks; you can then take it to the Financial Ombudsman Service, which normally needs it within 6 months of their final response, or once 8 weeks have passed with no final response. Check the collector is FCA-authorised (the FCA register). The debt itself is the SUPPLIER’s: raise it with them too, and ask them to hold or recall the account from collection while it is disputed.',
+  },
   other: {
     label: 'Other',
     stage1Days: 10,
@@ -221,6 +238,7 @@ const ORG_FIELDS = {
 const KIND_PHRASE = {
   council: 'a council', housing_association: 'a housing association', water: 'a water company',
   energy: 'an energy supplier', supplier: 'a supplier', managing_agent: 'a managing agent',
+  debt_collector: 'a debt collector (the FCA’s rules)',
   other: 'this kind of organisation',
 };
 
@@ -240,6 +258,9 @@ export function effectiveRule(org, type) {
     else rule[key] = v;
   }
   rule.defaulted = defaulted;
+  // Their own Stage 1 timescale (in working days) replaces a default counted
+  // in weeks.
+  if (!defaulted.includes('stage1Days')) rule.stage1Weeks = null;
   // Where each figure came from: their document, research of their website,
   // or typed in (migration 027).
   rule.sourceOf = {};
@@ -309,6 +330,7 @@ export function computeResponseDue(complaint, rule) {
   const stage = complaint.stage || 'stage_1';
   const start = stageStart(complaint);
   if (stage === 'stage_1') {
+    if (rule.stage1Weeks) return addCalendarDays(start, rule.stage1Weeks * 7);
     if (rule.stage1Clock === 'acknowledgement') {
       const from = complaint.acknowledged_on || computeAckDue(complaint, rule);
       return addWorkingDays(from, rule.stage1Days);
@@ -465,8 +487,9 @@ export function procedureSteps(complaint, rule) {
       : `${rule.ackDays} working days from receipt (${basisOf(rule, 'ackDays')})`,
   });
 
-  const s1Note =
-    rule.stage1Clock === 'acknowledgement'
+  const s1Note = rule.stage1Weeks
+    ? `${rule.stage1Weeks} weeks from receipt`
+    : rule.stage1Clock === 'acknowledgement'
       ? `${rule.stage1Days} working days from their acknowledgement` +
         (complaint.acknowledged_on ? '' : '. This is the latest date, if they acknowledge on time')
       : `${rule.stage1Days} working days from receipt`;

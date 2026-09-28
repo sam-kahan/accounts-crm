@@ -47,7 +47,7 @@ async function ask({ system, user, maxTokens, effort }) {
   return res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }
 
-export const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other'];
+export const ORG_TYPES = ['council', 'housing_association', 'water', 'energy', 'managing_agent', 'debt_collector', 'supplier', 'other'];
 export const EVENT_TYPES = ['raised', 'acknowledged', 'chased', 'response_received', 'escalated', 'resolved', 'deadline_missed', 'note'];
 
 const SYSTEM = `You rebuild the complete record of one complaint that Greenco (a UK property and

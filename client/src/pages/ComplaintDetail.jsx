@@ -151,6 +151,8 @@ export default function ComplaintDetail() {
   const [emailParties, setEmailParties] = useState({});
   // Adding (true) or correcting (a party row) a further organisation.
   const [partyForm, setPartyForm] = useState(null);
+  // Raising it with the supplier a debt collector acts for (null or {name}).
+  const [supplierFor, setSupplierFor] = useState(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
 
@@ -722,6 +724,33 @@ export default function ComplaintDetail() {
       </div>
 
       <BounceWarning list={c.bounces} onDone={load} />
+
+      {/* Against a debt collector: the debt is the supplier's, so the
+          complaint goes to them too and is joined to this one. Suggested by
+          the AI review (it names the supplier) or by the collector's type. */}
+      {(() => {
+        const onIt = (n) => tracks.some((t) => {
+          const a = String(t.org_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const b = String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return a && b && (a.includes(b) || b.includes(a));
+        });
+        const suggested = c.ai_review?.supplier?.name && !onIt(c.ai_review.supplier.name) ? c.ai_review.supplier : null;
+        const collector = tracks.find((t) => t.org_type === 'debt_collector');
+        const hasSupplier = tracks.some((t) => t.org_type !== 'debt_collector');
+        if (c.state !== 'open' || (!suggested && !(collector && !hasSupplier))) return null;
+        return (
+          <div className="inline-note warn" style={{ marginBottom: 20 }}>
+            <strong>Raise it with {suggested ? suggested.name : 'the supplier'} too.</strong>{' '}
+            {suggested?.why || `${collector.org_name} is collecting a debt that belongs to the supplier: they issue the bill and can recall the account from collection.`}{' '}
+            The AI drafts the complaint to them; once it’s sent they join this complaint with their own deadlines.
+            <div style={{ marginTop: 8 }}>
+              <button className="btn-primary btn-sm" onClick={() => setSupplierFor({ name: suggested?.name || '' })}>
+                Raise it with {suggested ? suggested.name : 'the supplier'}…
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* An email says it has been put right: confirm, or say it isn't yet.
           Never closed without a person. */}
@@ -1403,6 +1432,16 @@ export default function ComplaintDetail() {
         <DatedActionModal action={action} onClose={() => setAction(null)} onSubmit={recordAction} />
       )}
 
+      {supplierFor && (
+        <SupplierModal
+          c={c}
+          suggestedName={supplierFor.name}
+          aiEnabled={aiEnabled}
+          onClose={() => setSupplierFor(null)}
+          onDone={async (msg2) => { setSupplierFor(null); await load(); setMsg(msg2); }}
+        />
+      )}
+
       {partyForm && (
         <PartyModal
           c={c}
@@ -1850,6 +1889,141 @@ function EmailSearch({ s, busy, onSearch }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Raise the complaint with the supplier a debt collector is acting for: pick
+// the supplier, have the AI draft the complaint from everything on file, check
+// it, then send it from here (copied to this complaint's address and
+// utilities@) or say it went from Outlook. Either way the supplier joins this
+// complaint as a further organisation, dated the day it was sent.
+function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
+  const [orgs, setOrgs] = useState([]);
+  const [orgId, setOrgId] = useState('');
+  const [name, setName] = useState(suggestedName || '');
+  const [type, setType] = useState('energy');
+  const [draft, setDraft] = useState(null); // { to, subject, body, caution }
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [sentOn, setSentOn] = useState(todayISO());
+  useEffect(() => {
+    api.organisations.list().then((list) => {
+      setOrgs(list);
+      // The suggested supplier, if it is already saved.
+      const k = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const hit = suggestedName && list.find((o) => k(o.name).includes(k(suggestedName)) || k(suggestedName).includes(k(o.name)));
+      if (hit) { setOrgId(hit.id); setName(hit.name); setType(hit.type); }
+    }).catch(() => setOrgs([]));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (id) => {
+    setOrgId(id);
+    const o = orgs.find((x) => x.id === id);
+    if (o) { setName(o.name); setType(o.type); }
+  };
+  const who = { organisation_id: orgId || null, org_name: name.trim(), org_type: type };
+
+  async function makeDraft() {
+    setBusy('draft'); setError(null);
+    try {
+      const d = await api.complaints.supplierDraft(c.id, { organisation_id: orgId || null, org_name: name.trim() });
+      setDraft({ ...d, to: d.to || '' });
+    } catch (e) { setError(e.message); } finally { setBusy(null); }
+  }
+  async function sendNow() {
+    setBusy('send'); setError(null);
+    try {
+      await api.complaints.supplierRaise(c.id, { ...who, send: { to: draft.to, subject: draft.subject, body: draft.body } });
+      await onDone(`Sent to ${name} and added to this complaint. Their deadlines run from today.`);
+    } catch (e) { setError(e.message); setBusy(null); }
+  }
+  async function sentFromOutlook() {
+    if (!sentOn || sentOn > todayISO()) { setError('Enter the date it was sent (not in the future).'); return; }
+    setBusy('outlook'); setError(null);
+    try {
+      await api.complaints.supplierRaise(c.id, { ...who, sent_on: sentOn });
+      await onDone(`${name} added to this complaint, from ${formatDate(sentOn)}.`);
+    } catch (e) { setError(e.message); setBusy(null); }
+  }
+
+  return (
+    <Modal title={`Raise it with ${name || 'the supplier'} too`} onClose={onClose}>
+      {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        {c.org_name} is collecting a debt that belongs to the supplier. The complaint goes to the
+        supplier too, and they join this complaint with their own reference and deadlines, sharing
+        its emails and timeline.
+      </p>
+      <label className="field">
+        <span className="lbl">The supplier</span>
+        <select value={orgId} onChange={(e) => pick(e.target.value)}>
+          <option value="">— Not saved yet (general timescales) —</option>
+          {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      </label>
+      <div className="form-grid">
+        <label className="field">
+          <span className="lbl">Name *</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. British Gas" />
+        </label>
+        <label className="field">
+          <span className="lbl">Type</span>
+          <select value={type} disabled={Boolean(orgId)} onChange={(e) => setType(e.target.value)}>
+            {Object.entries(ORG_TYPE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {!draft ? (
+        <div className="btn-row" style={{ marginBottom: 12 }}>
+          {aiEnabled && (
+            <button className="btn-primary" disabled={!name.trim() || busy} onClick={makeDraft}>
+              {busy === 'draft' ? 'Drafting from the emails…' : 'Draft the complaint to them'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <label className="field">
+            <span className="lbl">To *</span>
+            <input value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} placeholder="their complaints address" />
+            {!draft.to && <span className="muted" style={{ fontSize: 12 }}>Their complaints address isn’t saved: enter it (and save it on the organisation for next time).</span>}
+          </label>
+          <label className="field">
+            <span className="lbl">Subject *</span>
+            <input value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
+          </label>
+          <label className="field">
+            <span className="lbl">Message * (check every fact and date before sending)</span>
+            <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          </label>
+          {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+            Copied in automatically: {c.email_address}{c.external_cc?.length ? `, ${c.external_cc.join(', ')}` : ''}.
+          </div>
+          <div className="btn-row" style={{ marginBottom: 12 }}>
+            <button className="btn-primary" disabled={busy || !draft.to || !draft.subject || !draft.body} onClick={sendNow}>
+              {busy === 'send' ? 'Sending…' : `Send it and add ${name}`}
+            </button>
+            <button className="btn" onClick={() => navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`).catch(() => {})}>
+              Copy it (to send from Outlook)
+            </button>
+          </div>
+        </>
+      )}
+
+      <details>
+        <summary style={{ cursor: 'pointer', fontSize: 13 }}>Already sent it from Outlook?</summary>
+        <div className="btn-row" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+          <label className="field" style={{ margin: 0, maxWidth: 180 }}>
+            <span className="lbl" style={{ fontSize: 12 }}>Date it was sent</span>
+            <input type="date" value={sentOn} max={todayISO()} onChange={(e) => setSentOn(e.target.value)} />
+          </label>
+          <button className="btn btn-sm" disabled={!name.trim() || busy} onClick={sentFromOutlook}>
+            {busy === 'outlook' ? 'Adding…' : `Add ${name || 'them'} to this complaint`}
+          </button>
+        </div>
+      </details>
+    </Modal>
   );
 }
 

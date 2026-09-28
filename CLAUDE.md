@@ -604,6 +604,19 @@ the page says how far each date can be trusted.
   (never closes it), shown on the complaint (Yes, mark it resolved / Not
   resolved yet), in the list ("Needs attention" / "Looks resolved" filters,
   with `new_emails` counts), the dashboard tile and the morning email.
+- **Debt collectors, and raising it with the supplier.** New type
+  `debt_collector`: FCA rules (DISP), final response within **8 calendar
+  weeks** (`stage1Weeks`, counted as weeks so a bank holiday never makes the
+  date later; their own figure in working days replaces it), then the
+  Financial Ombudsman within 6 months of the final response (or after 8
+  weeks). The debt is the SUPPLIER's, so the review names it (`supplier`:
+  {name, why}) when a collector acts for a company not on the complaint, and
+  the page offers **Raise it with <supplier>…**: `POST /:id/supplier/draft`
+  (one AI call) drafts the formal complaint to them from everything on file,
+  and `POST /:id/supplier/raise` sends it from here (copied to the
+  complaint's address and utilities@) or records it sent from Outlook on a
+  date — either way the supplier joins as a further organisation
+  (`createParty`), dated the day it went. Nothing is added if sending fails.
 - New type **`managing_agent`** (managing agent / freeholder): TPO or the
   Property Redress Scheme, ack 3 / Stage 1 15 / Stage 2 15 working days, refer
   after 8 weeks, within 12 months of the final response; FTT (Property Chamber)
