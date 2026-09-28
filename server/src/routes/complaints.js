@@ -1170,6 +1170,12 @@ router.put(
     // default for anything its procedure doesn't state.
     let orgType = d.org_type;
     if (d.organisation_id) {
+      const dup = (await query(
+        'SELECT org_name FROM complaint_parties WHERE complaint_id = $1 AND organisation_id = $2', [req.params.id, d.organisation_id],
+      )).rows[0];
+      if (dup) throw new HttpError(400, `${dup.org_name} is already on this complaint as a further organisation. Take it off there first.`);
+    }
+    if (d.organisation_id) {
       const org = (await query('SELECT type FROM organisations WHERE id = $1', [d.organisation_id]))
         .rows[0];
       if (!org) throw new HttpError(400, 'That organisation no longer exists');
@@ -1334,7 +1340,8 @@ router.put(
   '/:id/parties/:partyId',
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.partyId).success) throw new HttpError(400, 'Invalid id');
-    const d = parse(partyInput.partial(), req.body);
+    // The stage moves with the step buttons, not by correction.
+    const d = parse(partyInput.omit({ stage: true }).partial(), req.body);
     const { party } = await loadTrack(req.params.id, req.params.partyId);
     checkPartyDates({ ...party, ...d });
     const c = (await query('SELECT organisation_id, org_name FROM complaints WHERE id = $1', [req.params.id])).rows[0];
