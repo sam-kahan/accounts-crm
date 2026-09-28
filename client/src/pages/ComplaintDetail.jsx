@@ -441,6 +441,20 @@ export default function ComplaintDetail() {
         </div>
       </div>
 
+      {c.needs_check && (
+        <div className="inline-note warn" style={{ marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <span>
+            <strong>To check:</strong> the system created this from emails by itself. Look over the
+            organisation, dates and timeline (use Edit details for anything wrong), then confirm.
+          </span>
+          <button className="btn-primary btn-sm" onClick={async () => {
+            try { await api.complaints.markChecked(id); await load(); } catch (e) { setMsg(e.message); }
+          }}>
+            Looks right
+          </button>
+        </div>
+      )}
+
       {/* The assistant's standing review */}
       {aiEnabled && (
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>

@@ -526,6 +526,29 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-28 — past-complaints search: safe imports, only new threads, every email
+- **A new search reads only new threads.** Every thread a search has been
+  through (listed, imported, skipped or ruled out) is remembered in
+  `complaint_import_candidates`, and the same thread in another mailbox is
+  recognised by its emails' `message_ids` (migration `023`). The page says how
+  many were passed over ("read before, not read again").
+- **Import and Link can't bring a complaint in twice.** The click claims the
+  candidate and its group (`status = 'importing'`, one `UPDATE … WHERE status =
+  'pending'`) and answers 202; the work runs in the background, two at a time.
+  A failure before the complaint exists puts it back on the list with the
+  reason; after, the complaint is kept, flagged To check, and says what may be
+  missing. A restart does the same (`releaseStuckImports`).
+- **The whole history is searched**: three months at a time (Microsoft returns
+  at most 1,000 results per search), long threads followed past 50 emails,
+  Microsoft's throttling waited out rather than failing.
+- **Each email is stored once** (unique `message_id`), and a watched email the
+  AI ruled out is remembered (`complaint_email_discards`) rather than re-read.
+  A read that fails is retried (up to 6 times) instead of being discarded.
+- **Grouping is stricter**: two flats at one postcode (Apartment 309 and 326,
+  2 Moorfields) are two complaints (`unitOf`), and a thread with no postcode
+  can't join two properties together.
+- Tidy up keeps the **open** complaint when merging an open and a closed one.
+
 ### 2026-09-28 — the system watches accounts@, and finds past complaints
 - **Nothing to forward**: complaint emails already copy accounts@, so the system
   watches it — new complaints we send are created automatically, and replies

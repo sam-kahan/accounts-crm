@@ -34,15 +34,20 @@ export default function EmailAutomation({ onChanged }) {
   const loadCands = () => api.complaints.pastCandidates().then(setCands).catch(() => setCands([]));
   useEffect(() => { load(); loadCands(); }, []);
 
-  // While a past-complaints search runs, follow its progress.
+  // While a past-complaints search runs, or anything is being imported,
+  // follow its progress.
+  const importing = cands.some((c) => c.status === 'importing');
   const running = a?.past_scan?.status === 'running';
   useEffect(() => {
-    if (!running) return undefined;
+    if (!running && !importing) return undefined;
+    // The list fills in (and, with automatic import, empties) as it reads.
     const t = setInterval(() => {
-      load().then((r) => { if (r?.past_scan?.status !== 'running') loadCands(); });
-    }, 4000);
+      load();
+      loadCands();
+      onChanged?.();
+    }, 6000);
     return () => clearInterval(t);
-  }, [running]);
+  }, [running, importing]);
 
   if (!a) return err ? <div className="inline-note warn" style={{ marginBottom: 16 }}>Email status: {err}</div> : null;
 
@@ -86,29 +91,43 @@ export default function EmailAutomation({ onChanged }) {
       setErr(e.message);
     }
   }
-  async function decide(c, how) {
+  // Import and Link answer at once (the server claims the complaint, so a
+  // second click can't bring it in twice) and carry on in the background; the
+  // row shows "Bringing in its emails…" until it is done.
+  async function decide(c, how, { quiet = false } = {}) {
     setBusyId(c.id);
     try {
       if (how === 'import') await api.complaints.importPast(c.id);
       else if (how === 'link') await api.complaints.linkPast(c.id, c.existing.id);
       else await api.complaints.skipPast(c.id);
-      await loadCands();
-      onChanged?.();
     } catch (e) {
-      setErr(e.message);
+      if (!quiet) setErr(e.message);
     } finally {
       setBusyId(null);
     }
+    await loadCands();
+    onChanged?.();
   }
   // Import all leaves out any that are already in the system: those are
   // linked one at a time, so nothing is duplicated.
-  const fresh = cands.filter((c) => !c.existing);
+  const fresh = cands.filter((c) => !c.existing && c.status !== 'importing');
+  async function toggleAuto(on) {
+    try {
+      await api.complaints.setAutoImport(on);
+      await load();
+      setTimeout(() => { loadCands(); onChanged?.(); }, 4000);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
   async function importAll() {
     if (!confirm(`Import ${fresh.length}? Each one is created with its dates and emails.` +
       (cands.length > fresh.length ? ` (${cands.length - fresh.length} already in the system are left for you to link.)` : ''))) return;
+    // Each import takes in the threads grouped with it, so a later one may
+    // already be taken; that refusal is expected and not shown.
     for (const c of fresh) {
       // eslint-disable-next-line no-await-in-loop
-      await decide(c, 'import');
+      await decide(c, 'import', { quiet: true });
     }
   }
 
@@ -148,7 +167,7 @@ export default function EmailAutomation({ onChanged }) {
           <div style={{ marginTop: 12 }}>
             {running ? (
               <div className="inline-note">
-                Finding past complaints: {scan.stage}. {scan.threads ? `Read ${scan.read || 0} of ${scan.threads} email threads,` : ''} found {scan.found || 0} so far.
+                Finding past complaints: {scan.stage}. {scan.threads ? `Read ${scan.read || 0} of ${scan.threads} new email threads,` : ''}{scan.skipped ? ` (${scan.skipped} read before, not read again)` : ''} found {scan.found || 0} so far.
               </div>
             ) : scanOpen ? (
               <div className="card" style={{ padding: 12 }}>
@@ -179,7 +198,8 @@ export default function EmailAutomation({ onChanged }) {
             )}
             {scan.status === 'done' && !running && (
               <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
-                Last search {ago(scan.finished_at)}: read {scan.read} threads, found {scan.found}.
+                Last search {ago(scan.finished_at)}: read {scan.read} new threads, found {scan.found}.
+                {scan.skipped ? ` ${scan.skipped} thread${scan.skipped === 1 ? '' : 's'} read before were not read again.` : ''}
               </span>
             )}
             {scan.status === 'failed' && (
@@ -189,10 +209,21 @@ export default function EmailAutomation({ onChanged }) {
         </div>
       </div>
 
-      {cands.length > 0 && (
+      {(cands.length > 0 || running) && (
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--navy, #1e2235)' }}>
+          <div className="card-body" style={{ paddingBottom: 0 }}>
+            <label className="inline-note" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+              <input type="checkbox" checked={Boolean(a.past_auto_import)} onChange={(e) => toggleAuto(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>
+                <strong>Import automatically.</strong> Complaints the AI is sure of are imported as they’re
+                found, each marked <em>To check</em> for a quick look. Ones it’s less sure of, and ones
+                already in the system, wait here for you.
+              </span>
+            </label>
+          </div>
           <div className="card-head">
             <h2>Past complaints found <span className="badge navy">{cands.length}</span></h2>
+            {importing && <span className="muted" style={{ fontSize: 13 }}>Importing in the background. You can leave this page.</span>}
             {fresh.length > 0 && (
               <button className="btn-primary btn-sm" onClick={importAll} disabled={Boolean(busyId)}>
                 Import all{cands.length > fresh.length ? ` ${fresh.length} new` : ''}
@@ -217,13 +248,18 @@ export default function EmailAutomation({ onChanged }) {
                           Link its emails there rather than importing it again.
                         </div>
                       )}
+                      {c.error && c.status !== 'importing' && (
+                        <div className="inline-note warn" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>{c.error}</div>
+                      )}
                       <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                         Raised {formatDate(x.raised_on) } · {x.state === 'resolved' ? `resolved ${formatDate(x.resolved_on)}` : `open, at ${String(x.stage || 'stage_1').replace('_', ' ')}`}
                         {' '}· {c.message_count} email{c.message_count === 1 ? '' : 's'} · {x.confidence ? `${x.confidence} confidence` : ''}
                       </div>
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {c.existing ? (
+                      {c.status === 'importing' ? (
+                        <span className="muted" style={{ fontSize: 13 }}>Bringing in its emails…</span>
+                      ) : c.existing ? (
                         <button className="btn-primary btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'link')}>
                           {busyId === c.id ? 'Linking…' : `Link emails to ${c.existing.ref_code}`}
                         </button>
@@ -232,7 +268,9 @@ export default function EmailAutomation({ onChanged }) {
                           {busyId === c.id ? 'Importing…' : 'Import'}
                         </button>
                       )}{' '}
-                      <button className="btn-ghost btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'skip')}>Skip</button>
+                      {c.status !== 'importing' && (
+                        <button className="btn-ghost btn-sm" disabled={busyId === c.id} onClick={() => decide(c, 'skip')}>Skip</button>
+                      )}
                     </td>
                   </tr>
                 );

@@ -195,7 +195,8 @@ router.get(
             WHERE direction <> 'outbound' AND reviewed_at IS NULL`,
         )
       ).rows[0].n;
-      complaints = { open: rows.length, chasing, waiting };
+      const toCheck = (await query('SELECT count(*)::int AS n FROM complaints WHERE needs_check')).rows[0].n;
+      complaints = { open: rows.length, chasing, waiting, to_check: toCheck };
     }
 
     res.json({

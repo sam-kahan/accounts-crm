@@ -18,7 +18,7 @@ import keyDates from './routes/keyDates.js';
 import tasks from './routes/tasks.js';
 import dashboard from './routes/dashboard.js';
 import organisations from './routes/organisations.js';
-import { resumeInterruptedScan } from './services/pastComplaints.js';
+import { resumeInterruptedScan, releaseStuckImports } from './services/pastComplaints.js';
 import complaints from './routes/complaints.js';
 import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
@@ -164,7 +164,10 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(config.port, () => {
-  // A past-complaints search stopped by this restart (a deploy) carries on.
+  // An import stopped by this restart is settled (back on the list if nothing
+  // was created yet; otherwise the complaint it made is flagged to check), and
+  // a past-complaints search stopped by it carries on.
+  releaseStuckImports().catch((err) => console.error('  Stuck imports not released:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

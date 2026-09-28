@@ -15,7 +15,11 @@ export function emailConfigured() {
   return config.ms.enabled;
 }
 
+// One app token, reused until shortly before it expires (it lasts about an
+// hour) — a long search would otherwise ask Microsoft for hundreds of them.
+let cachedToken = null;
 async function getAppToken() {
+  if (cachedToken && cachedToken.expires > Date.now() + 120000) return cachedToken.value;
   const body = new URLSearchParams({
     client_id: config.ms.clientId,
     client_secret: config.ms.clientSecret,
@@ -33,7 +37,8 @@ async function getAppToken() {
   if (!res.ok) throw new Error(`Graph token request failed: ${res.status}`);
   const json = await res.json();
   if (!json.access_token) throw new Error('Graph token response missing access_token');
-  return json.access_token;
+  cachedToken = { value: json.access_token, expires: Date.now() + (Number(json.expires_in) || 3000) * 1000 };
+  return cachedToken.value;
 }
 
 function normalise(m) {
@@ -62,103 +67,124 @@ const SELECT =
   'id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,' +
   'receivedDateTime,sentDateTime,conversationId,isDraft';
 
-async function graphGet(url, token, headers = {}) {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, ...headers } });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    const err = new Error(`Microsoft Graph refused (${res.status})${res.status === 403 ? ': the app isn’t allowed to read this mailbox' : ''}`);
-    err.status = res.status;
-    err.detail = detail.slice(0, 300);
-    throw err;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Every Graph read goes through here. Microsoft limits how many requests an
+// app may make to one mailbox at once, and answers 429 (or 503) with a
+// Retry-After when it wants us to slow down: those are waited out and retried
+// a few times rather than treated as failures.
+async function graphGet(url, headers = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    const token = await getAppToken();
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, ...headers } });
+    if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < 5) {
+      const wait = Math.min(60, Number(res.headers.get('retry-after')) || 2 ** (attempt + 1));
+      await sleep(wait * 1000);
+      continue;
+    }
+    if (res.status === 401 && attempt === 0) {
+      cachedToken = null; // expired early: fetch a fresh one once
+      continue;
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      const err = new Error(`Microsoft Graph refused (${res.status})${res.status === 403 ? ': the app isn’t allowed to read this mailbox' : ''}`);
+      err.status = res.status;
+      err.detail = detail.slice(0, 300);
+      throw err;
+    }
+    return res.json();
   }
-  return res.json();
 }
+
+const messagesUrl = (mailbox) =>
+  `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages`;
 
 // Messages in one mailbox received since a date (every folder, sent items
-// included, drafts left out), paging across the whole window.
+// included, drafts left out), paging across the whole window. `complete` says
+// whether the window was read to the end — a watcher must not move its
+// checkpoint past mail it didn't get to.
 export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
-  if (!config.ms.enabled) return [];
-  const token = await getAppToken();
+  if (!config.ms.enabled) return { items: [], complete: true };
   let url =
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
-    `?$top=50&$orderby=receivedDateTime desc` +
+    `${messagesUrl(mailbox)}?$top=50&$orderby=receivedDateTime desc` +
     `&$filter=receivedDateTime ge ${new Date(since).toISOString()}` +
     `&$select=${SELECT}`;
-  const out = [];
+  const items = [];
   for (let page = 0; page < maxPages && url; page += 1) {
-    const json = await graphGet(url, token);
-    for (const m of json.value ?? []) if (!m.isDraft) out.push(normalise(m));
+    const json = await graphGet(url);
+    for (const m of json.value ?? []) if (!m.isDraft) items.push(normalise(m));
     url = json['@odata.nextLink'] || null;
   }
-  return out;
+  return { items, complete: !url };
 }
 
-// Search a mailbox (Outlook's own search) for a phrase. Used by the
-// past-complaints search; results are filtered by date by the caller.
-export async function searchMailbox(mailbox, phrase, maxResults = 500) {
+// Search a mailbox (Outlook's own search) for words, within a date window.
+// Microsoft returns at most 1,000 results per search, newest first, so a long
+// history is searched a window at a time by the caller. The words are joined
+// with AND (no quote characters reach the query, so an odd reference can't
+// break it). If the date restriction is refused, the search is repeated
+// without it and filtered here.
+export async function searchMailbox(mailbox, phrase, { from = null, to = null, max = 1000 } = {}) {
   if (!config.ms.enabled) return [];
-  const token = await getAppToken();
-  let url =
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
-    `?$search=${encodeURIComponent(`"${phrase}"`)}&$top=50&$select=${SELECT}`;
-  const out = [];
-  while (url && out.length < maxResults) {
-    const json = await graphGet(url, token);
-    for (const m of json.value ?? []) if (!m.isDraft) out.push(normalise(m));
-    url = json['@odata.nextLink'] || null;
+  const words = String(phrase || '').replace(/["\\()]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const day = (d) => new Date(d).toISOString().slice(0, 10);
+  const dated = [words.join(' AND '), from && `received>=${day(from)}`, to && `received<${day(to)}`]
+    .filter(Boolean).join(' AND ');
+  const run = async (q) => {
+    let url = `${messagesUrl(mailbox)}?$search=${encodeURIComponent(`"${q}"`)}&$top=50&$select=${SELECT}`;
+    const out = [];
+    while (url && out.length < max) {
+      const json = await graphGet(url);
+      for (const m of json.value ?? []) if (!m.isDraft) out.push(normalise(m));
+      url = json['@odata.nextLink'] || null;
+    }
+    return out;
+  };
+  try {
+    return await run(dated);
+  } catch (err) {
+    if (err.status !== 400 || (!from && !to)) throw err;
+    const all = await run(words.join(' AND '));
+    return all.filter((m) => (!from || m.receivedAt >= new Date(from)) && (!to || m.receivedAt < new Date(to)));
   }
-  return out;
 }
 
-// Every message in one email thread in a mailbox, oldest first, with its text.
+// Every message in one email thread in a mailbox, oldest first, with its text
+// — all of it, however long the thread (every page is followed).
 export async function fetchConversation(mailbox, conversationId) {
   if (!config.ms.enabled) return [];
-  const token = await getAppToken();
-  const url =
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages` +
+  let url =
+    `${messagesUrl(mailbox)}` +
     `?$filter=${encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)}` +
     `&$top=50&$select=${SELECT},body`;
-  const json = await graphGet(url, token, { Prefer: 'outlook.body-content-type="text"' });
-  return (json.value ?? [])
-    .filter((m) => !m.isDraft)
-    .map((m) => ({ ...normalise(m), bodyText: (m.body?.content || '').slice(0, 100000) }))
-    .sort((a, b) => a.receivedAt - b.receivedAt);
+  const out = [];
+  for (let page = 0; page < 20 && url; page += 1) {
+    const json = await graphGet(url, { Prefer: 'outlook.body-content-type="text"' });
+    for (const m of json.value ?? []) {
+      if (!m.isDraft) out.push({ ...normalise(m), bodyText: (m.body?.content || '').slice(0, 100000) });
+    }
+    url = json['@odata.nextLink'] || null;
+  }
+  return out.sort((a, b) => a.receivedAt - b.receivedAt);
 }
 
 export async function fetchMailboxMessages() {
   if (!config.ms.enabled) return devEmails();
-
-  const token = await getAppToken();
-  // The catch-all is a firehose, so a single $top=100 page can miss a complaint
-  // email that's already been buried between cron runs. Instead pull everything
-  // within a lookback window and follow @odata.nextLink across pages (capped),
-  // so nothing in the window is dropped even on a busy mailbox.
-  const since = new Date(
-    Date.now() - (config.ms.lookbackDays || 14) * 86400000,
-  ).toISOString();
-  const select = SELECT;
-  let url =
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.ms.mailbox)}/messages` +
-    `?$top=50&$orderby=receivedDateTime desc` +
-    `&$filter=receivedDateTime ge ${since}` +
-    `&$select=${select}`;
-
-  const out = [];
-  for (let page = 0; page < 40 && url; page += 1) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`Graph messages request failed: ${res.status}`);
-    const json = await res.json();
-    for (const m of json.value ?? []) out.push(normalise(m));
-    url = json['@odata.nextLink'] || null;
-  }
-  return out;
+  // The catch-all is a firehose, so pull everything within a lookback window
+  // and follow every page (capped), so nothing in the window is dropped.
+  const since = new Date(Date.now() - (config.ms.lookbackDays || 14) * 86400000);
+  return (await fetchMailboxSince(config.ms.mailbox, since)).items;
 }
 
 // The whole of one email: its text and its file attachments. Fetched only for
 // the emails that belong to a complaint (never the rest of the catch-all), and
 // asked for as plain text so no HTML reaches the database or the model.
 // Inline images (logos and signatures) and attached emails are skipped;
-// anything over the size cap is named but not downloaded.
+// anything over the size cap is named but not downloaded. A failure (after
+// the retries) is thrown, not swallowed: an email must not be treated as
+// complete when its attachments never arrived.
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
 
@@ -166,31 +192,24 @@ export async function fetchMessageDetail(graphId, fallback = {}, mailbox = confi
   if (!config.ms.enabled || !graphId || String(graphId).startsWith('dev-') || String(graphId).startsWith('out-')) {
     return { bodyText: fallback.bodyPreview || null, attachments: [], skipped: [] };
   }
-  const token = await getAppToken();
-  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox || config.ms.mailbox)}/messages/${encodeURIComponent(graphId)}`;
-
-  const res = await fetch(`${base}?$select=body`, {
-    headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
-  });
-  if (!res.ok) throw new Error(`Graph message request failed: ${res.status}`);
-  const bodyText = ((await res.json()).body?.content || '').slice(0, 100000);
+  const base = `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(graphId)}`;
+  const msg = await graphGet(`${base}?$select=body`, { Prefer: 'outlook.body-content-type="text"' });
+  const bodyText = (msg.body?.content || '').slice(0, 100000);
 
   const attachments = [];
   const skipped = [];
-  const ares = await fetch(`${base}/attachments`, { headers: { Authorization: `Bearer ${token}` } });
-  if (ares.ok) {
-    for (const a of (await ares.json()).value ?? []) {
-      if (a['@odata.type'] !== '#microsoft.graph.fileAttachment' || a.isInline) continue;
-      if (attachments.length >= MAX_ATTACHMENTS || (a.size || 0) > MAX_ATTACHMENT_BYTES || !a.contentBytes) {
-        skipped.push(a.name || 'attachment');
-        continue;
-      }
-      attachments.push({
-        filename: a.name || 'attachment',
-        mimetype: a.contentType || 'application/octet-stream',
-        buffer: Buffer.from(a.contentBytes, 'base64'),
-      });
+  const list = await graphGet(`${base}/attachments`);
+  for (const a of list.value ?? []) {
+    if (a['@odata.type'] !== '#microsoft.graph.fileAttachment' || a.isInline) continue;
+    if (attachments.length >= MAX_ATTACHMENTS || (a.size || 0) > MAX_ATTACHMENT_BYTES || !a.contentBytes) {
+      skipped.push(a.name || 'attachment');
+      continue;
     }
+    attachments.push({
+      filename: a.name || 'attachment',
+      mimetype: a.contentType || 'application/octet-stream',
+      buffer: Buffer.from(a.contentBytes, 'base64'),
+    });
   }
   return { bodyText, attachments, skipped };
 }

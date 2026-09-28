@@ -318,6 +318,8 @@ export const api = {
       request('/complaints/tidy/complaints', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_id: mergeId }) }),
     mergeOrganisations: (keepId, mergeId) =>
       request('/complaints/tidy/organisations', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_id: mergeId }) }),
+    setAutoImport: (on) => request('/complaints/past/auto', { method: 'PUT', body: JSON.stringify({ on }) }),
+    markChecked: (id) => request(`/complaints/${id}/checked`, { method: 'POST' }),
     linkPast: (candId, complaintId) =>
       request(`/complaints/past/candidates/${candId}/link`, {
         method: 'POST',

@@ -12,7 +12,7 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importCandidate, linkCandidate } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
@@ -111,9 +111,17 @@ router.post(
     // 3. Read, file and record each new one. One at a time: each may be a
     //    round trip to the mailbox and the AI, and none may be lost to a
     //    failure in another.
+    // Emails that couldn't be read in full, or that the AI couldn't read, in
+    // the last few days: tried again (a few each time) until they go through.
+    const retry = (await query(
+      `SELECT id FROM complaint_emails
+        WHERE analysis_error IS NOT NULL AND analysed_at IS NULL AND reviewed_at IS NULL
+          AND attempts < 6 AND created_at > now() - interval '3 days'
+        ORDER BY created_at LIMIT 10`,
+    )).rows.map((x) => x.id);
     let processed = 0;
     let filed = 0;
-    for (const id of [...r.ids, ...w.ids]) {
+    for (const id of [...r.ids, ...w.ids, ...retry]) {
       try {
         const out = await processEmail(id);
         processed += 1;
@@ -486,6 +494,8 @@ router.get(
       watching: await watchedMailboxes(),
       last_check: await getSetting('email_last_check'),
       past_scan: await scanStatus(),
+      past_auto_import: Boolean(await getSetting('past_auto_import')),
+      to_check: (await query(`SELECT count(*)::int AS n FROM complaints WHERE needs_check`)).rows[0].n,
       past_pending: pending,
       unfiled,
     });
@@ -526,8 +536,8 @@ router.get(
   '/past/candidates',
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
-      `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status
-         FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at DESC`,
+      `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status, error
+         FROM complaint_import_candidates WHERE status IN ('pending', 'importing') ORDER BY first_at DESC`,
     );
     // Say when one is already in the system, so it is linked, not duplicated.
     const complaints = (await query(
@@ -535,7 +545,11 @@ router.get(
     )).rows;
     const orgs = (await query('SELECT id, name FROM organisations')).rows;
     // Threads about the same issue are shown (and imported) as one complaint.
-    res.json(groupCandidates(rows).map((group) => {
+    // Rows being brought in are shown as their own group ("Importing…"), so
+    // they are neither offered again nor grouped with pending ones.
+    const busyGroups = groupCandidates(rows.filter((r) => r.status === 'importing'));
+    const pendingRows = rows.filter((r) => r.status === 'pending');
+    res.json([...busyGroups, ...groupCandidates(pendingRows)].map((group) => {
       const merged = mergeExtracted(group);
       const hit = group.map((c) => findExistingComplaint(complaints, orgs, c.extracted)).find(Boolean)
         || findExistingComplaint(complaints, orgs, merged);
@@ -543,6 +557,8 @@ router.get(
         ...group[0],
         extracted: merged,
         message_count: group.reduce((n, c) => n + (c.message_count || 0), 0),
+        status: group[0].status,
+        error: group.map((c) => c.error).find(Boolean) || null,
         members: group.map((c) => ({ id: c.id, subject: c.subject, first_at: c.first_at, message_count: c.message_count })),
         existing: hit ? { id: hit.id, ref_code: hit.ref_code, subject: hit.subject } : null,
       };
@@ -554,9 +570,11 @@ router.post(
   '/past/candidates/:candId/import',
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
+    // Claimed here (so a second click is refused), then brought in in the
+    // background: reading every email can take minutes, longer than the
+    // browser waits. The list shows "Importing…" until it is done.
     try {
-      const c = await importCandidate(req.params.candId, who(req));
-      res.json({ imported: true, complaint_id: c.id });
+      res.status(202).json({ importing: true, ...(await importInBackground(req.params.candId, who(req))) });
     } catch (err) {
       throw new HttpError(err.status || 500, err.message);
     }
@@ -595,6 +613,19 @@ router.post(
   }),
 );
 
+// Automatic import of past complaints the AI is sure of, on or off.
+const autoInput = z.object({ on: z.boolean() });
+router.put(
+  '/past/auto',
+  asyncHandler(async (req, res) => {
+    const d = parse(autoInput, req.body);
+    // Switching on imports the ones already waiting, which can take a while:
+    // it runs in the background and the list catches up as they go.
+    setAutoImport(d.on, who(req)).catch((err) => console.error('[complaints] auto-import failed:', err.message));
+    res.json({ on: d.on });
+  }),
+);
+
 // Bring a found thread's emails onto a complaint already in the system,
 // instead of importing it again.
 const linkInput = z.object({ complaint_id: z.string().uuid() });
@@ -604,11 +635,11 @@ router.post(
     if (!z.string().uuid().safeParse(req.params.candId).success) throw new HttpError(400, 'Invalid id');
     const d = parse(linkInput, req.body);
     try {
-      await linkCandidate(req.params.candId, d.complaint_id, who(req));
+      await linkInBackground(req.params.candId, d.complaint_id, who(req));
     } catch (err) {
       throw new HttpError(err.status || 500, err.message);
     }
-    res.json({ linked: true, complaint_id: d.complaint_id });
+    res.status(202).json({ linking: true, complaint_id: d.complaint_id });
   }),
 );
 
@@ -807,6 +838,27 @@ router.post(
     await undoEmail(em, who(req));
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     res.json(await decorate(rows[0]));
+  }),
+);
+
+// "Looks right": a person has checked a complaint the system created itself.
+router.post(
+  '/:id/checked',
+  asyncHandler(async (req, res) => {
+    const { rows } = await query(
+      `UPDATE complaints SET needs_check = false, checked_at = now(), checked_by = $2
+        WHERE id = $1 AND needs_check RETURNING id`,
+      [req.params.id, who(req)],
+    );
+    if (rows[0]) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [req.params.id, todayISO(), 'Details checked and confirmed.', who(req)],
+      );
+    }
+    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    res.json(await decorate(c));
   }),
 );
 

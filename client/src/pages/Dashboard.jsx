@@ -185,6 +185,7 @@ export default function Dashboard() {
             <div className="muted" style={{ fontSize: 12 }}>
               open{complaints.chasing ? ` · ${complaints.chasing} need chasing` : ''}
               {complaints.waiting ? ` · ${complaints.waiting} email(s) to check` : ''}
+              {complaints.to_check ? ` · ${complaints.to_check} imported to check` : ''}
             </div>
           </Link>
         )}

@@ -94,7 +94,7 @@ export async function watchMailboxes() {
       : new Date(Date.now() - 86400000);
     const started = new Date();
     try {
-      const mail = await fetchMailboxSince(mb, from);
+      const { items: mail, complete } = await fetchMailboxSince(mb, from);
       fetched += mail.length;
       for (const e of mail) {
         const route = routeWatchedEmail(e, ctx);
@@ -102,7 +102,10 @@ export async function watchMailboxes() {
         const id = await storeEmail(e, { complaintId: route.complaintId, method: route.method, mailbox: mb });
         if (id) ids.push(id);
       }
-      since[mb] = started.toISOString();
+      // Only move on once the whole window was read; a busy spell read in
+      // part is read again next time (storing is de-duplicated).
+      if (complete) since[mb] = started.toISOString();
+      else errors.push(`${mb}: more new mail than one check reads; the rest is read next time`);
     } catch (err) {
       errors.push(`${mb}: ${err.message}`);
     }

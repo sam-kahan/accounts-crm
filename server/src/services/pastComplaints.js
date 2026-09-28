@@ -35,6 +35,16 @@ const PHRASES = [
 const MAX_THREADS = 2000;
 
 let running = false;
+const AUTO_SEARCH = 'Automatic (past-complaints search)';
+
+// Serialises the steps that decide whether a complaint is already on file and
+// then create or link it, so concurrent readers can't both create one.
+let lock = Promise.resolve();
+function serially(fn) {
+  const run = lock.then(fn, fn);
+  lock = run.catch(() => {});
+  return run;
+}
 
 async function progress(patch) {
   const now = (await getSetting('past_scan')) || {};
@@ -52,7 +62,7 @@ export async function startScan({ mailboxes, months, by }) {
   running = true;
   await setSetting('past_scan', {
     status: 'running', mailboxes, months, by, started_at: new Date().toISOString(),
-    stage: 'Searching the mailboxes', threads: 0, read: 0, found: 0, errors: [],
+    stage: 'Searching the mailboxes', threads: 0, read: 0, found: 0, skipped: 0, errors: [],
   });
   runScan({ mailboxes, months })
     .catch(async (err) => progress({ status: 'failed', error: err.message }))
@@ -92,30 +102,50 @@ async function runScan({ mailboxes, months, carry = null }) {
     (await query('SELECT conversation_id FROM complaint_emails WHERE conversation_id IS NOT NULL')).rows
       .map((r) => r.conversation_id),
   );
+  // A thread already found (in any mailbox) isn't found again.
   const seen = new Set(
-    (await query('SELECT mailbox, conversation_id FROM complaint_import_candidates')).rows
-      .map((r) => `${r.mailbox}|${r.conversation_id}`),
+    (await query('SELECT conversation_id FROM complaint_import_candidates')).rows.map((r) => r.conversation_id),
   );
-  const threads = new Map(); // key mailbox|conversation -> { mailbox, conversationId }
-  for (const mb of mailboxes) {
-    for (const phrase of PHRASES) {
-      try {
-        for (const m of await searchMailbox(mb, phrase, 2500)) {
-          if (!m.conversationId || m.receivedAt < cutoff || known.has(m.conversationId)) continue;
-          const key = `${mb}|${m.conversationId}`;
-          if (!seen.has(key)) threads.set(key, { mailbox: mb, conversationId: m.conversationId });
+  // Microsoft returns at most 1,000 results per search, newest first, so the
+  // period is searched three months at a time — otherwise a long history
+  // would only ever show its most recent complaints.
+  const windows = [];
+  for (let end = new Date(); end > cutoff;) {
+    const start = new Date(end);
+    start.setMonth(start.getMonth() - 3);
+    windows.push({ from: start < cutoff ? cutoff : start, to: new Date(end.getTime() + 86400000) });
+    end = start;
+  }
+  const threads = new Map(); // conversationId -> { mailbox, conversationId }
+  // Threads a search has already been through (read, listed, imported, skipped
+  // or ruled out) are never read again: a new search reads only new threads.
+  const alreadyRead = new Set();
+  search: for (const mb of mailboxes) {
+    for (const w of windows) {
+      for (const phrase of PHRASES) {
+        try {
+          for (const m of await searchMailbox(mb, phrase, { from: w.from, to: w.to })) {
+            if (!m.conversationId || m.receivedAt < cutoff) continue;
+            if (known.has(m.conversationId) || seen.has(m.conversationId)) {
+              alreadyRead.add(m.conversationId);
+              continue;
+            }
+            if (!threads.has(m.conversationId)) {
+              threads.set(m.conversationId, { mailbox: mb, conversationId: m.conversationId });
+            }
+          }
+        } catch (err) {
+          errors.push(`${mb} "${phrase}": ${err.message}`);
+          if (err.status === 403 || err.status === 404) continue search; // no access to this mailbox
         }
-      } catch (err) {
-        errors.push(`${mb} "${phrase}": ${err.message}`);
-        if (err.status === 403 || err.status === 404) break; // no access to this mailbox
+        if (threads.size >= MAX_THREADS) break search;
       }
-      if (threads.size >= MAX_THREADS) break;
     }
   }
   const list = [...threads.values()].slice(0, MAX_THREADS);
   // Carrying on after a restart: the counts continue from where they were.
   const before = carry?.read || 0;
-  await progress({ stage: 'Reading each email thread', threads: before + list.length, errors });
+  await progress({ stage: 'Reading each email thread', threads: before + list.length, skipped: alreadyRead.size, errors });
 
   // 2. Read the threads, four at a time: each can mean waiting on the AI, and
   // reading them side by side is several times quicker for the same cost.
@@ -125,6 +155,17 @@ async function runScan({ mailboxes, months, carry = null }) {
     try {
       const msgs = await fetchConversation(t.mailbox, t.conversationId);
       if (!msgs.length) return;
+      // The same thread in another mailbox can carry a different thread id:
+      // recognise it by its emails, and don't read or list it twice.
+      const ids = msgs.map((m) => m.messageId).filter(Boolean);
+      if (ids.length) {
+        const dup = await query(
+          `SELECT 1 FROM complaint_import_candidates WHERE message_ids && $1::text[]
+           UNION ALL SELECT 1 FROM complaint_emails WHERE message_id = ANY($1::text[]) LIMIT 1`,
+          [ids],
+        );
+        if (dup.rows.length) return;
+      }
       let extracted;
       const text = threadText(msgs);
       if (!couldBeOurComplaint(msgs, config.complaintEmail.domain.toLowerCase())) {
@@ -145,31 +186,43 @@ async function runScan({ mailboxes, months, carry = null }) {
       if (isComplaint) found += 1;
       await query(
         `INSERT INTO complaint_import_candidates
-           (mailbox, conversation_id, graph_ids, subject, first_at, last_at, message_count, extracted, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           (mailbox, conversation_id, graph_ids, subject, first_at, last_at, message_count, extracted, status, message_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          ON CONFLICT (mailbox, conversation_id) DO NOTHING`,
         [
           t.mailbox, t.conversationId, msgs.map((m) => m.graphId), msgs[0].subject,
           msgs[0].receivedAt, msgs[msgs.length - 1].receivedAt, msgs.length,
           JSON.stringify(extracted), isComplaint ? 'pending' : 'not_complaint',
+          msgs.map((m) => m.messageId).filter(Boolean),
         ],
       );
       // Certain to be a complaint already in the system (same organisation,
       // same property postcode): its emails are added there straight away,
       // rather than waiting for someone to press Link.
       if (isComplaint) {
-        const cand = (await query(
-          `SELECT id FROM complaint_import_candidates WHERE mailbox = $1 AND conversation_id = $2 AND status = 'pending'`,
-          [t.mailbox, t.conversationId],
-        )).rows[0];
-        const pc = postcodeOf(extracted.property);
-        const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
-        const orgs = (await query('SELECT id, name FROM organisations')).rows;
-        const hit = findExistingComplaint(complaints, orgs, extracted);
-        if (cand && hit && pc && postcodeOf(hit.property) === pc) {
-          await linkCandidate(cand.id, hit.id, 'Automatic (past-complaints search)', { withGroup: false });
-          found -= 1; // not a new one to look at
-        }
+        // One at a time across the four readers: two threads about the same
+        // issue must not both decide "not on file yet" and create it twice.
+        await serially(async () => {
+          const cand = (await query(
+            `SELECT id FROM complaint_import_candidates WHERE mailbox = $1 AND conversation_id = $2 AND status = 'pending'`,
+            [t.mailbox, t.conversationId],
+          )).rows[0];
+          if (!cand) return;
+          const pc = postcodeOf(extracted.property);
+          const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+          const orgs = (await query('SELECT id, name FROM organisations')).rows;
+          const hit = findExistingComplaint(complaints, orgs, extracted);
+          if (hit && pc && postcodeOf(hit.property) === pc) {
+            await linkCandidate(cand.id, hit.id, AUTO_SEARCH);
+            found -= 1; // not a new one to look at
+          } else if (!hit && extracted.confidence === 'high' && (await getSetting('past_auto_import'))) {
+            // Switched on: a complaint it is sure of is imported as it is found
+            // (marked "to check", like everything the system creates itself).
+            await importCandidate(cand.id, AUTO_SEARCH);
+          }
+        }).catch((err) => {
+          if (err.status !== 409) throw err; // someone pressed Import or Link first
+        });
       }
     } catch (err) {
       errors.push(`thread ${t.conversationId.slice(0, 12)}…: ${err.message}`);
@@ -212,7 +265,7 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
   for (const mb of mailboxes) {
     for (const phrase of phrases) {
       try {
-        for (const m of await searchMailbox(mb, phrase, 200)) {
+        for (const m of await searchMailbox(mb, phrase, { max: 200 })) {
           if (!m.conversationId || knownConvs.has(m.conversationId) || onFile.has(m.conversationId)) continue;
           const people = [m.senderEmail, ...(m.toAddresses || [])].map(domainOf);
           if (!people.some((d) => orgDomains.has(d))) continue;
@@ -242,11 +295,130 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
 // every thread found with it, plus any others gathered by reference and
 // postcode — read together, the complaint filled in from the whole story with
 // its timeline rebuilt, and every email and attachment filed on it.
-export async function importCandidate(id, by) {
-  const cand = (await query('SELECT * FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
-  if (!cand) throw Object.assign(new Error('Not found'), { status: 404 });
-  if (cand.status !== 'pending') throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
+// Claim a found complaint (and the threads grouped with it) for one import or
+// link, so a second click, a second person, or automatic import can't bring it
+// in twice. The claim is a single UPDATE ... WHERE status = 'pending': exactly
+// one caller gets the rows. Returns the claimed group, or throws 409.
+async function claimGroup(id, by) {
   const group = await groupOf(id);
+  const ids = (group.length ? group : [{ id }]).map((c) => c.id);
+  const { rows } = await query(
+    `UPDATE complaint_import_candidates SET status = 'importing', error = NULL, decided_by = $2
+      WHERE id = ANY($1::uuid[]) AND status = 'pending' RETURNING *`,
+    [ids, by],
+  );
+  if (!rows.some((r) => r.id === id)) {
+    // Someone else has it; hand back anything of the group this call did take.
+    if (rows.length) await releaseGroup(rows.map((r) => r.id));
+    const now = (await query('SELECT status FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
+    if (!now) throw Object.assign(new Error('Not found'), { status: 404 });
+    throw Object.assign(new Error(now.status === 'importing'
+      ? 'This one is already being brought in.' : 'This one has already been dealt with.'), { status: 409 });
+  }
+  return rows.sort((a, b) => new Date(a.first_at) - new Date(b.first_at));
+}
+
+async function releaseGroup(ids, error = null) {
+  await query(
+    `UPDATE complaint_import_candidates SET status = 'pending', error = $2
+      WHERE id = ANY($1::uuid[]) AND status = 'importing' AND complaint_id IS NULL`,
+    [ids, error],
+  );
+  // Failed after the complaint was made: keep it (and never make it again),
+  // and say on it what went wrong so someone checks it.
+  const made = (await query(
+    `UPDATE complaint_import_candidates SET status = 'imported', error = $2
+      WHERE id = ANY($1::uuid[]) AND status = 'importing' AND complaint_id IS NOT NULL RETURNING complaint_id`,
+    [ids, error],
+  )).rows;
+  for (const id of new Set(made.map((r) => r.complaint_id))) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [id, londonDateOf(new Date()), `Please check: bringing this complaint in from past emails stopped part-way (${error || 'error'}), so some of its emails may be missing.`, AUTO_SEARCH],
+    );
+    await query('UPDATE complaints SET needs_check = true, checked_at = NULL, checked_by = NULL WHERE id = $1', [id]);
+  }
+}
+
+// A restart part-way through an import leaves its rows 'importing' with
+// nobody working on them. On start-up they go back to the list, with a note.
+// If the complaint had already been created, it is kept (never created twice)
+// and its timeline says the import was cut short, so someone checks it.
+export async function releaseStuckImports() {
+  const made = (await query(
+    `UPDATE complaint_import_candidates SET status = 'imported',
+            error = 'Interrupted by a restart after the complaint was created; some emails may not have been brought in.'
+      WHERE status = 'importing' AND complaint_id IS NOT NULL RETURNING complaint_id`,
+  )).rows;
+  for (const id of new Set(made.map((r) => r.complaint_id))) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [id, londonDateOf(new Date()), 'Please check: bringing this complaint in from past emails was cut short by a server restart, so some of its emails may be missing.', AUTO_SEARCH],
+    );
+    await query('UPDATE complaints SET needs_check = true, checked_at = NULL, checked_by = NULL WHERE id = $1', [id]);
+  }
+  const { rowCount } = await query(
+    `UPDATE complaint_import_candidates SET status = 'pending',
+            error = 'The import was interrupted by a restart before anything was created. Please press Import again.'
+      WHERE status = 'importing' AND complaint_id IS NULL`,
+  );
+  return rowCount + made.length;
+}
+
+// Runs an import or link in the background (they can take minutes: every
+// email is fetched and read), after the claim has been made so the caller can
+// be told at once whether it was taken. A failure hands the rows back to the
+// list with the reason shown against them.
+// Imports and links wait their turn, two at a time: "Import all" claims
+// twenty at once, and each one fetches every email and has the AI read them.
+const IMPORT_SLOTS = 2;
+let slotsInUse = 0;
+const waiting = [];
+function inTurn(fn) {
+  return new Promise((resolve, reject) => {
+    const go = () => {
+      slotsInUse += 1;
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        slotsInUse -= 1;
+        waiting.shift()?.();
+      });
+    };
+    if (slotsInUse < IMPORT_SLOTS) go(); else waiting.push(go);
+  });
+}
+
+export async function importInBackground(id, by) {
+  const group = await claimGroup(id, by);
+  inTurn(() => importClaimed(id, group, by)).catch(async (err) => {
+    console.error(`[complaints] import ${id} failed:`, err.message);
+    await releaseGroup(group.map((c) => c.id), `Import failed: ${err.message}`).catch(() => {});
+  });
+  return { claimed: group.length };
+}
+
+export async function linkInBackground(id, complaintId, by) {
+  const c = (await query('SELECT id FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  if (!c) throw Object.assign(new Error('Complaint not found'), { status: 404 });
+  const group = await claimGroup(id, by);
+  inTurn(() => linkClaimed(group, complaintId, by)).catch(async (err) => {
+    console.error(`[complaints] link ${id} failed:`, err.message);
+    await releaseGroup(group.map((g) => g.id), `Linking failed: ${err.message}`).catch(() => {});
+  });
+  return { claimed: group.length };
+}
+
+export async function importCandidate(id, by) {
+  const group = await claimGroup(id, by);
+  try {
+    return await importClaimed(id, group, by);
+  } catch (err) {
+    await releaseGroup(group.map((c) => c.id), `Import failed: ${err.message}`).catch(() => {});
+    throw err;
+  }
+}
+
+async function importClaimed(id, group, by) {
+  const cand = group.find((c) => c.id === id);
   const seed = group.length > 1 ? mergeExtracted(group) : cand.extracted || {};
   const ourDomain = config.complaintEmail.domain.toLowerCase();
 
@@ -318,10 +490,16 @@ export async function importCandidate(id, by) {
     },
     {
       by,
+      needsCheck: true,
       raisedNote: `Imported from past emails: ${new Set(msgs.map((m) => m.messageId || m.graphId)).size} email(s) ` +
         `across ${threads} thread(s)${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
     },
   );
+
+  // Recorded straight away, so an import cut short from here on is known to
+  // have made this complaint and is never made again.
+  await query('UPDATE complaint_import_candidates SET complaint_id = $2 WHERE id = ANY($1::uuid[])',
+    [group.map((c) => c.id), complaint.id]);
 
   // 6. The timeline, rebuilt from the emails (the "raised" entry is already there).
   for (const e of x?.events || []) {
@@ -358,7 +536,7 @@ export async function importCandidate(id, by) {
   }
   await recomputeDeadlines(complaint.id);
   await query(
-    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3
+    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3, error = NULL
       WHERE id = ANY($1::uuid[])`,
     [(group.length ? group : [cand]).map((c) => c.id), complaint.id, by],
   );
@@ -370,39 +548,46 @@ export async function importCandidate(id, by) {
 // onto that complaint. Each is read as a normal email would be, so an
 // acknowledgement or response in the thread is recorded (with Undo), and
 // future replies in the thread are filed there automatically.
-export async function linkCandidate(id, complaintId, by, { historical = false, withGroup = true } = {}) {
-  const cand = (await query('SELECT * FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
-  if (!cand) throw Object.assign(new Error('Not found'), { status: 404 });
-  if (cand.status !== 'pending') throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
+export async function linkCandidate(id, complaintId, by, { historical = false } = {}) {
   const c = (await query('SELECT id FROM complaints WHERE id = $1', [complaintId])).rows[0];
   if (!c) throw Object.assign(new Error('Complaint not found'), { status: 404 });
-  // Linking one thread of an issue links the others found with it.
-  const others = withGroup ? (await groupOf(id)).filter((o) => o.id !== id) : [];
-  const msgs = await fetchConversation(cand.mailbox, cand.conversation_id);
-  let added = 0;
-  for (const m of msgs) {
-    const eid = await storeEmail(m, { complaintId, method: 'linked', mailbox: cand.mailbox });
-    if (!eid) continue;
-    added += 1;
-    try {
-      // Threads brought in with an import are history (the dates came from
-      // reading them together); linking to a live complaint reads each one.
-      if (historical) await processHistoricalEmail(eid);
-      else await processEmail(eid);
-    } catch (err) {
-      console.error(`[complaints] linked email ${eid} not processed:`, err.message);
-    }
+  const group = await claimGroup(id, by);
+  try {
+    await linkClaimed(group, complaintId, by, { historical });
+  } catch (err) {
+    await releaseGroup(group.map((g) => g.id), `Linking failed: ${err.message}`).catch(() => {});
+    throw err;
   }
-  await query(
-    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-     VALUES ($1, $2, 'note', $3, $4)`,
-    [complaintId, londonDateOf(new Date()), `Email thread "${cand.subject || ''}" brought in from ${cand.mailbox} (${added} new email${added === 1 ? '' : 's'}).`, by],
-  );
-  await query(
-    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3 WHERE id = $1`,
-    [id, complaintId, by],
-  );
-  for (const o of others) await linkCandidate(o.id, complaintId, by, { historical, withGroup: false });
+}
+
+// Linking one thread of an issue links the others found with it.
+async function linkClaimed(group, complaintId, by, { historical = false } = {}) {
+  for (const cand of group) {
+    const msgs = await fetchConversation(cand.mailbox, cand.conversation_id);
+    let added = 0;
+    for (const m of msgs) {
+      const eid = await storeEmail(m, { complaintId, method: 'linked', mailbox: cand.mailbox });
+      if (!eid) continue;
+      added += 1;
+      try {
+        // Threads brought in with an import are history (the dates came from
+        // reading them together); linking to a live complaint reads each one.
+        if (historical) await processHistoricalEmail(eid);
+        else await processEmail(eid);
+      } catch (err) {
+        console.error(`[complaints] linked email ${eid} not processed:`, err.message);
+      }
+    }
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+       VALUES ($1, $2, 'note', $3, $4)`,
+      [complaintId, londonDateOf(new Date()), `Email thread "${cand.subject || ''}" brought in from ${cand.mailbox} (${added} new email${added === 1 ? '' : 's'}).`, by],
+    );
+    await query(
+      `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3, error = NULL WHERE id = $1`,
+      [cand.id, complaintId, by],
+    );
+  }
   scheduleReview(complaintId);
 }
 
@@ -422,4 +607,29 @@ export async function resumeInterruptedScan() {
     .catch(async (err) => progress({ status: 'failed', error: err.message }))
     .finally(() => { running = false; });
   return true;
+}
+
+// Switch automatic import on or off. Switching it on also imports the ones
+// already waiting that the AI was sure of and that aren't on file already.
+export async function setAutoImport(on, by) {
+  await setSetting('past_auto_import', Boolean(on), by);
+  if (!on) return { imported: 0 };
+  const pending = (await query(`SELECT * FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at`)).rows;
+  let imported = 0;
+  for (const c of pending) {
+    if (c.extracted?.confidence !== 'high') continue;
+    // eslint-disable-next-line no-await-in-loop
+    await serially(async () => {
+      const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
+      if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
+      const complaints = (await query('SELECT id, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+      const orgs = (await query('SELECT id, name FROM organisations')).rows;
+      if (findExistingComplaint(complaints, orgs, c.extracted)) return; // left for a person to link
+      await importCandidate(c.id, by || AUTO_SEARCH);
+      imported += 1;
+    }).catch((err) => {
+      if (err.status !== 409) console.error(`[complaints] auto-import ${c.id} failed:`, err.message);
+    });
+  }
+  return { imported };
 }

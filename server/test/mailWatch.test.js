@@ -74,7 +74,9 @@ test('organisation names match exactly or by an unambiguous shortening', () => {
   assert.equal(matchOrgName(ORGS, 'LivingCity')?.id, 'o1');
   assert.equal(matchOrgName(ORGS, 'Livingcity Asset Management Ltd')?.id, 'o1');
   assert.equal(matchOrgName(ORGS, 'E.ON Next')?.id, 'o2');
-  assert.equal(matchOrgName(ORGS, 'Manchester'), null, 'two Manchesters: ambiguous, so no match');
+  // "City Council" is a generic ending; "Metropolitan University" is not.
+  assert.equal(matchOrgName(ORGS, 'Manchester')?.id, 'o3');
+  assert.equal(matchOrgName([...ORGS, { id: 'o5', name: 'Manchester Council' }], 'Manchester'), null, 'two councils: ambiguous');
   assert.equal(matchOrgName(ORGS, 'EON'), null, 'too short to trust');
   assert.equal(matchOrgName(ORGS, 'Urban Bubble'), null);
 });
@@ -114,4 +116,51 @@ test('threads about the same issue are grouped into one complaint', () => {
   assert.equal(m.raised_on, '2026-08-01', 'earliest date');
   assert.equal(m.stage, 'stage_2', 'furthest stage');
   assert.equal(m.responded_on, '2026-09-20');
+});
+
+import { sameOrgName } from '../src/services/orgMatch.js';
+
+test('a shortened name matches only when what it leaves off is generic', () => {
+  assert.equal(sameOrgName('LivingCity', 'Livingcity Asset Management Limited'), true);
+  assert.equal(sameOrgName('E.ON Next', 'EON Next Ltd'), true);
+  assert.equal(sameOrgName('Liverpool', 'Liverpool Mutual Homes'), false);
+  assert.equal(sameOrgName('Salford', 'Salford City Council'), true);
+});
+
+test('different postcodes are never the same issue, and a postcode-less thread cannot bridge two', () => {
+  const c = (id, pc, d) => ({ id, first_at: `${d}T09:00:00Z`,
+    extracted: { org_name: 'Bury Council', property: pc ? `1 Road, ${pc}` : '1 Road', raised_on: d } });
+  const groups = groupCandidates([c('a', 'BL9 0AA', '2026-05-01'), c('b', null, '2026-05-05'), c('c', 'BL8 1XX', '2026-05-08')]);
+  const withA = groups.find((g) => g.some((x) => x.id === 'a'));
+  assert.ok(!withA.some((x) => x.id === 'c'), 'two properties never in one group');
+  const complaints = [{ id: 'k', org_name: 'Bury Council', property: '9 Lane, BL9 0AA', raised_on: '2026-05-02' }];
+  assert.equal(findExistingComplaint(complaints, [], { org_name: 'Bury Council', property: '3 St, BL8 1XX', raised_on: '2026-05-03' }), null);
+});
+
+import { unitOf } from '../src/services/orgMatch.js';
+
+test('unitOf reads the flat or house number from an address', () => {
+  assert.equal(unitOf('Apartment 309, 2 Moorfields, Liverpool, L2 2BT'), '309');
+  assert.equal(unitOf('Apt 78 Falkner Place, 68 Falkner Street, L8 7AD'), '78');
+  assert.equal(unitOf('78 Falkner Place, 68 Falkner Street, Liverpool, L8 7AE'), '78');
+  assert.equal(unitOf('Flat 3B, 10 High Street'), '3B');
+  assert.equal(unitOf('84 Waverley Crescent, Droylsden, M43 7WL'), '84');
+  assert.equal(unitOf('Rose Cottage, Mill Lane'), null);
+  assert.equal(unitOf(null), null);
+});
+
+test('two flats at the same postcode are two issues, not one', () => {
+  const a = { org_name: 'Liverpool City Council', property: 'Apartment 309, 2 Moorfields, Liverpool, L2 2BT', raised_on: '2026-07-09' };
+  const b = { org_name: 'Liverpool City Council', property: 'Apartment 326, 2 Moorfields, Liverpool, L2 2BT', raised_on: '2026-07-10' };
+  assert.equal(sameIssue(a, b), false);
+  assert.equal(sameIssue(a, { ...b, property: 'Apt 309, 2 Moorfields, L2 2BT' }), true);
+  const groups = groupCandidates([
+    { id: '1', first_at: '2026-07-09', extracted: a },
+    { id: '2', first_at: '2026-07-10', extracted: b },
+  ]);
+  assert.equal(groups.length, 2);
+  // The same flat written two ways is still found as the complaint on file.
+  const onFile = [{ id: 'c1', org_name: 'LivingCity', property: 'Apartment 78 Falkner Place, 68 Falkner Street, Liverpool, L8 7AD', raised_on: '2026-09-28' }];
+  assert.equal(findExistingComplaint(onFile, [], { org_name: 'LivingCity', property: '78 Falkner Place, L8 7AD' })?.id, 'c1');
+  assert.equal(findExistingComplaint(onFile, [], { org_name: 'LivingCity', property: 'Apartment 73, 68 Falkner Street, L8 7AD' }), null);
 });

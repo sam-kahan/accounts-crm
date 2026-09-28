@@ -527,6 +527,7 @@ export default function Complaints() {
     filter === 'overdue' ? overdue :
     filter === 'open' ? open :
     filter === 'resolved' ? items.filter((c) => c.state === 'resolved') :
+    filter === 'check' ? items.filter((c) => c.needs_check) :
     items;
   // Search across everything a complaint is known by: subject, organisation,
   // property, our reference and theirs. Searching looks in every state, so an
@@ -611,14 +612,14 @@ export default function Complaints() {
 
       <div className="toolbar flex-between">
         <div className="btn-row">
-          {['open', 'overdue', 'resolved', 'all'].map((f) => (
+          {['open', 'overdue', 'check', 'resolved', 'all'].map((f) => (f === 'check' && !items.some((c) => c.needs_check) ? null :
             <button
               key={f}
               className={filter === f ? 'btn-primary btn-sm' : 'btn-sm'}
               aria-pressed={filter === f}
               onClick={() => setFilter(f)}
             >
-              {{ open: 'Open', overdue: 'Need chasing', resolved: 'Resolved', all: 'All' }[f]}
+              {{ open: 'Open', overdue: 'Need chasing', check: `To check (${items.filter((c) => c.needs_check).length})`, resolved: 'Resolved', all: 'All' }[f]}
             </button>
           ))}
         </div>
@@ -664,6 +665,7 @@ export default function Complaints() {
                 >
                   <td>
                     <strong>{c.subject}</strong>
+                    {c.needs_check && <span className="badge amber" style={{ marginLeft: 6 }}>To check</span>}
                     {c.state === 'open' && c.ai_review?.recommended_action && (
                       <div style={{ fontSize: 12, marginTop: 2 }}>
                         <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.recommended_action}

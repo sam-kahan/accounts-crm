@@ -43,7 +43,9 @@ export async function tidySuggestions() {
       if (a.state !== 'open' && b.state !== 'open') continue; // both finished: leave history alone
       const fa = { org_name: a.linked_org || a.org_name, property: a.property, raised_on: a.raised_on };
       const fb = { org_name: b.linked_org || b.org_name, property: b.property, raised_on: b.raised_on };
-      if (sameIssue(fa, fb)) complaintPairs.push({ keep: a, merge: b }); // keep the older one
+      // Keep the open one (its clock and next step are live); if both are
+      // open, keep the older one.
+      if (sameIssue(fa, fb)) complaintPairs.push(a.state !== 'open' && b.state === 'open' ? { keep: b, merge: a } : { keep: a, merge: b });
     }
   }
 
@@ -79,6 +81,12 @@ export async function mergeComplaints(keepId, mergeId, by) {
     keep = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [keepId])).rows[0];
     gone = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [mergeId])).rows[0];
     if (!keep || !gone) throw Object.assign(new Error('One of those complaints no longer exists.'), { status: 404 });
+    // Never merge a live complaint into a finished one: its stage, dates and
+    // deadlines would be thrown away and the complaint would read as closed.
+    if (keep.state !== 'open' && gone.state === 'open') {
+      [keep, gone] = [gone, keep];
+      [keepId, mergeId] = [mergeId, keepId];
+    }
     const moved = {};
     for (const t of ['complaint_emails', 'complaint_attachments', 'complaint_events']) {
       moved[t] = (await client.query(`UPDATE ${t} SET complaint_id = $1 WHERE complaint_id = $2`, [keepId, mergeId])).rowCount;

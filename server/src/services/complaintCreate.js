@@ -18,7 +18,7 @@ function makeRefCode() {
 
 // `d` is the validated shape of POST /complaints. `raisedNote` replaces the
 // first timeline entry's wording when the complaint was made some other way.
-export async function createComplaint(d, { by = null, raisedNote = null } = {}) {
+export async function createComplaint(d, { by = null, raisedNote = null, needsCheck = false } = {}) {
   const stage = d.stage || 'stage_1';
   // A linked organisation brings its type: the type decides the default for
   // anything its procedure doesn't state.
@@ -73,6 +73,9 @@ export async function createComplaint(d, { by = null, raisedNote = null } = {}) 
           by,
         ],
       );
+      if (needsCheck) {
+        await client.query('UPDATE complaints SET needs_check = true WHERE id = $1', [rows[0].id]);
+      }
       created = await recomputeDeadlines(rows[0].id, client);
       await client.query('COMMIT');
     } catch (err) {

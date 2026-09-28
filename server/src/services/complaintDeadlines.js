@@ -56,6 +56,7 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
   let changed = 0;
   for (const r of rows) {
     const after = await recomputeDeadlines(r.id);
+    if (!after) continue; // removed (merged or deleted) since the list was read
     const moves = [];
     const label = r.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
     if ((r.response_due || null) !== (after.response_due || null)) {

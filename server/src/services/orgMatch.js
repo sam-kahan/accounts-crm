@@ -18,17 +18,33 @@ export function orgKey(name) {
 
 const compact = (name) => orgKey(name).replace(/\s+/g, '');
 
+// Words that say what kind of body it is rather than which one. A shortened
+// name matches a longer one only if all it leaves off is words like these:
+// "LivingCity" is "Livingcity Asset Management Ltd", but "Liverpool" is not
+// "Liverpool Mutual Homes".
+const GENERIC = /^(?:ltd|plc|llp|uk|group|holdings|asset|management|services|service|property|properties|estates|council|city|borough|metropolitan|district|county|the|and|company|co|limited)*$/;
+
+// Are two names the same organisation? Exact after cleaning, or one is the
+// other with only generic words added (at least 5 letters in common).
+export function sameOrgName(a, b) {
+  const ka = orgKey(a);
+  const kb = orgKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  const ca = compact(a);
+  const cb = compact(b);
+  const [short, long] = ca.length <= cb.length ? [ca, cb] : [cb, ca];
+  return short.length >= 5 && long.startsWith(short) && GENERIC.test(long.slice(short.length));
+}
+
+// The one saved organisation a name refers to: an exact match, or else the
+// only one it matches by sameOrgName. Two candidates is no match.
 export function matchOrgName(orgs, name) {
   const k = orgKey(name);
   if (!k) return null;
   const exact = orgs.find((o) => orgKey(o.name) === k);
   if (exact) return exact;
-  const c = compact(name);
-  const hits = orgs.filter((o) => {
-    const oc = compact(o.name);
-    const [short, long] = c.length <= oc.length ? [c, oc] : [oc, c];
-    return short.length >= 5 && long.startsWith(short);
-  });
+  const hits = orgs.filter((o) => sameOrgName(o.name, name));
   return hits.length === 1 ? hits[0] : null;
 }
 
@@ -43,6 +59,27 @@ export function postcodeOf(text) {
   return m ? `${m[1]} ${m[2]}` : null;
 }
 
+// The flat or house number of an address: "Apartment 309, 2 Moorfields" is
+// 309, "84 Waverley Crescent" is 84, "Flat 3B" is 3B. One postcode covers a
+// whole block or a stretch of street, so two addresses in it with different
+// numbers are different properties (Apartment 309 and Apartment 326 at
+// 2 Moorfields are two complaints, not one). Null when there isn't one.
+export function unitOf(text) {
+  const t = String(text || '').toUpperCase();
+  const flat = t.match(/\b(?:APARTMENT|APT|FLAT|UNIT|SUITE|ROOM)\.?\s*(?:NO\.?\s*)?([A-Z]?\d+[A-Z]?)\b/);
+  const lead = flat ? null : t.match(/^\s*([A-Z]?\d+[A-Z]?)\b/);
+  const u = (flat || lead)?.[1];
+  return u ? u.replace(/^([A-Z]?)0+(\d)/, '$1$2') : null;
+}
+
+// Same postcode AND not two different flat/house numbers.
+function sameProperty(pa, pb) {
+  if (postcodeOf(pa) !== postcodeOf(pb)) return false;
+  const ua = unitOf(pa);
+  const ub = unitOf(pb);
+  return !ua || !ub || ua === ub;
+}
+
 // Is a found past complaint one already in the system? Same organisation (by
 // the rules above), and the same property postcode or raised within a fortnight
 // of it. Returns the matching complaint, or null.
@@ -53,10 +90,11 @@ export function findExistingComplaint(complaints, orgs, x) {
   const sameOrg = (c) => {
     const org = c.organisation_id ? orgs.find((o) => o.id === c.organisation_id) : null;
     const names = [c.org_name, org?.name].filter(Boolean);
-    return names.some((n) => matchOrgName([{ name: n }], x.org_name));
+    return names.some((n) => sameOrgName(n, x.org_name));
   };
   const close = (c) => {
-    if (pc && postcodeOf(c.property) === pc) return true;
+    const cpc = postcodeOf(c.property);
+    if (pc && cpc) return sameProperty(x.property, c.property); // two postcodes: they decide it
     if (!raised || !c.raised_on) return false;
     return Math.abs(new Date(`${c.raised_on}T00:00:00Z`) - raised) <= 14 * 86400000;
   };
@@ -68,32 +106,36 @@ export function findExistingComplaint(complaints, orgs, x) {
 // fortnight of each other.
 export function sameIssue(a, b) {
   if (!a?.org_name || !b?.org_name) return false;
-  if (!matchOrgName([{ name: a.org_name }], b.org_name) && !matchOrgName([{ name: b.org_name }], a.org_name)) return false;
+  if (!sameOrgName(a.org_name, b.org_name)) return false;
   const pa = postcodeOf(a.property);
   const pb = postcodeOf(b.property);
-  if (pa && pb) return pa === pb;
+  if (pa && pb) return sameProperty(a.property, b.property);
   if (!a.raised_on || !b.raised_on) return false;
   return Math.abs(new Date(`${a.raised_on}T00:00:00Z`) - new Date(`${b.raised_on}T00:00:00Z`)) <= 14 * 86400000;
 }
 
 // Group found threads by issue (connected: if A~B and B~C, all three are one).
 // Returns arrays of candidates, each group oldest first.
+const when = (c) => c.extracted?.raised_on || (c.first_at ? new Date(c.first_at).toISOString().slice(0, 10) : '');
+
+// Group found threads by issue, oldest first. A thread joins a group only if
+// it is the same issue as a member AND no member has a different property
+// postcode or flat number — so a thread with no postcode can't bridge two
+// properties into one complaint.
 export function groupCandidates(cands) {
-  const parent = cands.map((_, i) => i);
-  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  for (let i = 0; i < cands.length; i += 1) {
-    for (let j = i + 1; j < cands.length; j += 1) {
-      if (sameIssue(cands[i].extracted, cands[j].extracted)) parent[find(i)] = find(j);
-    }
+  const groups = [];
+  for (const c of [...cands].sort((a, b) => when(a).localeCompare(when(b)))) {
+    const prop = c.extracted?.property;
+    const g = groups.find((grp) =>
+      grp.some((m) => sameIssue(m.extracted, c.extracted)) &&
+      grp.every((m) => {
+        const mp = m.extracted?.property;
+        return !postcodeOf(prop) || !postcodeOf(mp) || sameProperty(mp, prop);
+      }));
+    if (g) g.push(c);
+    else groups.push([c]);
   }
-  const groups = new Map();
-  cands.forEach((c, i) => {
-    const r = find(i);
-    if (!groups.has(r)) groups.set(r, []);
-    groups.get(r).push(c);
-  });
-  return [...groups.values()].map((g) =>
-    g.sort((x, y) => String(x.extracted?.raised_on || x.first_at).localeCompare(String(y.extracted?.raised_on || y.first_at))));
+  return groups;
 }
 
 const STAGE_ORDER = { stage_1: 1, stage_2: 2, ombudsman: 3 };

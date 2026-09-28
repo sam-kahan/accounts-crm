@@ -44,7 +44,9 @@ async function openCandidates() {
 // Read, file and act on one stored email. Safe to run again: attachments are
 // saved once, and nothing already recorded is recorded twice.
 export async function processEmail(emailId) {
-  let em = (await query('SELECT * FROM complaint_emails WHERE id = $1', [emailId])).rows[0];
+  let em = (await query(
+    'UPDATE complaint_emails SET attempts = attempts + 1 WHERE id = $1 RETURNING *', [emailId],
+  )).rows[0];
   if (!em) return null;
 
   // 1. The whole email and its attachments.
@@ -56,7 +58,13 @@ export async function processEmail(emailId) {
       em.body_text = detail.bodyText;
     }
   } catch (err) {
-    console.error(`[complaints] could not read email ${em.id} in full:`, err.message);
+    // Not read in full (the mailbox refused even after retries): leave it
+    // unprocessed rather than record it without its attachments. The
+    // five-minute check tries again.
+    await query('UPDATE complaint_emails SET analysis_error = $2 WHERE id = $1', [
+      em.id, `Could not read in full: ${String(err.message).slice(0, 300)}`,
+    ]);
+    return { filed: Boolean(em.complaint_id), retry: true };
   }
 
   // 2. Work out what it is (and, from the general inbox, which complaint).
@@ -98,7 +106,13 @@ export async function processEmail(emailId) {
   if (!em.complaint_id) {
     // From a watched mailbox and not about any complaint: not ours to keep.
     if (em.match_method === 'watch' || em.match_method === 'watch_new') {
-      if (!analysis?.complaint_id) {
+      // Only when the AI actually read it and placed it nowhere. If the AI
+      // failed, it is kept (and read again later), never thrown away.
+      const read = (await query('SELECT analysed_at, analysis_error FROM complaint_emails WHERE id = $1', [em.id])).rows[0];
+      if (read?.analysed_at && !analysis?.complaint_id && !analysis?.new_complaint) {
+        if (em.message_id) {
+          await query('INSERT INTO complaint_email_discards (message_id, mailbox) VALUES ($1,$2) ON CONFLICT DO NOTHING', [em.message_id, em.source_mailbox]);
+        }
         await query('DELETE FROM complaint_emails WHERE id = $1', [em.id]);
         return { filed: false, discarded: true };
       }
@@ -300,7 +314,7 @@ async function createFromEmail(em, analysis) {
       channel: 'email',
       raised_on: raised,
     },
-    { by: AUTO_BY, raisedNote: `Complaint created automatically from your email "${em.subject || '(no subject)'}". Check the details.` },
+    { by: AUTO_BY, needsCheck: true, raisedNote: `Complaint created automatically from your email "${em.subject || '(no subject)'}". Check the details.` },
   );
   await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'auto_created' WHERE id = $1`, [em.id, created.id]);
   return created.id;

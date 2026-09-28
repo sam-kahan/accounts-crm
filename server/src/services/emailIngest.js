@@ -75,16 +75,19 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
 // internet message id as well as Graph's per-mailbox id. Returns the new id,
 // or null if it was already on file.
 export async function storeEmail(e, { complaintId = null, method, mailbox = null }) {
-  if (e.messageId) {
-    const dup = await query('SELECT 1 FROM complaint_emails WHERE message_id = $1 LIMIT 1', [e.messageId]);
-    if (dup.rows.length) return null;
+  if (e.messageId && (method === 'watch' || method === 'watch_new')) {
+    // Already read and found unrelated: not stored (or paid for) again.
+    const gone = await query('SELECT 1 FROM complaint_email_discards WHERE message_id = $1', [e.messageId]);
+    if (gone.rows.length) return null;
   }
+  // Unique on graph_id and on message_id: a copy already on file (or being
+  // stored by another reader at this moment) is simply not stored twice.
   const ins = await query(
     `INSERT INTO complaint_emails
        (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
         to_addresses, body_preview, received_at, match_method, conversation_id, source_mailbox)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (graph_id) DO NOTHING
+     ON CONFLICT DO NOTHING
      RETURNING id`,
     [
       complaintId, e.graphId, e.messageId, e.subject, e.senderName, e.senderEmail,
