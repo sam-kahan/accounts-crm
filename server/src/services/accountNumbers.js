@@ -306,6 +306,7 @@ export async function searchComplaintEmails(c, { all = false, mailboxes = null, 
 }
 
 let searching = false;
+const failedAt = new Map(); // complaint id -> when its search last failed
 export function searchRunning() { return searching; }
 
 // Run `fn` holding the search lock (one search at a time, whoever starts it),
@@ -340,9 +341,14 @@ export async function searchAccountEmails({ limit = 6 } = {}) {
     )).rows;
     for (const c of rows) {
       if (done >= limit) break;
+      // One whose search failed lately waits half an hour, so a few that keep
+      // failing can't hold up everyone behind them.
+      if (failedAt.get(c.id) > Date.now() - 1800000) continue;
       const terms = searchTermsFor(c, await partyRefsOf(c.id));
       if (!terms.some((t) => t.searchable && !(c.accounts_searched || []).includes(t.key))) continue;
       const r = await searchComplaintEmails(c, { mailboxes });
+      if (r.ok === false) failedAt.set(c.id, Date.now());
+      else failedAt.delete(c.id);
       addedAll += r.added;
       done += 1;
     }

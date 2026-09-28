@@ -80,3 +80,11 @@ test('an older Exchange bounce with the address on its own line', () => {
   }, O);
   assert.deepEqual(b.addresses, ['old.box@livingcity.co.uk']);
 });
+
+test('a subject alone is not enough: a real email titled "Not delivered" is not swallowed', () => {
+  const real = { senderEmail: 'complaints@britishgas.co.uk', subject: 'Not delivered: your parcel', bodyText: 'We could not deliver your parcel today.' };
+  assert.equal(readBounce(real, { ...O, full: true }), null);
+  assert.equal(readBounce(real, O).unconfirmed, true); // preview only: the full text is read before deciding
+  const report = { senderEmail: 'noreply@relay.example', subject: 'Undeliverable: hello', bodyText: 'Remote server returned 550 5.1.1 user unknown for a@b.co.uk' };
+  assert.deepEqual(readBounce(report, { ...O, full: true }).addresses, ['a@b.co.uk']);
+});

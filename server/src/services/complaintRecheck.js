@@ -114,6 +114,12 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
     changes.stage_started_on = started;
     // The response at the NEW stage (the old stage's answer isn't this one's).
     changes.responded_on = usable('responded_on');
+    // Leaving Stage 2: their Stage 2 answer is their FINAL response (the
+    // referral window counts from it), so it is kept as that rather than lost.
+    if (c.stage === 'stage_2' && c.responded_on && !c.final_response_on && !x.final_response_on) {
+      changes.final_response_on = c.responded_on;
+      notes.push(`final response: ${ukDate(c.responded_on)} (their Stage 2 answer)`);
+    }
     // With no start date there is no honest due date: none is stored until
     // someone enters it (as an import does).
     changes.response_due_manual = !started;
@@ -231,28 +237,38 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
     }
   }
 
-  // 3. Where the emails show it has got to.
-  const hasParties = (await query('SELECT 1 FROM complaint_parties WHERE complaint_id = $1 LIMIT 1', [id])).rowCount > 0;
-  const plan = planRecheck(c, x, { hasParties });
+  // 3. Where the emails show it has got to. Planned inside the transaction
+  // against the row as it is NOW, locked: the search and the read take a
+  // minute or two, and a date recorded meanwhile (by a person, or by an email
+  // arriving) must not be overwritten or recorded as "blank" for Undo.
   sig = await emailSignature(id);
-  const cols = Object.keys(plan.changes);
-  const before = {};
-  for (const k of cols) before[k] = c[k] ?? null;
+  let plan;
+  let cols = [];
+  let text = '';
   const found = added ? `${added} more email${added === 1 ? '' : 's'} found and filed. ` : '';
-  const text =
-    `${found}Read ${msgs.length} email${msgs.length === 1 ? '' : 's'} (${x.confidence} confidence). ` +
-    (cols.length ? `Changed: ${plan.notes.join('; ')}.` : plan.skip ? `Not changed: ${plan.skip}.` : 'Already right.') +
-    (plan.differs.length ? ` Please check: ${plan.differs.join('; ')}.` : '') +
-    (x.uncertain?.length ? ` Unclear in the emails: ${x.uncertain.slice(0, 4).join('; ')}.` : '');
-  const flag = cols.length > 0 || plan.differs.length > 0;
-
-  // The change, its timeline entry and its Undo record: all or nothing, so a
-  // change is never left standing without the record that undoes it.
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const cur = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    if (!cur) throw new Error('The complaint was removed while it was being re-checked');
+    const hasParties = (await client.query('SELECT 1 FROM complaint_parties WHERE complaint_id = $1 LIMIT 1', [id])).rowCount > 0;
+    plan = planRecheck(cur, x, { hasParties });
+    cols = Object.keys(plan.changes);
+    const before = {};
+    for (const k of cols) before[k] = cur[k] ?? null;
+    // The deadlines worked out from those values, so Undo can put back a due
+    // date that had been typed in by hand (recalculating won't recreate it).
+    const beforeDeadlines = { response_due: cur.response_due ?? null, ombudsman_deadline: cur.ombudsman_deadline ?? null };
+    text =
+      `${found}Read ${msgs.length} email${msgs.length === 1 ? '' : 's'} (${x.confidence} confidence). ` +
+      (cols.length ? `Changed: ${plan.notes.join('; ')}.` : plan.skip ? `Not changed: ${plan.skip}.` : 'Already right.') +
+      (plan.differs.length ? ` Please check: ${plan.differs.join('; ')}.` : '') +
+      (x.uncertain?.length ? ` Unclear in the emails: ${x.uncertain.slice(0, 4).join('; ')}.` : '');
+    const flag = cols.length > 0 || plan.differs.length > 0;
+    // The change, its timeline entry and its Undo record: all or nothing, so a
+    // change is never left standing without the record that undoes it.
     if (cols.length) {
-      const set = cols.map((k, i) => `${k} = $${i + 2}`).join(', ');
+      const set = cols.map((k, i2) => `${k} = $${i2 + 2}`).join(', ');
       await client.query(`UPDATE complaints SET ${set} WHERE id = $1`, [id, ...cols.map((k) => plan.changes[k])]);
       // Open while any organisation's part is (a resolved main part with no
       // other organisation closes the complaint).
@@ -277,7 +293,12 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
         WHERE id = $1`,
       [
         id, sig,
-        cols.length ? JSON.stringify({ at: new Date().toISOString(), by, before, after: plan.changes, event_id: ev.rows[0].id }) : null,
+        cols.length
+          ? JSON.stringify({
+            at: new Date().toISOString(), by, before, after: plan.changes,
+            before_deadlines: beforeDeadlines, event_id: ev.rows[0].id,
+          })
+          : null,
         flag,
       ],
     );
@@ -319,6 +340,12 @@ export async function undoRecheck(id, by) {
     const set = cols.map((k, i) => `${k} = $${i + 2}`).join(', ');
     await query(`UPDATE complaints SET ${set} WHERE id = $1`, [id, ...cols.map((k) => r.before[k])]);
   }
+  // A due date typed in by hand before the re-check comes back as it was
+  // (recalculating below leaves a hand-typed date alone, so it must be put
+  // back here).
+  if (r.before?.response_due_manual === true && r.before_deadlines && !('response_due' in (r.before || {}))) {
+    await query('UPDATE complaints SET response_due = $2 WHERE id = $1', [id, r.before_deadlines.response_due]);
+  }
   await query(
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
     [id, todayISO(), `Changes from the re-check on ${londonDateOf(new Date(r.at))} undone (${cols.map((k) => `${k.replace(/_/g, ' ')} back to ${r.before[k] ?? 'blank'}`).join('; ')}).`, by],
@@ -342,26 +369,35 @@ export async function recheckStatus() {
 }
 
 export async function startRecheck({ by, force = false }) {
-  if (running) {
-    const e = new Error('A re-check is already running.');
-    e.status = 409;
-    throw e;
-  }
   if (!config.anthropic.enabled) {
     const e = new Error('The AI isn’t configured (ANTHROPIC_API_KEY), so the emails can’t be read.');
     e.status = 503;
     throw e;
   }
-  const ids = (await query(
-    `SELECT id FROM complaints WHERE state = 'open' ORDER BY imported DESC, raised_on`,
-  )).rows.map((r) => r.id);
-  const state = {
-    status: 'running', by: by || null, started_at: new Date().toISOString(), finished_at: null,
-    total: ids.length, done: 0, changed: 0, skipped: 0, failed: 0, to_check: 0, results: [],
-    mailbox_searched: config.ms.enabled,
-  };
-  await setSetting('recheck_run', state, by);
+  if (running) {
+    const e = new Error('A re-check is already running.');
+    e.status = 409;
+    throw e;
+  }
+  // Claimed before anything is awaited: two presses at once (two people, two
+  // tabs) must not start two runs that each pay to read every complaint.
   running = true;
+  let ids;
+  let state;
+  try {
+    ids = (await query(
+      `SELECT id FROM complaints WHERE state = 'open' ORDER BY imported DESC, raised_on`,
+    )).rows.map((r) => r.id);
+    state = {
+      status: 'running', by: by || null, started_at: new Date().toISOString(), finished_at: null,
+      total: ids.length, done: 0, changed: 0, skipped: 0, failed: 0, to_check: 0, results: [],
+      mailbox_searched: config.ms.enabled,
+    };
+    await setSetting('recheck_run', state, by);
+  } catch (err) {
+    running = false;
+    throw err;
+  }
   (async () => {
     try {
       for (const id of ids) {

@@ -41,7 +41,10 @@ const clean = (a) => String(a || '').toLowerCase().replace(/^mailto:/, '').repla
 // `msg` is { senderEmail, subject, bodyText | bodyPreview, toAddresses }.
 // Returns null (not a bounce, or a delay), or { addresses, reason }.
 // `ourDomain` addresses are never the failed one (they are the sender).
-export function readBounce(msg, { ourDomain = '' } = {}) {
+// `full`: the text given is the whole message (not just the preview), so a
+// subject that looks like a bounce with nothing in the body to back it up is
+// NOT one. A real email titled "Not delivered: …" must never be swallowed.
+export function readBounce(msg, { ourDomain = '', full = false } = {}) {
   const sender = String(msg?.senderEmail || '');
   const subject = String(msg?.subject || '');
   const body = String(msg?.bodyText || msg?.bodyPreview || '');
@@ -60,6 +63,11 @@ export function readBounce(msg, { ourDomain = '' } = {}) {
       if (!skip(a) && !found.includes(a)) found.push(a);
     }
   }
+  // Only the subject says bounce (not a mail system sending it): it counts
+  // only if the text reads like a delivery report too.
+  const fromMailSystem = BOUNCE_SENDER.test(sender);
+  const reportLike = found.length > 0 || /final-recipient|diagnostic-code|remote server returned|status:\s*5\.\d|\b5\.\d\.\d{1,3}\b|\b55\d\b/i.test(body);
+  if (!fromMailSystem && !reportLike) return full ? null : { addresses: [], reason: null, unconfirmed: true };
   if (!found.length) {
     // Nothing in a known format: the only outside address in the text, if
     // there is exactly one, is the one that failed. More than one is too
@@ -128,27 +136,50 @@ export async function recordBounce({ addresses, reason, source, sourceRef = null
 // stops before the address, so the full text is fetched for a bounce only.
 export async function bounceFromMailbox(e, mailbox, fetchText) {
   const ourDomain = config.complaintEmail.domain;
-  let b = readBounce(e, { ourDomain });
+  let b = readBounce(e, { ourDomain, full: Boolean(e.bodyText) });
   if (!b) return false;
   const sourceRef = `${mailbox || ''}:${e.messageId || e.graphId}`;
   // Read before (each check looks back over the last while): already on file.
   const seen = await query(`SELECT 1 FROM email_bounces WHERE source = 'mailbox' AND source_ref = $1 LIMIT 1`, [sourceRef]);
   if (seen.rows.length) return true;
-  if (!b.addresses.length && fetchText) {
+  if ((!b.addresses.length || b.unconfirmed) && fetchText && !e.bodyText) {
     try {
       const bodyText = await fetchText(e);
-      b = readBounce({ ...e, bodyText }, { ourDomain }) || b;
+      if (bodyText) b = readBounce({ ...e, bodyText }, { ourDomain, full: true });
     } catch {
       // Recorded with what the preview gives; still flagged.
     }
   }
+  if (!b) return false; // the full text shows it isn't a bounce: filed as usual
+  if (b.unconfirmed) return false; // couldn't confirm it: never swallow a real email
+  const subject = String(e.subject || '').replace(/^(undeliverable|undelivered|returned mail|failure notice)\s*:\s*/i, '');
+  // Only bounces to do with complaints are flagged here: the watched mailbox
+  // (accounts@) and the catch-all carry everyone's mail, and a bounced invoice
+  // to a customer is not the Complaints page's business.
+  const related = [];
+  for (const a of b.addresses) if (await addressRelated(a)) related.push(a);
+  const aboutComplaint = /\bGC-C-[A-Z0-9]{6}\b|complain/i.test(`${subject} ${e.bodyText || e.bodyPreview || ''}`);
+  if (!related.length && !(b.addresses.length === 0 && aboutComplaint)) {
+    // A bounce all the same: not filed as a complaint email, just not flagged.
+    return true;
+  }
   await recordBounce({
-    addresses: b.addresses, reason: b.reason, source: 'mailbox',
-    sourceRef,
-    subject: String(e.subject || '').replace(/^(undeliverable|undelivered|returned mail|failure notice)\s*:\s*/i, ''),
-    bouncedAt: e.receivedAt || null,
+    addresses: related.length ? related : [], reason: b.reason, source: 'mailbox',
+    sourceRef, subject, bouncedAt: e.receivedAt || null,
   });
   return true;
+}
+
+// Is an address one the complaints section deals with: an organisation's
+// complaints address, or someone on a complaint's emails?
+async function addressRelated(address) {
+  const { rows } = await query(
+    `SELECT 1 WHERE EXISTS (SELECT 1 FROM organisations WHERE lower(complaints_email) = $1)
+        OR EXISTS (SELECT 1 FROM complaint_emails WHERE complaint_id IS NOT NULL
+                     AND (lower(sender_email) = $1 OR $1 = ANY (SELECT lower(x) FROM unnest(to_addresses) x)))`,
+    [address],
+  );
+  return rows.length > 0;
 }
 
 // SMTP2GO's webhook for emails the CRM sent. Its field names are read

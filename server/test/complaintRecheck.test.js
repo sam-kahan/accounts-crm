@@ -70,3 +70,9 @@ test('a finished complaint, or a reading that isn’t a complaint, is left alone
   assert.ok(plan(c({ state: 'resolved', stage: 'resolved' }), x({ stage: 'stage_2' })).skip);
   assert.ok(plan(c(), x({ is_complaint: false })).skip);
 });
+
+test('leaving Stage 2 keeps their Stage 2 answer as the final response', () => {
+  const p = plan(c({ stage: 'stage_2', responded_on: '2026-05-01', final_response_on: null }), x({ stage: 'ombudsman', stage_started_on: '2026-06-01' }));
+  assert.equal(p.changes.stage, 'ombudsman');
+  assert.equal(p.changes.final_response_on, '2026-05-01');
+});

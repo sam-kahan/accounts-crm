@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
@@ -142,6 +142,22 @@ export default function ComplaintDetail() {
   const [partyForm, setPartyForm] = useState(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
+
+  // Timers started by a button (watching a search or a re-check finish) are
+  // stopped when the page is left or another complaint is opened, so one
+  // complaint's result can never land on another's page.
+  const pollers = useRef(new Set());
+  const poll = (fn, ms) => {
+    const t = setInterval(fn, ms);
+    pollers.current.add(t);
+    return t;
+  };
+  useEffect(() => () => {
+    for (const t of pollers.current) clearInterval(t);
+    pollers.current.clear();
+    setRechecking(false);
+    setSearchBusy(false);
+  }, [id]);
 
   const load = () => {
     setLoadError(null);
@@ -340,7 +356,7 @@ export default function ComplaintDetail() {
       await api.complaints.searchEmails(id, all);
       setMsg('Searching the mailboxes. Anything found is added to Emails and noted on the timeline.');
       let n = 0;
-      const t = setInterval(async () => {
+      const t = poll(async () => {
         n += 1;
         try {
           const fresh = await api.complaints.get(id);
@@ -544,7 +560,7 @@ export default function ComplaintDetail() {
                     // Done when the review has been rewritten (or something
                     // failed, which is written on the timeline). Up to 10 minutes.
                     let n = 0;
-                    const t = setInterval(async () => {
+                    const t = poll(async () => {
                       n += 1;
                       try {
                         const fresh = await api.complaints.get(id);
