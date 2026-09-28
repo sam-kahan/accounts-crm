@@ -9,10 +9,10 @@ import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/
 import { describeChanges, theOmbudsman } from '../services/complaintRules.js';
 import { decorate, decorateMany, gatherContext } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
-import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
+import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { backfillAccountNumbers } from '../services/accountNumbers.js';
+import { backfillAccountNumbers, searchAccountEmails } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
@@ -132,6 +132,13 @@ router.post(
         console.error(`[complaints] email ${id} not processed:`, err.message);
       }
     }
+    // Anything waiting to be filed that now clearly belongs to a complaint
+    // (same thread, or same account number): filed and read against it.
+    try {
+      filed += await fileWaitingEmails();
+    } catch (err) {
+      errors.push(`filing waiting emails: ${err.message}`);
+    }
     const result = {
       at: started, ok: errors.length === 0, errors: errors.slice(0, 5),
       fetched: r.fetched + w.fetched, stored: r.ids.length + w.ids.length, processed, filed,
@@ -144,6 +151,7 @@ router.post(
     // Account numbers first (what everything is matched on), then import.
     backfillAccountNumbers()
       .catch((err) => console.error('[complaints] account numbers:', err.message))
+      .then(() => searchAccountEmails().catch((err) => console.error('[complaints] account search:', err.message)))
       .then(() => runAutoImport())
       .catch((err) => console.error('[complaints] automatic import:', err.message));
     res.json({ ...result, inserted: r.inserted, matched: r.matched });

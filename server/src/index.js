@@ -20,7 +20,7 @@ import dashboard from './routes/dashboard.js';
 import organisations from './routes/organisations.js';
 import { resumeInterruptedScan, releaseStuckImports, runAutoImport } from './services/pastComplaints.js';
 import { getSetting, setSetting } from './services/settings.js';
-import { backfillAccountNumbers } from './services/accountNumbers.js';
+import { backfillAccountNumbers, searchAccountEmails } from './services/accountNumbers.js';
 import complaints from './routes/complaints.js';
 import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
@@ -182,6 +182,7 @@ app.listen(config.port, () => {
     })
     .catch((err) => console.error('  Stuck imports not released:', err.message))
     .then(() => backfillAccountNumbers().catch((err) => console.error('  Account numbers:', err.message)))
+    .then(() => searchAccountEmails().catch((err) => console.error('  Account search:', err.message)))
     .then(() => runAutoImport())
     .catch((err) => console.error('  Automatic import could not carry on:', err.message));
   resumeInterruptedScan()

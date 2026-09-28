@@ -545,6 +545,26 @@ the page says how far each date can be trusted.
   than one account number is marked To check with a note that it may be two
   complaints in one. Automatic import waits for a found complaint's account
   number before matching it (`autoPlan`).
+- **A shared account number matches across organisations**: a debt collector
+  or solicitor (LCS for British Gas) quotes the supplier's account number
+  under its own name, so the same number (6+ characters) is the same
+  complaint whoever sends it.
+- **Every email quoting the account is brought onto the complaint**
+  (`accountNumbers.js#searchAccountEmails`, migration `026`,
+  `accounts_searched`): each account number is searched for once in every
+  watched mailbox, the catch-all and those searched for past complaints;
+  only threads that really quote it (checked in the text) are taken; emails
+  from after the complaint was raised are read as usual (steps recorded with
+  Undo), earlier ones kept as background; an email on another complaint is
+  left there. The timeline says what was found. Runs after each 5-minute
+  check (4 complaints a run) and at start-up.
+- **Forwarded emails that arrive before their complaint exists are filed
+  later** (`complaintEmailProcessor.js#fileWaitingEmails`, each check and
+  whenever a complaint is created from an email): same thread, or the same
+  account number, certain matches only. The email analysis now reads the
+  organisation, property and account numbers, and a complaint created from
+  an email starts with its account numbers; a possible (not certain) match
+  waits for a person rather than being filed or duplicated.
 
 ### 2026-09-28 — past-complaints search: safe imports, only new threads, every email
 - **A new search reads only new threads.** Every thread a search has been

@@ -152,9 +152,13 @@ const shares = (a, b) => [...a].some((v) => b.has(v));
 //     is a POSSIBLE match, never a certain one
 export function issueMatch(a, b) {
   const no = { same: false, certain: false };
-  if (!a?.org_name || !b?.org_name || !sameOrgName(a.org_name, b.org_name)) return no;
   const aa = accountsOf(a);
   const ab = accountsOf(b);
+  // The same account number is the same complaint whoever the email is from:
+  // a debt collector or solicitor chasing the bill (LCS for British Gas)
+  // quotes the supplier's account number under its own name.
+  if ([...aa].some((v) => v.length >= 6 && ab.has(v))) return { same: true, certain: true };
+  if (!a?.org_name || !b?.org_name || !sameOrgName(a.org_name, b.org_name)) return no;
   if (shares(aa, ab)) return { same: true, certain: true };
   if (aa.size && ab.size) return no;
   if (shares(refsOf(a), refsOf(b))) return { same: true, certain: true };
@@ -182,14 +186,14 @@ export function findExistingComplaint(complaints, orgs, x) {
 }
 
 export function findExistingMatch(complaints, orgs, x) {
-  if (!x?.org_name) return null;
+  if (!x) return null;
   let possible = null;
   for (const c of complaints) {
     const org = c.organisation_id ? orgs.find((o) => o.id === c.organisation_id) : null;
     const names = [c.org_name, org?.name].filter(Boolean);
-    const name = names.find((n) => sameOrgName(n, x.org_name));
-    if (!name) continue;
-    const m = issueMatch({ ...c, org_name: name }, x);
+    const name = x.org_name ? names.find((n) => sameOrgName(n, x.org_name)) : null;
+    // Without the same organisation only the account number can match.
+    const m = issueMatch({ ...c, org_name: name || c.org_name }, name ? x : { ...x, org_name: null });
     if (m.certain) return { complaint: c, certain: true };
     if (m.same && !possible) possible = { complaint: c, certain: false };
   }

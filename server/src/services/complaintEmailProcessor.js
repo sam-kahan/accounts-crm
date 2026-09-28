@@ -10,7 +10,7 @@ import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, findExistingComplaint } from './orgMatch.js';
+import { findOrgByName, findExistingMatch } from './orgMatch.js';
 import { researchOrganisation } from './orgResearch.js';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,8 @@ export async function processEmail(emailId) {
       ['watch_new', 'watch', 'inbox'].includes(em.match_method)) {
     // Our own email making a new complaint: create it, so nobody has to.
     em.complaint_id = await createFromEmail(em, analysis);
+    // Others about it may already be waiting (forwarded together, read first).
+    if (em.complaint_id) setImmediate(() => fileWaitingEmails().catch((err) => console.error('[complaints] filing waiting emails:', err.message)));
   }
   if (!em.complaint_id) {
     // From a watched mailbox and not about any complaint: not ours to keep.
@@ -273,11 +275,16 @@ async function createFromEmail(em, analysis) {
     `SELECT id, org_name, organisation_id, property, raised_on, reference, our_reference, subject, account_numbers FROM complaints WHERE state = 'open'`,
   )).rows;
   const orgsAll = (await query('SELECT id, name FROM organisations')).rows;
-  const existing = findExistingComplaint(open, orgsAll, p);
-  if (existing) {
-    await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'same_issue' WHERE id = $1`, [em.id, existing.id]);
-    return existing.id;
+  // Matched first on the account number (orgMatch.js#issueMatch). Only a
+  // certain match is filed there; a possible one waits for a person rather
+  // than risk either filing it on the wrong complaint or starting a duplicate.
+  const accounts = [...new Set([...(p.account_numbers || []), ...(analysis.account_numbers || [])])];
+  const match = findExistingMatch(open, orgsAll, { ...p, account_numbers: accounts });
+  if (match?.certain) {
+    await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'same_issue' WHERE id = $1`, [em.id, match.complaint.id]);
+    return match.complaint.id;
   }
+  if (match) return null;
 
   let org = await findOrgByName(p.org_name);
   if (!org) {
@@ -324,13 +331,79 @@ async function createFromEmail(em, analysis) {
       category: p.category || null,
       description: p.description || null,
       reference: p.reference || null,
+      account_numbers: accounts,
       channel: 'email',
       raised_on: raised,
     },
     { by: AUTO_BY, needsCheck: true, raisedNote: `Complaint created automatically from your email "${em.subject || '(no subject)'}". Check the details.` },
   );
   await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'auto_created' WHERE id = $1`, [em.id, created.id]);
+  await query('UPDATE complaints SET accounts_read_at = now() WHERE id = $1', [created.id]);
   return created.id;
+}
+
+// Emails waiting to be filed that now clearly belong to a complaint: several
+// emails about one complaint forwarded together arrive in any order, so a
+// reply can be read before the email that made the complaint (and so before
+// the complaint existed). Filed without asking only on certain evidence, and
+// no AI is needed to decide:
+//   - the same email thread as an email already on a complaint; or
+//   - the same account number (or the same organisation and property) as an
+//     open complaint (orgMatch.js#findExistingMatch, certain matches only).
+// Each one filed is then read again against that complaint, so an
+// acknowledgement or response in it is recorded as usual (with Undo).
+// Runs after each 5-minute check and whenever a complaint is created from an
+// email.
+export async function fileWaitingEmails() {
+  const waiting = (await query(
+    `SELECT * FROM complaint_emails
+      WHERE complaint_id IS NULL AND analysed_at IS NOT NULL AND reviewed_at IS NULL
+        AND created_at > now() - interval '60 days'
+      ORDER BY received_at LIMIT 200`,
+  )).rows;
+  if (!waiting.length) return 0;
+  const open = (await query(
+    `SELECT id, ref_code, org_name, organisation_id, property, raised_on, reference, our_reference, subject, account_numbers
+       FROM complaints WHERE state = 'open'`,
+  )).rows;
+  const orgs = (await query('SELECT id, name FROM organisations')).rows;
+  let filed = 0;
+  for (const em of waiting) {
+    let target = null;
+    let how = null;
+    if (em.conversation_id) {
+      const t = (await query(
+        `SELECT complaint_id FROM complaint_emails
+          WHERE conversation_id = $1 AND complaint_id IS NOT NULL LIMIT 1`,
+        [em.conversation_id],
+      )).rows[0];
+      if (t) { target = t.complaint_id; how = 'thread'; }
+    }
+    if (!target && (em.analysis?.org_name || em.analysis?.account_numbers?.length)) {
+      const m = findExistingMatch(open, orgs, {
+        org_name: em.analysis.org_name,
+        property: em.analysis.property,
+        account_numbers: em.analysis.account_numbers,
+        reference: em.analysis.their_reference,
+        subject: em.subject,
+      });
+      if (m?.certain) { target = m.complaint.id; how = 'account'; }
+    }
+    if (!target) continue;
+    const { rowCount } = await query(
+      `UPDATE complaint_emails SET complaint_id = $2, match_method = $3, analysed_at = NULL
+        WHERE id = $1 AND complaint_id IS NULL`,
+      [em.id, target, how],
+    );
+    if (!rowCount) continue;
+    filed += 1;
+    try {
+      await processEmail(em.id); // read again against its complaint
+    } catch (err) {
+      console.error(`[complaints] waiting email ${em.id} filed but not read:`, err.message);
+    }
+  }
+  return filed;
 }
 
 // A past email brought in with an imported complaint: read in full and its

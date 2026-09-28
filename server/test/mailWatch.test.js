@@ -214,3 +214,11 @@ test('the account number decides: same account is the same complaint, different 
   // amounts and dates in a subject are not account numbers
   assert.deepEqual([...accountsOf({ subject: 'Refund of £1,297.55 by 01/09/2026' })], []);
 });
+
+test('a debt collector quoting the supplier\'s account number is the same complaint', () => {
+  const bg = { org_name: 'British Gas', account_numbers: ['850012345678'], property: '6 Benedict Street, L20 2EN' };
+  const lcs = { org_name: 'LCS (1st Locate UK Ltd)', account_numbers: ['8500 1234 5678'] };
+  assert.deepEqual(issueMatch(bg, lcs), { same: true, certain: true });
+  // but a different organisation with no shared account is not
+  assert.equal(issueMatch(bg, { org_name: 'LCS', property: '6 Benedict Street, L20 2EN' }).same, false);
+});

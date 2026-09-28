@@ -136,3 +136,126 @@ export async function backfillAccountNumbers({ limit = 20 } = {}) {
     running = false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Every email about the account, on the complaint. For each account number a
+// complaint has that hasn't been searched for yet, every watched mailbox (and
+// the catch-all, and any searched for past complaints) is searched for it, and
+// each email thread that really quotes it (checked in the text, not taken on
+// the search's word) is brought onto the complaint: read in full with its
+// attachments. Emails from after the complaint was raised are read as usual,
+// so an acknowledgement or response among them is recorded (with Undo);
+// earlier ones (the bills that led to it) are kept as background. An email
+// already on another complaint is left where it is.
+// ---------------------------------------------------------------------------
+
+const keyOf = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+async function mailboxesToSearch() {
+  const { watchedMailboxes, getSetting } = await import('./settings.js');
+  const past = (await getSetting('past_scan'))?.mailboxes || [];
+  return [...new Set([...(await watchedMailboxes()), config.ms.mailbox, ...past].filter(Boolean).map((m) => m.toLowerCase()))];
+}
+
+const quotes = (msgs, key) => msgs.some((m) =>
+  keyOf(`${m.subject || ''} ${m.bodyText || m.bodyPreview || ''}`).includes(key));
+
+async function searchOne(c, number, mailboxes) {
+  const { searchMailbox } = await import('./graphMail.js');
+  const { storeEmail } = await import('./emailIngest.js');
+  const { processEmail, processHistoricalEmail } = await import('./complaintEmailProcessor.js');
+  const key = keyOf(number);
+  const terms = [...new Set([key, String(number).replace(/\s+/g, '')])];
+  const convs = new Map(); // conversationId -> mailbox
+  for (const mb of mailboxes) {
+    for (const term of terms) {
+      try {
+        for (const m of await searchMailbox(mb, term, { max: 200 })) {
+          if (m.conversationId && !convs.has(m.conversationId)) convs.set(m.conversationId, mb);
+        }
+      } catch (err) {
+        if (err.status !== 403 && err.status !== 404) throw err; // no access to that mailbox: skip it
+      }
+    }
+  }
+  let added = 0;
+  let threads = 0;
+  for (const [conv, mb] of [...convs].slice(0, 40)) {
+    const msgs = await fetchConversation(mb, conv).catch(() => []);
+    if (!msgs.length || !quotes(msgs, key)) continue; // doesn't really quote it
+    let here = 0;
+    for (const m of msgs.slice(0, 60)) {
+      let id = await storeEmail(m, { complaintId: c.id, method: 'account_search', mailbox: mb });
+      if (!id && m.messageId) {
+        // Already stored but not filed anywhere (waiting to be filed): file it here.
+        id = (await query(
+          `UPDATE complaint_emails SET complaint_id = $2, match_method = 'account_search', analysed_at = NULL
+            WHERE message_id = $1 AND complaint_id IS NULL RETURNING id`,
+          [m.messageId, c.id],
+        )).rows[0]?.id || null;
+      }
+      if (!id) continue; // already on this or another complaint
+      here += 1;
+      try {
+        const after = !c.raised_on || londonDateOf(new Date(m.receivedAt)) >= c.raised_on;
+        if (after) await processEmail(id);
+        else await processHistoricalEmail(id);
+      } catch (err) {
+        console.error(`[complaints] email found by account ${number} not read:`, err.message);
+      }
+    }
+    if (here) { added += here; threads += 1; }
+  }
+  return { added, threads };
+}
+
+let searching = false;
+export async function searchAccountEmails({ limit = 4 } = {}) {
+  if (searching || !config.ms.enabled) return { complaints: 0, added: 0 };
+  searching = true;
+  let done = 0;
+  let addedAll = 0;
+  try {
+    const mailboxes = await mailboxesToSearch();
+    const due = (await query(
+      `SELECT * FROM complaints
+        WHERE cardinality(account_numbers) > 0 AND accounts_read_at IS NOT NULL
+        ORDER BY (state = 'open') DESC, raised_on DESC`,
+    )).rows.filter((c) => (c.account_numbers || []).some((n) => !(c.accounts_searched || []).includes(keyOf(n))))
+      .slice(0, limit);
+    for (const c of due) {
+      const pending = c.account_numbers.filter((n) => !(c.accounts_searched || []).includes(keyOf(n)));
+      const notes = [];
+      let ok = true;
+      for (const n of pending) {
+        try {
+          const r = await searchOne(c, n, mailboxes);
+          addedAll += r.added;
+          notes.push(r.added
+            ? `${r.added} email${r.added === 1 ? '' : 's'} in ${r.threads} thread${r.threads === 1 ? '' : 's'} quoting account ${n}`
+            : `no further emails quoting account ${n}`);
+        } catch (err) {
+          ok = false; // tried again next time
+          console.error(`[complaints] searching for account ${n} (${c.ref_code}):`, err.message);
+        }
+      }
+      if (!ok) continue;
+      await query(
+        `UPDATE complaints SET accounts_searched = $2, accounts_searched_at = now() WHERE id = $1`,
+        [c.id, [...new Set([...(c.accounts_searched || []), ...pending.map(keyOf)])]],
+      );
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [c.id, londonDateOf(new Date()), `Searched the mailboxes (${mailboxes.join(', ')}) for its account number: ${notes.join('; ')}.`, BY],
+      );
+      if (notes.some((t) => !t.startsWith('no further'))) {
+        const { scheduleReview } = await import('./complaintReview.js');
+        scheduleReview(c.id);
+      }
+      done += 1;
+    }
+  } finally {
+    searching = false;
+  }
+  return { complaints: done, added: addedAll };
+}
