@@ -40,13 +40,38 @@ export async function recomputeDeadlines(id, db = { query }) {
 
 // After an organisation's procedure is edited (or the organisation removed),
 // every OPEN complaint against it is re-dated. Closed ones keep the dates they
-// were handled against.
-export async function recomputeForOrganisation(orgId, extraIds = []) {
+// were handled against. Each date that moved is written on that complaint's
+// timeline ("Stage 1 outcome due 22 Oct → 19 Oct"), and its AI review is
+// refreshed so the next step follows the new rules.
+export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)' } = {}) {
   const { rows } = await query(
-    `SELECT id FROM complaints
+    `SELECT id, response_due, ombudsman_deadline, stage FROM complaints
       WHERE state = 'open' AND (organisation_id = $1 OR id = ANY($2::uuid[]))`,
     [orgId, extraIds],
   );
-  for (const r of rows) await recomputeDeadlines(r.id);
+  const org = orgId ? (await query('SELECT name, procedure_ref FROM organisations WHERE id = $1', [orgId])).rows[0] : null;
+  const source = org ? (org.procedure_ref || `${org.name}'s procedure`) : 'the general timescales';
+  const { scheduleReview } = await import('./complaintReview.js');
+  const { todayISO } = await import('../lib/dates.js');
+  let changed = 0;
+  for (const r of rows) {
+    const after = await recomputeDeadlines(r.id);
+    const moves = [];
+    const label = r.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
+    if ((r.response_due || null) !== (after.response_due || null)) {
+      moves.push(`${label} ${r.response_due || '(none)'} → ${after.response_due || '(none)'}`);
+    }
+    if ((r.ombudsman_deadline || null) !== (after.ombudsman_deadline || null)) {
+      moves.push(`refer-by date ${r.ombudsman_deadline || '(none)'} → ${after.ombudsman_deadline || '(none)'}`);
+    }
+    if (moves.length) {
+      changed += 1;
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [r.id, todayISO(), `Deadlines updated from ${source}: ${moves.join('; ')}.`, by],
+      );
+    }
+    scheduleReview(r.id);
+  }
   return rows.length;
 }

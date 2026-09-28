@@ -62,6 +62,8 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
   const [reading, setReading] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  const [pasteText, setPasteText] = useState('');
   const [error, setError] = useState(null);
   const [info, setInfo] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -221,12 +223,30 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
                 accept=".pdf,.doc,.docx,.txt,image/*"
                 onChange={(e) => { readDocument(e.target.files?.[0]); e.target.value = ''; }} />
             </label>
+            <button type="button" className="btn btn-sm" onClick={() => setPasting((v) => !v)} disabled={reading || !researchEnabled}>
+              📋 Paste the procedure text
+            </button>
             <button type="button" className="btn btn-sm" onClick={research}
               disabled={researching || !researchEnabled}
               title={researchEnabled ? '' : 'Set ANTHROPIC_API_KEY on the server to enable'}>
               {researching ? 'Researching…' : '🔎 Research their website'}
             </button>
           </div>
+          {pasting && (
+            <div style={{ marginTop: 10 }}>
+              <textarea rows={8} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste their complaints procedure here (from their website or a letter)…" style={{ width: '100%' }} />
+              <button type="button" className="btn-primary btn-sm" style={{ marginTop: 6 }}
+                disabled={reading || pasteText.trim().length < 50}
+                onClick={() => {
+                  // Read like an uploaded document, and kept on file as one.
+                  const file = new File([pasteText], `${(form.name || 'procedure').replace(/[^\w ]+/g, '').trim() || 'procedure'} complaints procedure (pasted).txt`, { type: 'text/plain' });
+                  readDocument(file).then(() => setPasting(false));
+                }}>
+                {reading ? 'Reading…' : 'Read it'}
+              </button>
+            </div>
+          )}
           {!researchEnabled && (
             <div className="inline-note warn" style={{ marginTop: 10 }}>
               Reading and research need <code>ANTHROPIC_API_KEY</code> on the server. You can still
@@ -459,7 +479,7 @@ export default function Organisations() {
             setEditing(null);
             setNote(
               saved?.recalculated
-                ? `Saved. The deadlines on ${saved.recalculated} open complaint(s) were recalculated from this procedure.`
+                ? `Saved. ${saved.recalculated} open complaint(s) against them were re-dated from this procedure. Any date that moved is noted on its timeline, and each AI review is being refreshed.`
                 : 'Saved.',
             );
             load();

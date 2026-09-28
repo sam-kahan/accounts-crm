@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
 import { searchMailbox, fetchConversation } from './graphMail.js';
 import { parseImportedComplaint, triageComplaintThread } from './complaintAssistant.js';
+import { reconstructComplaint, belongsToComplaint } from './complaintReconstruct.js';
 import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
@@ -116,13 +117,14 @@ async function runScan({ mailboxes, months, carry = null }) {
   const before = carry?.read || 0;
   await progress({ stage: 'Reading each email thread', threads: before + list.length, errors });
 
-  // 2. Read each thread.
+  // 2. Read the threads, four at a time: each can mean waiting on the AI, and
+  // reading them side by side is several times quicker for the same cost.
   let read = before;
   let found = carry?.found || 0;
-  for (const t of list) {
+  const readOne = async (t) => {
     try {
       const msgs = await fetchConversation(t.mailbox, t.conversationId);
-      if (!msgs.length) continue;
+      if (!msgs.length) return;
       let extracted;
       const text = threadText(msgs);
       if (!couldBeOurComplaint(msgs, config.complaintEmail.domain.toLowerCase())) {
@@ -172,9 +174,18 @@ async function runScan({ mailboxes, months, carry = null }) {
     } catch (err) {
       errors.push(`thread ${t.conversationId.slice(0, 12)}…: ${err.message}`);
     }
-    read += 1;
-    if (read % 5 === 0 || read === before + list.length) await progress({ read, found, errors: errors.slice(-10) });
-  }
+  };
+  let next = 0;
+  const worker = async () => {
+    while (next < list.length) {
+      const t = list[next];
+      next += 1;
+      await readOne(t);
+      read += 1;
+      if (read % 5 === 0 || read === before + list.length) await progress({ read, found, errors: errors.slice(-10) });
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
   await progress({ status: 'done', stage: 'Finished', read, found, finished_at: new Date().toISOString(), errors: errors.slice(-10) });
 }
 
@@ -186,67 +197,171 @@ async function groupOf(id) {
   return groupCandidates(pending).find((g) => g.some((c) => c.id === id)) || [];
 }
 
+// Other threads about the same complaint that the keyword search didn't find
+// (an email about "Apt 78" with no complaint words in it). Searched by their
+// reference and the property postcode, kept only if they involve the same
+// organisation and a quick AI check says they belong.
+async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
+  const phrases = [seed.reference, postcodeOf(seed.property)].filter(Boolean);
+  if (!phrases.length || !orgDomains.size) return [];
+  const onFile = new Set(
+    (await query('SELECT DISTINCT conversation_id FROM complaint_emails WHERE conversation_id IS NOT NULL')).rows
+      .map((r) => r.conversation_id),
+  );
+  const found = new Map();
+  for (const mb of mailboxes) {
+    for (const phrase of phrases) {
+      try {
+        for (const m of await searchMailbox(mb, phrase, 200)) {
+          if (!m.conversationId || knownConvs.has(m.conversationId) || onFile.has(m.conversationId)) continue;
+          const people = [m.senderEmail, ...(m.toAddresses || [])].map(domainOf);
+          if (!people.some((d) => orgDomains.has(d))) continue;
+          if (!found.has(m.conversationId)) found.set(m.conversationId, mb);
+        }
+      } catch {
+        /* a search that fails just finds nothing more */
+      }
+      if (found.size >= 10) break;
+    }
+  }
+  const summary = `Against ${seed.org_name}; ${seed.subject || ''}; property ${seed.property || 'unknown'}; ` +
+    `their reference ${seed.reference || 'none'}. ${seed.summary || ''}`;
+  const extra = [];
+  for (const [conv, mb] of [...found].slice(0, 10)) {
+    try {
+      const msgs = (await fetchConversation(mb, conv)).map((m) => ({ ...m, mailbox: mb }));
+      if (msgs.length && (await belongsToComplaint(summary, msgs))) extra.push(...msgs);
+    } catch {
+      /* skip a thread that can't be read */
+    }
+  }
+  return extra;
+}
+
+// Import a found complaint as a complete record: every email about it — from
+// every thread found with it, plus any others gathered by reference and
+// postcode — read together, the complaint filled in from the whole story with
+// its timeline rebuilt, and every email and attachment filed on it.
 export async function importCandidate(id, by) {
   const cand = (await query('SELECT * FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
   if (!cand) throw Object.assign(new Error('Not found'), { status: 404 });
   if (cand.status !== 'pending') throw Object.assign(new Error('This one has already been dealt with.'), { status: 409 });
-  // Every thread about the same issue becomes this one complaint.
   const group = await groupOf(id);
-  const others = group.filter((c) => c.id !== id);
-  const x = group.length > 1 ? mergeExtracted(group) : cand.extracted || {};
-  const msgs = await fetchConversation(cand.mailbox, cand.conversation_id);
-  const firstDay = londonDateOf(new Date(cand.first_at));
-  let org = x.org_name ? await findOrgByName(x.org_name) : null;
-  if (!org && x.org_name) {
-    // Set it up so the complaint is linked; its procedure is added (or
-    // researched) on the Organisations page, and the complaint says so.
-    org = (await query(
-      `INSERT INTO organisations (name, type, research_status, notes)
-       VALUES ($1, $2, 'none', 'Set up when a past complaint was imported. Add its complaints procedure.')
-       RETURNING *`,
-      [x.org_name, ['council', 'housing_association', 'water', 'energy', 'managing_agent', 'supplier', 'other'].includes(x.org_type) ? x.org_type : 'other'],
-    )).rows[0];
-  }
-  const iso = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const seed = group.length > 1 ? mergeExtracted(group) : cand.extracted || {};
+  const ourDomain = config.complaintEmail.domain.toLowerCase();
 
+  // 1. Every email in the threads found for it.
+  const msgs = [];
+  const convs = new Set();
+  for (const c of group.length ? group : [cand]) {
+    convs.add(c.conversation_id);
+    msgs.push(...(await fetchConversation(c.mailbox, c.conversation_id)).map((m) => ({ ...m, mailbox: c.mailbox })));
+  }
+  // 2. Other threads about it.
+  const orgDomains = new Set(msgs.map((m) => domainOf(m.senderEmail)).filter((d) => d && d !== ourDomain));
+  const mailboxes = [...new Set((group.length ? group : [cand]).map((c) => c.mailbox))];
+  const extra = await gatherRelated(seed, mailboxes, convs, orgDomains);
+  msgs.push(...extra);
+
+  // 3. Read the whole story together. If that fails, the per-thread reading
+  //    still makes a usable record.
+  let x = null;
+  if (msgs.length) {
+    try {
+      x = await reconstructComplaint(msgs);
+    } catch (err) {
+      console.error('[complaints] full read failed, using the thread summaries:', err.message);
+    }
+  }
+  const pick = (k) => (x && x[k] != null && x[k] !== '' ? x[k] : seed[k] ?? null);
+  const iso = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const firstDay = londonDateOf(new Date(cand.first_at));
+
+  // 4. The organisation: matched, or set up (with its complaints address, if
+  //    the emails show it).
+  const orgName = pick('org_name');
+  let org = orgName ? await findOrgByName(orgName) : null;
+  if (!org && orgName) {
+    org = (await query(
+      `INSERT INTO organisations (name, type, complaints_email, research_status, notes)
+       VALUES ($1, $2, $3, 'none', 'Set up when a past complaint was imported. Add its complaints procedure.')
+       RETURNING *`,
+      [orgName, pick('org_type') || 'other', x?.org_complaints_email || null],
+    )).rows[0];
+  } else if (org && !org.complaints_email && x?.org_complaints_email) {
+    await query('UPDATE organisations SET complaints_email = $2 WHERE id = $1', [org.id, x.org_complaints_email]);
+  }
+
+  // 5. The complaint, as complete as the emails allow.
+  const stage = ['stage_1', 'stage_2', 'ombudsman'].includes(pick('stage')) ? pick('stage') : 'stage_1';
+  const description = [pick('description') || seed.summary, x?.outcome ? `Outcome: ${x.outcome}` : null]
+    .filter(Boolean).join('\n\n') || null;
+  const threads = convs.size + new Set(extra.map((m) => m.conversationId)).size;
   const complaint = await createComplaint(
     {
       organisation_id: org?.id || null,
-      org_name: org?.name || x.org_name || 'Unknown organisation',
-      org_type: org?.type || x.org_type || 'other',
-      subject: x.subject || cand.subject || 'Complaint',
-      property: x.property || null,
-      category: x.category || null,
-      description: [x.summary, x.description].filter(Boolean).join('\n\n') || null,
-      reference: x.reference || null,
-      channel: x.channel || 'email',
-      raised_on: iso(x.raised_on) || firstDay,
-      stage: ['stage_1', 'stage_2', 'ombudsman'].includes(x.stage) ? x.stage : 'stage_1',
-      acknowledged_on: iso(x.acknowledged_on),
-      responded_on: iso(x.responded_on),
+      org_name: org?.name || orgName || 'Unknown organisation',
+      org_type: org?.type || pick('org_type') || 'other',
+      subject: pick('subject') || cand.subject || 'Complaint',
+      property: pick('property'),
+      category: pick('category'),
+      description,
+      reference: pick('reference'),
+      channel: pick('channel') || 'email',
+      raised_on: iso(pick('raised_on')) || firstDay,
+      stage,
+      stage_started_on: stage === 'stage_1' ? null : iso(x?.stage_started_on),
+      acknowledged_on: iso(pick('acknowledged_on')),
+      responded_on: iso(pick('responded_on')),
+      final_response_on: iso(x?.final_response_on),
       imported: true,
     },
-    { by, raisedNote: `Imported from past emails (${cand.message_count} in the thread, from ${cand.mailbox})` },
+    {
+      by,
+      raisedNote: `Imported from past emails: ${new Set(msgs.map((m) => m.messageId || m.graphId)).size} email(s) ` +
+        `across ${threads} thread(s)${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
+    },
   );
 
+  // 6. The timeline, rebuilt from the emails (the "raised" entry is already there).
+  for (const e of x?.events || []) {
+    if (e.type === 'raised') continue;
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,$3,$4,$5)`,
+      [complaint.id, e.date, e.type, e.note, 'Import (read from the emails)'],
+    );
+  }
+  if (x?.uncertain?.length) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [complaint.id, londonDateOf(new Date()), `Please check (the emails didn't make these clear): ${x.uncertain.join('; ')}.`, 'Import (read from the emails)'],
+    );
+  }
+
+  // 7. Every email and attachment, filed on it.
   for (const m of msgs) {
-    const eid = await storeEmail(m, { complaintId: complaint.id, method: 'import', mailbox: cand.mailbox });
+    const eid = await storeEmail(m, { complaintId: complaint.id, method: 'import', mailbox: m.mailbox || cand.mailbox });
     if (eid) await processHistoricalEmail(eid);
   }
-  if (x.state === 'resolved') {
-    const on = iso(x.resolved_on) || londonDateOf(new Date(cand.last_at));
-    await query(`UPDATE complaints SET state = 'resolved', stage = 'resolved', closed_on = $2 WHERE id = $1`, [complaint.id, on]);
-    await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'resolved',$3,$4)`,
-      [complaint.id, on, 'Resolved (read from the past emails)', by],
-    );
+
+  // 8. Finished, if it was.
+  if (pick('state') === 'resolved') {
+    const on = iso(pick('resolved_on')) || londonDateOf(new Date(cand.last_at));
+    await query(`UPDATE complaints SET state = 'resolved', stage = 'resolved', closed_on = $2, outcome = $3 WHERE id = $1`,
+      [complaint.id, on, x?.outcome || null]);
+    if (!(x?.events || []).some((e) => e.type === 'resolved')) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'resolved',$3,$4)`,
+        [complaint.id, on, x?.outcome ? `Resolved: ${x.outcome}` : 'Resolved (read from the past emails)', 'Import (read from the emails)'],
+      );
+    }
   }
   await recomputeDeadlines(complaint.id);
   await query(
-    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3 WHERE id = $1`,
-    [id, complaint.id, by],
+    `UPDATE complaint_import_candidates SET status = 'imported', complaint_id = $2, decided_by = $3
+      WHERE id = ANY($1::uuid[])`,
+    [(group.length ? group : [cand]).map((c) => c.id), complaint.id, by],
   );
-  for (const o of others) await linkCandidate(o.id, complaint.id, by, { historical: true, withGroup: false });
   scheduleReview(complaint.id);
   return complaint;
 }

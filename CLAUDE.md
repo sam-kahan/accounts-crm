@@ -473,6 +473,22 @@ the page says how far each date can be trusted.
   A merge moves every email, document, timeline entry and found thread,
   fills blanks without overwriting, and says so on the timeline; one
   transaction.
+- **Importing builds the complete record** (`services/complaintReconstruct.js`).
+  Import gathers every email about the issue — the threads found with it, plus
+  others searched by their reference and the property postcode, kept only if
+  they involve the same organisation and a low-effort AI check says they
+  belong — and reads them together, oldest first, in one high-effort call.
+  `normaliseReconstruction()` (pure, tested) keeps only real, non-future dates
+  in a possible order and flags what it dropped. The complaint is created with
+  description, stage and every stage date, outcome, their complaints address
+  (filled on the organisation), a timeline rebuilt from the emails
+  (`created_by = 'Import (read from the emails)'`), and a "Please check" note
+  for anything uncertain; every email and attachment is filed on it.
+- **A procedure change re-dates its complaints visibly**:
+  `recomputeForOrganisation` writes each moved date onto the complaint's
+  timeline and refreshes its AI review. Procedures can be uploaded, researched
+  or pasted as text (kept on file as a .txt).
+- The search reads four threads at a time.
 - A past-complaints search stopped by a restart (every deploy) carries on at
   start-up (`resumeInterruptedScan`); threads already read are skipped.
 - **Creating a complaint** has one definition, `services/complaintCreate.js`
