@@ -532,10 +532,13 @@ export default function Complaints() {
   // Search across everything a complaint is known by: subject, organisation,
   // property, our reference and theirs. Searching looks in every state, so an
   // old resolved one is found without changing the filter.
+  // An account number matches however it is spaced or punctuated.
   const q = search.trim().toLowerCase();
+  const qk = q.replace(/[^a-z0-9]/g, '');
   const shown = !q ? byFilter : items.filter((c) =>
     [c.subject, c.org_name, c.property, c.ref_code, c.reference, c.our_reference, c.category]
-      .some((v) => String(v || '').toLowerCase().includes(q)));
+      .some((v) => String(v || '').toLowerCase().includes(q)) ||
+    (qk.length >= 4 && (c.account_numbers || []).some((a) => String(a).toLowerCase().replace(/[^a-z0-9]/g, '').includes(qk))));
 
   return (
     <>
@@ -603,7 +606,7 @@ export default function Complaints() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by organisation, property, subject or reference…"
+          placeholder="Search by account number, organisation, property, subject or reference…"
           aria-label="Search complaints"
           style={{ maxWidth: 460 }}
         />

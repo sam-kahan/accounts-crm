@@ -6,7 +6,9 @@ import { config } from '../config.js';
 // we never shift a due date across a timezone boundary.
 pg.types.setTypeParser(1082, (v) => v); // 1082 = DATE oid
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl });
+// A connection that can't be made within 10s fails rather than hanging (the
+// deploy's wait-for-imports step must never hold a deploy up on it).
+export const pool = new pg.Pool({ connectionString: config.databaseUrl, connectionTimeoutMillis: 10000 });
 
 pool.on('error', (err) => {
   // eslint-disable-next-line no-console

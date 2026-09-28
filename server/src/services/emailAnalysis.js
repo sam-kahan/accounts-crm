@@ -199,6 +199,7 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
     if (complaint.property) lines.push(`- Property: ${complaint.property}`);
     lines.push(`- Our reference: ${complaint.ref_code}`);
     if (complaint.reference) lines.push(`- Their reference: ${complaint.reference}`);
+    if (complaint.account_numbers?.length) lines.push(`- Account number(s): ${complaint.account_numbers.join(', ')}`);
     lines.push(`- Raised: ${complaint.raised_on}; current stage: ${complaint.stage}`);
   }
   if (candidates?.length) {
@@ -207,9 +208,11 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
       lines.push(
         `- complaint_id ${c.id}: ${c.org_name} — ${c.subject}` +
           `${c.property ? ` — ${c.property}` : ''} — ours ${c.ref_code}` +
-          `${c.reference ? ` — theirs ${c.reference}` : ''}`,
+          `${c.reference ? ` — theirs ${c.reference}` : ''}` +
+          `${c.account_numbers?.length ? ` — account ${c.account_numbers.join(' / ')}` : ''}`,
       );
     }
+    lines.push('The account number is the surest sign: an email giving a different account number is not about that complaint, even if the organisation is the same.');
   }
   lines.push('');
   lines.push(`The email as it arrived (outer headers): from ${email.sender_name || ''} <${email.sender_email || ''}>, ` +

@@ -30,6 +30,7 @@ function keepOrg(a, b) {
 export async function tidySuggestions() {
   const complaints = (await query(
     `SELECT c.id, c.ref_code, c.subject, c.org_name, c.organisation_id, c.property, c.raised_on, c.state,
+            c.reference, c.our_reference, c.account_numbers,
             c.imported, o.name AS linked_org,
             (SELECT count(*)::int FROM complaint_emails e WHERE e.complaint_id = c.id) AS emails
        FROM complaints c LEFT JOIN organisations o ON o.id = c.organisation_id
@@ -41,8 +42,8 @@ export async function tidySuggestions() {
       const a = complaints[i];
       const b = complaints[j];
       if (a.state !== 'open' && b.state !== 'open') continue; // both finished: leave history alone
-      const fa = { org_name: a.linked_org || a.org_name, property: a.property, raised_on: a.raised_on };
-      const fb = { org_name: b.linked_org || b.org_name, property: b.property, raised_on: b.raised_on };
+      const fa = { ...a, org_name: a.linked_org || a.org_name };
+      const fb = { ...b, org_name: b.linked_org || b.org_name };
       // Keep the open one (its clock and next step are live); if both are
       // open, keep the older one.
       if (sameIssue(fa, fb)) complaintPairs.push(a.state !== 'open' && b.state === 'open' ? { keep: b, merge: a } : { keep: a, merge: b });

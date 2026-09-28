@@ -235,6 +235,7 @@ export default function EmailAutomation({ onChanged }) {
                       <strong>{x.subject || c.subject}</strong>
                       <div className="muted" style={{ fontSize: 12 }}>
                         {x.org_name || 'Unknown organisation'}{x.property ? ` · ${x.property}` : ''}
+                        {x.account_numbers?.length ? <> · <strong>Account {x.account_numbers.join(', ')}</strong></> : ''}
                       </div>
                       {x.summary && <div style={{ fontSize: 13, marginTop: 2 }}>{x.summary}</div>}
                       {c.existing && (

@@ -65,6 +65,9 @@ say what couldn't be established in "uncertain".
 - responded_on: the organisation's substantive answer at the CURRENT stage, if any.
 - final_response_on: their final (Stage 2 / final viewpoint / deadlock) response, if any.
 - state: "resolved" only if the emails show it was settled or closed; then resolved_on and outcome.
+- account_numbers: every customer or account number the emails give for the property or customer
+  (energy/water account, council tax account, service-charge or ground-rent account). Not phone,
+  invoice or bill numbers, amounts, or complaint case references (those go in "reference").
 - events: the timeline — one entry per meaningful step (complaint made, acknowledgement, each chaser,
   each response, each escalation, resolution), each with its date and a one-line note in plain
   English naming who and what. Not every email is an event; routine back-and-forth is one "note".
@@ -76,6 +79,7 @@ Return ONLY a JSON object:
 {"is_complaint": boolean, "org_name": string|null, "org_type": "${ORG_TYPES.join('"|"')}",
  "org_complaints_email": string|null, "subject": string|null, "category": string|null,
  "property": string|null, "reference": string|null,
+ "account_numbers": [string],          // customer/account numbers for the property, exactly as written
  "description": string|null,            // 3-6 sentences: what went wrong, what Greenco asked for, any sums
  "raised_on": string|null, "channel": "email"|"portal"|"letter"|"phone"|"other",
  "stage": "stage_1"|"stage_2"|"ombudsman", "stage_started_on": string|null,
@@ -108,6 +112,9 @@ export function normaliseReconstruction(r, { today = todayISO() } = {}) {
     category: str(r?.category, 100),
     property: str(r?.property, 300),
     reference: str(r?.reference, 100),
+    account_numbers: Array.isArray(r?.account_numbers)
+      ? [...new Set(r.account_numbers.map((a) => str(a, 40)).filter(Boolean))].slice(0, 6)
+      : [],
     description: str(r?.description, 4000),
     raised_on: d('raised_on'),
     channel: ['email', 'portal', 'letter', 'phone', 'other'].includes(r?.channel) ? r.channel : 'email',

@@ -503,7 +503,7 @@ export function procedureSteps(complaint, rule) {
 // timeline. Plain-English labels for the fields a correction can touch.
 const FIELD_LABEL = {
   organisation_id: 'organisation', org_name: 'organisation name', org_type: 'type',
-  reference: 'their reference', our_reference: 'our reference', property: 'property',
+  reference: 'their reference', our_reference: 'our reference', account_numbers: 'account number', property: 'property',
   subject: 'subject', category: 'category', description: 'details', channel: 'channel',
   raised_on: 'date raised', stage_started_on: 'stage started', acknowledged_on: 'acknowledged',
   responded_on: 'responded', final_response_on: 'final response', response_due: 'response due',
@@ -512,8 +512,9 @@ const FIELD_LABEL = {
 export function describeChanges(before, after) {
   const out = [];
   for (const [col, label] of Object.entries(FIELD_LABEL)) {
-    const a = before[col] ?? null;
-    const b = after[col] ?? null;
+    const flat = (v) => (Array.isArray(v) ? (v.length ? v.join(', ') : null) : v ?? null);
+    const a = flat(before[col]);
+    const b = flat(after[col]);
     if (a === b) continue;
     if (col === 'description') out.push('details edited');
     else if (col === 'organisation_id') out.push(b ? 'linked to a saved organisation' : 'organisation link removed');

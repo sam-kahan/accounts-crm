@@ -89,9 +89,9 @@ async function watchContext() {
   // What identifies an open complaint in an email that doesn't use the word:
   // our reference, theirs, and the property postcode.
   const open = (await query(
-    `SELECT ref_code, reference, our_reference, property FROM complaints WHERE state = 'open'`,
+    `SELECT ref_code, reference, our_reference, property, account_numbers FROM complaints WHERE state = 'open'`,
   )).rows;
-  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, postcodeOf(c.property)])
+  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, postcodeOf(c.property), ...(c.account_numbers || [])])
     .filter((m) => m && String(m).trim().length >= 5)
     .map((m) => String(m).trim().toLowerCase()))];
   return { ourDomain, threads, orgDomains, markers };

@@ -72,6 +72,11 @@ export default function ComplaintDetail() {
   const [c, setC] = useState(null);
   const location = useLocation();
   const [msg, setMsg] = useState(location.state?.msg || null);
+  // Shown once: cleared from the history entry so a reload or Back doesn't
+  // show "Checked. N more to check" again with a stale count.
+  useEffect(() => {
+    if (location.state?.msg) navigate(location.pathname, { replace: true, state: null });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [loadError, setLoadError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -412,6 +417,7 @@ export default function ComplaintDetail() {
 
           <div className="form-grid">
             <Info label="Raised" value={formatDate(c.raised_on)} />
+            <Info label="Account number" value={c.account_numbers?.length ? c.account_numbers.join(', ') : '—'} />
             <Info label="Our reference" value={c.ref_code} />
             <Info label="Their reference" value={c.reference || '—'} />
             <Info label="Sent by" value={c.channel || '—'} />
@@ -1190,6 +1196,7 @@ function EditComplaintModal({ c, onClose, onSaved }) {
     channel: c.channel || 'email',
     reference: c.reference || '',
     our_reference: c.our_reference || '',
+    account_numbers: (c.account_numbers || []).join(', '),
     raised_on: c.raised_on || '',
     stage_started_on: c.stage_started_on || '',
     acknowledged_on: c.acknowledged_on || '',
@@ -1230,6 +1237,7 @@ function EditComplaintModal({ c, onClose, onSaved }) {
         channel: form.channel,
         reference: blank(form.reference),
         our_reference: blank(form.our_reference),
+        account_numbers: form.account_numbers.split(/[,;\n]+/).map((a) => a.trim()).filter(Boolean),
         raised_on: form.raised_on,
         // Stage 1 starts the day it was raised (the server keeps the two together).
         stage_started_on: c.stage === 'stage_1' ? undefined : blank(form.stage_started_on),
@@ -1292,6 +1300,10 @@ function EditComplaintModal({ c, onClose, onSaved }) {
           <label className="field">
             <span className="lbl">Category</span>
             <input value={form.category} onChange={(e) => set('category', e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">Account number (how emails are matched to it; separate several with commas)</span>
+            <input value={form.account_numbers} onChange={(e) => set('account_numbers', e.target.value)} />
           </label>
           <label className="field">
             <span className="lbl">Their reference</span>

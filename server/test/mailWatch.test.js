@@ -192,3 +192,25 @@ test('a bare place name is never taken for its council', () => {
   assert.equal(sameOrgName('Manchester', 'Manchester City Council'), false);
   assert.equal(sameOrgName('LivingCity', 'Livingcity Asset Management Limited'), true);
 });
+
+import { issueMatch, accountsOf } from '../src/services/orgMatch.js';
+
+test('the account number decides: same account is the same complaint, different accounts are not', () => {
+  const onFile = { org_name: 'British Gas', subject: 'Incorrect final billing on account A43325464', property: null, raised_on: '2026-09-05' };
+  // the case in the screenshot: different addresses, raised the same fortnight, no shared account
+  const benedict = { org_name: 'British Gas', property: '6 Benedict Street, Bootle, L20 2EN', raised_on: '2026-09-03', account_numbers: ['850012345678'] };
+  const waverley = { org_name: 'British Gas', property: '84 Waverley Crescent, Droylsden, M43 7WL', raised_on: '2026-09-09' };
+  assert.equal(issueMatch(onFile, benedict).same, false);
+  assert.equal(issueMatch(onFile, waverley).same, false);
+  // the same account number, written differently, is certain
+  const same = { org_name: 'British Gas Ltd', property: '1 Elsewhere Rd, M1 1AA', account_numbers: ['A433 25464'] };
+  assert.deepEqual(issueMatch(onFile, same), { same: true, certain: true });
+  // same address, different accounts: different complaints
+  const a = { org_name: 'OVO Energy', property: '165 Longton Lane, L35 8NU', account_numbers: ['111111'] };
+  const b = { org_name: 'OVO Energy', property: '165 Longton Lane, L35 8NU', account_numbers: ['222222'] };
+  assert.equal(issueMatch(a, b).same, false);
+  // groups keep different accounts apart
+  assert.equal(groupCandidates([{ id: '1', extracted: a }, { id: '2', extracted: b }]).length, 2);
+  // amounts and dates in a subject are not account numbers
+  assert.deepEqual([...accountsOf({ subject: 'Refund of £1,297.55 by 01/09/2026' })], []);
+});

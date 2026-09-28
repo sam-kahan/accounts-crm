@@ -48,8 +48,8 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           (organisation_id, org_name, org_type, reference, our_reference, property,
            subject, category, description, channel, raised_on, stage, state,
            response_due, response_due_manual, ref_code, acknowledged_on, responded_on,
-           imported, stage_started_on, final_response_on)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20)
+           imported, stage_started_on, final_response_on, account_numbers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [
           d.organisation_id || null, d.org_name, d.org_type || 'council',
@@ -59,6 +59,8 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           d.acknowledged_on || null, d.responded_on || null, d.imported || false,
           d.stage_started_on || (stage === 'stage_1' ? d.raised_on : null),
           d.final_response_on || null,
+          (Array.isArray(d.account_numbers) ? d.account_numbers : [])
+            .map((a) => String(a || '').trim().slice(0, 40)).filter(Boolean).slice(0, 6),
         ],
       );
       await client.query(

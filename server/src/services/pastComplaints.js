@@ -8,7 +8,7 @@ import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, groupCandidates, mergeExtracted, findExistingComplaint, postcodeOf, sameProperty, sameIssue } from './orgMatch.js';
+import { findOrgByName, groupCandidates, mergeExtracted, findExistingMatch, postcodeOf, sameIssue } from './orgMatch.js';
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
@@ -207,14 +207,16 @@ async function runScan({ mailboxes, months, carry = null }) {
       if (isComplaint) found += 1;
       await query(
         `INSERT INTO complaint_import_candidates
-           (mailbox, conversation_id, graph_ids, subject, first_at, last_at, message_count, extracted, status, message_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           (mailbox, conversation_id, graph_ids, subject, first_at, last_at, message_count, extracted, status, message_ids,
+            accounts_read_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, CASE WHEN $11 THEN now() END)
          ON CONFLICT (mailbox, conversation_id) DO NOTHING`,
         [
           t.mailbox, t.conversationId, msgs.map((m) => m.graphId), msgs[0].subject,
           msgs[0].receivedAt, msgs[msgs.length - 1].receivedAt, msgs.length,
           JSON.stringify(extracted), isComplaint ? 'pending' : 'not_complaint',
           msgs.map((m) => m.messageId).filter(Boolean),
+          Array.isArray(extracted.account_numbers), // read with the rest by the full read
         ],
       );
       // Certain to be a complaint already in the system (same organisation,
@@ -323,13 +325,15 @@ async function gatherRelated(seed, mailboxes, knownConvs, orgDomains) {
 //            without asking
 export async function onFileFor(group, preloaded = null) {
   const complaints = preloaded?.complaints
-    || (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints')).rows;
+    || (await query('SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on, reference, our_reference, account_numbers FROM complaints')).rows;
   const orgs = preloaded?.orgs || (await query('SELECT id, name FROM organisations')).rows;
   const xs = group.map((c) => c.extracted || {});
   if (group.length > 1) xs.push(mergeExtracted(group));
-  const hit = xs.map((x) => findExistingComplaint(complaints, orgs, x)).find(Boolean) || null;
-  const certain = Boolean(hit && postcodeOf(hit.property) &&
-    xs.some((x) => postcodeOf(x.property) && sameProperty(x.property, hit.property)));
+  // A certain match from any thread wins; otherwise the first possible one.
+  const matches = xs.map((x) => findExistingMatch(complaints, orgs, x)).filter(Boolean);
+  const best = matches.find((m) => m.certain) || matches[0] || null;
+  const hit = best?.complaint || null;
+  const certain = Boolean(best?.certain);
   return { hit, certain };
 }
 
@@ -361,11 +365,17 @@ async function claimGroup(id, by) {
     [ids, by],
   );
   if (!rows.some((r) => r.id === id)) {
-    // Someone else has it; hand back anything of the group this call did take.
-    if (rows.length) {
-      await releaseGroup(rows.map((r) => r.id));
-      await query('UPDATE complaint_import_candidates SET import_attempts = GREATEST(import_attempts - 1, 0) WHERE id = ANY($1::uuid[])',
-        [rows.map((r) => r.id)]);
+    // Someone else has it; hand back anything of the group this call did
+    // take exactly as it was (its last error, who last acted on it, its tries),
+    // so a refused claim changes nothing.
+    for (const r of rows) {
+      const before = group.find((g) => g.id === r.id) || {};
+      await query(
+        `UPDATE complaint_import_candidates
+            SET status = 'pending', error = $2, decided_by = $3, import_attempts = $4, last_attempt_at = $5
+          WHERE id = $1 AND status = 'importing'`,
+        [r.id, before.error ?? null, before.decided_by ?? null, before.import_attempts ?? 0, before.last_attempt_at ?? null],
+      );
     }
     const now = (await query('SELECT status FROM complaint_import_candidates WHERE id = $1', [id])).rows[0];
     if (!now) throw Object.assign(new Error('Not found'), { status: 404 });
@@ -401,7 +411,7 @@ async function releaseGroup(ids, error = null) {
 // nobody working on them. On start-up they go back to the list, with a note.
 // If the complaint had already been created, it is kept (never created twice)
 // and its timeline says the import was cut short, so someone checks it.
-export async function releaseStuckImports() {
+export async function releaseStuckImports({ deploy = false } = {}) {
   const made = (await query(
     `UPDATE complaint_import_candidates SET status = 'imported',
             error = 'Interrupted by a restart after the complaint was created; some emails may not have been brought in.'
@@ -414,14 +424,22 @@ export async function releaseStuckImports() {
     );
     await query('UPDATE complaints SET needs_check = true, checked_at = NULL, checked_by = NULL WHERE id = $1', [id]);
   }
-  // Nothing was created: simply back on the list, with no error recorded (a
-  // restart isn't a failure of this complaint), so automatic import, if on,
-  // takes it up again.
-  const { rowCount } = await query(
-    `UPDATE complaint_import_candidates
-        SET status = 'pending', error = NULL, import_attempts = GREATEST(import_attempts - 1, 0)
-      WHERE status = 'importing' AND complaint_id IS NULL`,
-  );
+  // Nothing was created: back on the list. A deploy's restart isn't a
+  // failure of this complaint, so it doesn't count as a try. Anything else
+  // (the server stopping unexpectedly, perhaps because of this very import)
+  // does count, so an import that brings the server down can't be retried on
+  // every restart for ever: it gets the usual three tries, half an hour apart.
+  const { rowCount } = deploy
+    ? await query(
+      `UPDATE complaint_import_candidates
+          SET status = 'pending', error = NULL, import_attempts = GREATEST(import_attempts - 1, 0)
+        WHERE status = 'importing' AND complaint_id IS NULL`,
+    )
+    : await query(
+      `UPDATE complaint_import_candidates
+          SET status = 'pending', error = 'Interrupted: the server stopped unexpectedly during this import.'
+        WHERE status = 'importing' AND complaint_id IS NULL`,
+    );
   return rowCount + made.length;
 }
 
@@ -542,6 +560,8 @@ async function importClaimed(id, group, by) {
       category: pick('category'),
       description,
       reference: pick('reference'),
+      // Every account number read, from the whole story and each thread.
+      account_numbers: [...new Set([...(x?.account_numbers || []), ...(seed.account_numbers || [])])],
       channel: pick('channel') || 'email',
       raised_on: iso(pick('raised_on')) || firstDay,
       stage,
@@ -558,6 +578,9 @@ async function importClaimed(id, group, by) {
         `across ${threads} thread(s)${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
     },
   );
+
+  // Its account numbers were read with the whole story.
+  await query('UPDATE complaints SET accounts_read_at = now() WHERE id = $1', [complaint.id]);
 
   // Recorded straight away, so an import cut short from here on is known to
   // have made this complaint and is never made again.
@@ -696,17 +719,6 @@ export async function setAutoImport(on, by) {
   return runAutoImport(by || AUTO_SEARCH);
 }
 
-// With automatic import on, work through what is waiting:
-//   - a found complaint certainly already in the system (same organisation,
-//     same property: postcode and flat/house number) has its emails linked
-//     there, as the search itself would;
-//   - one the AI was sure of, and not on file, is imported (marked To check);
-//   - anything else waits for a person, as does one whose import already
-//     failed (it isn't retried on its own, so a failure never repeats a cost).
-// Runs at start-up (so a deploy part-way through carries on) and after each
-// 5-minute email check; with nothing waiting it is one query.
-let autoRunning = false;
-export const AUTO_TRIES = 3;
 // Paused while a deploy waits to restart (see scripts/wait-for-imports.mjs),
 // so a new import isn't started only to be cut off.
 export async function importsPaused() {
@@ -714,6 +726,51 @@ export async function importsPaused() {
   return Boolean(p?.until && new Date(p.until) > new Date());
 }
 
+const hhmm = (d) => new Date(d).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+
+// What automatic import will do with one found complaint (a group of threads),
+// and whether it is due now. The single rule: runAutoImport acts on it, and
+// the list shows its note, so what the page promises is what happens.
+//   - not set up (no mailbox or AI): nothing
+//   - failed AUTO_TRIES times: left for a person
+//   - certainly already on file (same organisation, postcode and flat/house
+//     number): its emails are linked there
+//   - possibly already on file: left for a person to Link or Import
+//   - the AI was sure of at least one thread: imported
+//   - otherwise: left for a person
+// A failure waits half an hour before the next try; a pause (a deploy about
+// to restart) or a related import still running holds it for a few minutes.
+export function autoPlan(group, { hit = null, certain = false, relatedRunning = false, paused = false, enabled = true, now = new Date() } = {}) {
+  const person = (note) => ({ will: null, due: false, note });
+  if (!enabled) return person('Automatic import needs the mailbox connection and the AI set up on the server.');
+  // The account number is what it is matched on, so it is read first.
+  if (group.some((c) => !c.accounts_read_at && !Array.isArray(c.extracted?.account_numbers))) {
+    return { will: null, due: false, note: 'Reading its account number first; then it is matched and imported or linked.' };
+  }
+  const failed = group.filter((c) => c.error);
+  const tries = Math.max(0, ...group.map((c) => c.import_attempts || 0));
+  if (failed.length && tries >= AUTO_TRIES) return person(`Tried ${tries} times without success: press Import to try again, or Skip.`);
+  let plan;
+  if (hit && certain) plan = { will: 'link', note: `Its emails will be added to ${hit.ref_code || 'the complaint already on file'} automatically.` };
+  else if (hit) return person('May already be in the system: check it and Link, or Import if it’s a different complaint.');
+  else if (group.some((c) => c.extracted?.confidence === 'high')) plan = { will: 'import', note: 'Will be imported automatically in the next few minutes.' };
+  else return person('Waiting for you: the AI was less sure this is a complaint to track.');
+  if (failed.length) {
+    const last = Math.max(0, ...failed.map((c) => (c.last_attempt_at ? new Date(c.last_attempt_at).getTime() : 0)));
+    const next = new Date(last + 30 * 60000);
+    if (next > now) return { ...plan, due: false, note: `That didn’t work last time; it will be tried again automatically after ${hhmm(next)}.` };
+    plan = { ...plan, note: 'That didn’t work last time; it will be tried again automatically in the next few minutes.' };
+  }
+  if (paused) return { ...plan, due: false, note: `${plan.note} (Paused for a few minutes while an update is installed.)` };
+  if (relatedRunning) return { ...plan, due: false, note: 'Waiting for a related import to finish first.' };
+  return { ...plan, due: true };
+}
+
+// With automatic import on, act on every found complaint autoPlan says is due.
+// Runs at start-up (so a deploy part-way through carries on) and after each
+// 5-minute email check; with nothing waiting it is one query.
+let autoRunning = false;
+export const AUTO_TRIES = 3;
 export async function runAutoImport(by = AUTO_SEARCH) {
   if (autoRunning || !(await getSetting('past_auto_import'))) return { imported: 0, linked: 0 };
   if (await importsPaused()) return { imported: 0, linked: 0 };
@@ -722,36 +779,29 @@ export async function runAutoImport(by = AUTO_SEARCH) {
   let imported = 0;
   let linked = 0;
   try {
-    // A failed one is tried again, up to three tries in all, half an hour
-    // apart: most failures are passing (the mailbox or the AI busy).
-    const pending = (await query(
-      `SELECT * FROM complaint_import_candidates
-        WHERE status = 'pending'
-          AND (error IS NULL OR (import_attempts < ${AUTO_TRIES} AND last_attempt_at < now() - interval '30 minutes'))
-        ORDER BY first_at`,
-    )).rows;
-    for (const c of pending) {
+    const pending = (await query(`SELECT * FROM complaint_import_candidates WHERE status = 'pending' ORDER BY first_at`)).rows;
+    for (const first of groupCandidates(pending)) {
       // eslint-disable-next-line no-await-in-loop
       await serially(async () => {
         if (!(await getSetting('past_auto_import'))) return; // switched off part-way
-        if (await importsPaused()) return; // a deploy is waiting to restart
-        const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
-        if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
-        const group = await groupOf(c.id);
-        if (await relatedImportRunning(group)) return; // next time, it will be on file
+        const group = await groupOf(first[0].id); // as it is now, not as it was
+        if (!group.length) return; // taken in meanwhile
         const { hit, certain } = await onFileFor(group);
-        if (hit) {
-          if (certain) {
-            await linkCandidate(c.id, hit.id, AUTO_SEARCH);
-            linked += 1;
-          }
-          return; // a less certain match is left for a person to link
+        const plan = autoPlan(group, {
+          hit, certain,
+          relatedRunning: await relatedImportRunning(group),
+          paused: await importsPaused(),
+        });
+        if (!plan.due) return;
+        if (plan.will === 'link') {
+          await linkCandidate(group[0].id, hit.id, AUTO_SEARCH);
+          linked += 1;
+        } else if (plan.will === 'import') {
+          await importCandidate(group[0].id, by);
+          imported += 1;
         }
-        if (c.extracted?.confidence !== 'high') return;
-        await importCandidate(c.id, by);
-        imported += 1;
       }).catch((err) => {
-        if (err.status !== 409) console.error(`[complaints] auto-import ${c.id} failed:`, err.message);
+        if (err.status !== 409) console.error(`[complaints] auto-import ${first[0].id} failed:`, err.message);
       });
     }
   } finally {

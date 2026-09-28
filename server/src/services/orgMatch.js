@@ -97,38 +97,103 @@ export function sameProperty(pa, pb) {
   return [...small].every((n) => big.has(n));
 }
 
-// Is a found past complaint one already in the system? Same organisation (by
-// the rules above), and the same property postcode or raised within a fortnight
-// of it. Returns the matching complaint, or null.
-export function findExistingComplaint(complaints, orgs, x) {
-  if (!x?.org_name) return null;
-  const pc = postcodeOf(x.property);
-  const raised = x.raised_on ? new Date(`${x.raised_on}T00:00:00Z`) : null;
-  const sameOrg = (c) => {
-    const org = c.organisation_id ? orgs.find((o) => o.id === c.organisation_id) : null;
-    const names = [c.org_name, org?.name].filter(Boolean);
-    return names.some((n) => sameOrgName(n, x.org_name));
-  };
-  const close = (c) => {
-    const cpc = postcodeOf(c.property);
-    if (pc && cpc) return sameProperty(x.property, c.property); // two postcodes: they decide it
-    if (!raised || !c.raised_on) return false;
-    return Math.abs(new Date(`${c.raised_on}T00:00:00Z`) - raised) <= 14 * 86400000;
-  };
-  return complaints.find((c) => sameOrg(c) && close(c)) || null;
+// The ACCOUNT NUMBERS on a record: the ones read off its emails
+// (account_numbers), plus any account-number-like token in its subject
+// ("Incorrect final billing on account A43325464"). The account number is the
+// main key for a complaint: one complaint's emails all carry it, and two
+// complaints to one supplier about different properties never share it.
+// Normalised (upper case, no spaces or dashes) so "A433 25464" matches
+// "A43325464". Dates, amounts and short numbers are left out.
+const norm = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const refLike = (k) => k.length >= 5 && k.length <= 24 && (k.match(/\d/g) || []).length >= 5;
+
+export function accountsOf(x) {
+  const out = new Set();
+  for (const n of Array.isArray(x?.account_numbers) ? x.account_numbers : []) {
+    const k = norm(n);
+    if (refLike(k)) out.add(k);
+  }
+  for (const tok of String(x?.subject || '').split(/[\s,;:()[\]]+/)) {
+    if (/^\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}$/.test(tok)) continue; // a date
+    if (/[£$€]/.test(tok) || /\d\.\d{2}$/.test(tok)) continue; // an amount of money
+    const k = norm(tok);
+    if (refLike(k)) out.add(k);
+  }
+  return out;
 }
 
-// Two found complaints are the same issue when they are against the same
-// organisation and about the same property postcode, or raised within a
-// fortnight of each other.
-export function sameIssue(a, b) {
-  if (!a?.org_name || !b?.org_name) return false;
-  if (!sameOrgName(a.org_name, b.org_name)) return false;
+// Case references (theirs and ours): the same one means the same complaint,
+// but a different one proves nothing (a new case can be opened on the same
+// complaint).
+export function refsOf(x) {
+  const out = new Set();
+  for (const v of [x?.reference, x?.our_reference]) {
+    const k = norm(v);
+    if (refLike(k)) out.add(k);
+  }
+  return out;
+}
+
+const DAY = 86400000;
+const nearInTime = (a, b) => Boolean(a && b) &&
+  Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) <= 14 * DAY;
+const shares = (a, b) => [...a].some((v) => b.has(v));
+
+// Are two records (found threads, or a found thread and a complaint) about
+// the same issue, and how sure is that? Same organisation first; then, in
+// order — the account number first, because it is always the account number:
+//   - the same account number: the same complaint, for certain
+//   - both have account numbers and they differ: different complaints, even
+//     at the same address (e.g. the landlord's void account and the tenant's)
+//   - the same case reference: the same complaint, for certain
+//   - both have a postcode: the property decides (same flat/house = same)
+//   - only one has an address: not assumed the same
+//   - neither has an address or an account number: raised within a fortnight
+//     is a POSSIBLE match, never a certain one
+export function issueMatch(a, b) {
+  const no = { same: false, certain: false };
+  if (!a?.org_name || !b?.org_name || !sameOrgName(a.org_name, b.org_name)) return no;
+  const aa = accountsOf(a);
+  const ab = accountsOf(b);
+  if (shares(aa, ab)) return { same: true, certain: true };
+  if (aa.size && ab.size) return no;
+  if (shares(refsOf(a), refsOf(b))) return { same: true, certain: true };
   const pa = postcodeOf(a.property);
   const pb = postcodeOf(b.property);
-  if (pa && pb) return sameProperty(a.property, b.property);
-  if (!a.raised_on || !b.raised_on) return false;
-  return Math.abs(new Date(`${a.raised_on}T00:00:00Z`) - new Date(`${b.raised_on}T00:00:00Z`)) <= 14 * 86400000;
+  if (pa && pb) {
+    const same = sameProperty(a.property, b.property);
+    return { same, certain: same };
+  }
+  if (pa || pb) return no;
+  return nearInTime(a.raised_on, b.raised_on) ? { same: true, certain: false } : no;
+}
+
+// Two found complaints are the same issue (see issueMatch).
+export function sameIssue(a, b) {
+  return issueMatch(a, b).same;
+}
+
+// Is a found past complaint one already in the system? A complaint counts as
+// the same organisation by its own name or its linked organisation's. A
+// certain match (same account number, or same property) is preferred over a
+// possible one. Returns the matching complaint, or null.
+export function findExistingComplaint(complaints, orgs, x) {
+  return findExistingMatch(complaints, orgs, x)?.complaint || null;
+}
+
+export function findExistingMatch(complaints, orgs, x) {
+  if (!x?.org_name) return null;
+  let possible = null;
+  for (const c of complaints) {
+    const org = c.organisation_id ? orgs.find((o) => o.id === c.organisation_id) : null;
+    const names = [c.org_name, org?.name].filter(Boolean);
+    const name = names.find((n) => sameOrgName(n, x.org_name));
+    if (!name) continue;
+    const m = issueMatch({ ...c, org_name: name }, x);
+    if (m.certain) return { complaint: c, certain: true };
+    if (m.same && !possible) possible = { complaint: c, certain: false };
+  }
+  return possible;
 }
 
 // Group found threads by issue (connected: if A~B and B~C, all three are one).
@@ -139,16 +204,22 @@ const when = (c) => c.extracted?.raised_on || (c.first_at ? new Date(c.first_at)
 // it is the same issue as a member AND no member has a different property
 // postcode or flat number — so a thread with no postcode can't bridge two
 // properties into one complaint.
+// Two records that can't be the same complaint: different account numbers,
+// or two different properties (unless they share an account number).
+function conflicts(a, b) {
+  const aa = accountsOf(a);
+  const ab = accountsOf(b);
+  if (shares(aa, ab)) return false;
+  if (aa.size && ab.size) return true;
+  return Boolean(postcodeOf(a?.property) && postcodeOf(b?.property) && !sameProperty(a.property, b.property));
+}
+
 export function groupCandidates(cands) {
   const groups = [];
   for (const c of [...cands].sort((a, b) => when(a).localeCompare(when(b)))) {
-    const prop = c.extracted?.property;
     const g = groups.find((grp) =>
       grp.some((m) => sameIssue(m.extracted, c.extracted)) &&
-      grp.every((m) => {
-        const mp = m.extracted?.property;
-        return !postcodeOf(prop) || !postcodeOf(mp) || sameProperty(mp, prop);
-      }));
+      grp.every((m) => !conflicts(m.extracted, c.extracted)));
     if (g) g.push(c);
     else groups.push([c]);
   }
@@ -172,6 +243,7 @@ export function mergeExtracted(group) {
     stage: furthest.stage || 'stage_1',
     responded_on: furthest.responded_on || null,
     reference: xs.map((x) => x.reference).find(Boolean) || null,
+    account_numbers: [...new Set(xs.flatMap((x) => (Array.isArray(x.account_numbers) ? x.account_numbers : [])))],
     property: xs.map((x) => x.property).find((p) => postcodeOf(p)) || xs[0].property || null,
     state: latest.state || 'open',
     resolved_on: latest.state === 'resolved' ? latest.resolved_on || null : null,

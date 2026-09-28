@@ -526,6 +526,26 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-28 — the account number is the main key for a complaint
+- **Matching decides on the account number first** (`orgMatch.js#issueMatch`,
+  `accountsOf`): the same account number is the same complaint, for certain;
+  two different account numbers are two complaints, even at the same address;
+  only then case references, then the property. A date alone never matches
+  when either side has an address (British Gas complaints about two houses
+  raised in one fortnight were being offered as the same one).
+- **`complaints.account_numbers`** (migration `025`), read off the emails by
+  the import and the search (`parseImportedComplaint` / `reconstructComplaint`
+  return `account_numbers`), shown first on the complaint page, editable in
+  Edit details (changes logged), searchable on the list, given to the AI when
+  it files an email, and used by the watcher as a marker.
+- **Everything already on file was gone back through**
+  (`services/accountNumbers.js#backfillAccountNumbers`, 20 at a time after
+  each 5-minute check and at start-up; once each, `accounts_read_at`): a
+  low-effort read of its stored emails. A complaint whose emails carry more
+  than one account number is marked To check with a note that it may be two
+  complaints in one. Automatic import waits for a found complaint's account
+  number before matching it (`autoPlan`).
+
 ### 2026-09-28 — past-complaints search: safe imports, only new threads, every email
 - **A new search reads only new threads.** Every thread a search has been
   through (listed, imported, skipped or ruled out) is remembered in

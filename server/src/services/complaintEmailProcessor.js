@@ -35,7 +35,7 @@ const KIND_LABEL = {
 
 async function openCandidates() {
   const { rows } = await query(
-    `SELECT id, org_name, subject, property, ref_code, reference FROM complaints
+    `SELECT id, org_name, subject, property, ref_code, reference, account_numbers FROM complaints
       WHERE state = 'open' ORDER BY raised_on DESC LIMIT 80`,
   );
   return rows;
@@ -270,7 +270,7 @@ async function createFromEmail(em, analysis) {
   // Already open about the same issue (same organisation and property, or
   // raised within a fortnight)? File it there rather than start a second one.
   const open = (await query(
-    `SELECT id, org_name, organisation_id, property, raised_on FROM complaints WHERE state = 'open'`,
+    `SELECT id, org_name, organisation_id, property, raised_on, reference, our_reference, subject, account_numbers FROM complaints WHERE state = 'open'`,
   )).rows;
   const orgsAll = (await query('SELECT id, name FROM organisations')).rows;
   const existing = findExistingComplaint(open, orgsAll, p);

@@ -12,8 +12,9 @@ import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
-import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, AUTO_TRIES } from '../services/pastComplaints.js';
-import { findExistingComplaint, groupCandidates, mergeExtracted } from '../services/orgMatch.js';
+import { backfillAccountNumbers } from '../services/accountNumbers.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines } from '../services/complaintDeadlines.js';
@@ -67,6 +68,7 @@ const input = z.object({
   org_type: z.enum(ORG_TYPES).optional(),
   reference: z.string().optional().nullable(),
   our_reference: z.string().optional().nullable(),
+  account_numbers: z.array(z.string().trim().min(1).max(40)).max(6).optional(),
   property: z.string().optional().nullable(),
   subject: z.string().min(1),
   category: z.string().optional().nullable(),
@@ -139,7 +141,11 @@ router.post(
     // Anything found in the past that automatic import hasn't dealt with yet
     // (one query when there is nothing waiting). In the background: the check
     // itself is answered now.
-    runAutoImport().catch((err) => console.error('[complaints] automatic import:', err.message));
+    // Account numbers first (what everything is matched on), then import.
+    backfillAccountNumbers()
+      .catch((err) => console.error('[complaints] account numbers:', err.message))
+      .then(() => runAutoImport())
+      .catch((err) => console.error('[complaints] automatic import:', err.message));
     res.json({ ...result, inserted: r.inserted, matched: r.matched });
   }),
 );
@@ -543,12 +549,12 @@ router.get(
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
       `SELECT id, mailbox, subject, first_at, last_at, message_count, extracted, status, error,
-              import_attempts, last_attempt_at
+              import_attempts, last_attempt_at, accounts_read_at
          FROM complaint_import_candidates WHERE status IN ('pending', 'importing') ORDER BY first_at DESC`,
     );
     // Say when one is already in the system, so it is linked, not duplicated.
     const complaints = (await query(
-      'SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on FROM complaints',
+      'SELECT id, ref_code, subject, org_name, organisation_id, property, raised_on, reference, our_reference, account_numbers FROM complaints',
     )).rows;
     const orgs = (await query('SELECT id, name FROM organisations')).rows;
     // Threads about the same issue are shown (and imported) as one complaint.
@@ -557,22 +563,20 @@ router.get(
     const busyGroups = groupCandidates(rows.filter((r) => r.status === 'importing'));
     const pendingRows = rows.filter((r) => r.status === 'pending');
     const autoOn = Boolean(await getSetting('past_auto_import'));
+    const paused = await importsPaused();
+    const enabled = config.ms.enabled && config.anthropic.enabled;
+    const busyRows = rows.filter((r) => r.status === 'importing');
     res.json(await Promise.all([...busyGroups, ...groupCandidates(pendingRows)].map(async (group) => {
       const merged = mergeExtracted(group);
       const { hit, certain } = await onFileFor(group, { complaints, orgs });
-      // What automatic import will do with it (the same rules runAutoImport
-      // applies), so nothing sits on the list without saying why.
-      let auto = null;
-      if (autoOn && group[0].status === 'pending') {
-        const tries = Math.max(...group.map((c) => c.import_attempts || 0));
-        const failed = group.some((c) => c.error);
-        if (hit && certain) auto = { will: 'link', note: `Its emails will be added to ${hit.ref_code} automatically.` };
-        else if (hit) auto = { will: null, note: 'May already be in the system: check it and Link, or Import if it’s a different complaint.' };
-        else if (failed && tries >= AUTO_TRIES) auto = { will: null, note: `Tried ${tries} times without success: press Import to try again, or Skip.` };
-        else if (failed) auto = { will: 'import', note: 'Will be tried again automatically within the hour.' };
-        else if (group.some((c) => c.extracted?.confidence === 'high')) auto = { will: 'import', note: 'Will be imported automatically in the next few minutes.' };
-        else auto = { will: null, note: 'Waiting for you: the AI was less sure this is a complaint to track.' };
-      }
+      // What automatic import will do with it: the same rule runAutoImport
+      // acts on (autoPlan), so the promise on the page is what happens.
+      const auto = autoOn && group[0].status === 'pending'
+        ? autoPlan(group, {
+          hit, certain, paused, enabled,
+          relatedRunning: busyRows.some((b) => group.some((c) => sameIssue(c.extracted, b.extracted))),
+        })
+        : null;
       return {
         ...group[0],
         extracted: merged,
@@ -1041,6 +1045,7 @@ router.put(
       org_type: orgType,
       reference: d.reference,
       our_reference: d.our_reference,
+      account_numbers: d.account_numbers,
       property: d.property,
       subject: d.subject,
       category: d.category,
