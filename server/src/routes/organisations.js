@@ -53,6 +53,7 @@ const input = z.object({
   sources: z.array(z.object({ title: z.string(), url: z.string() })).optional().nullable(),
   unconfirmed: z.array(z.string()).optional().nullable(),
   procedure_evidence: z.record(z.string()).optional().nullable(),
+  procedure_sources: z.record(z.enum(['document', 'research', 'entered'])).optional().nullable(),
   research_status: z.enum(['none', 'researched', 'document', 'manual']).optional(),
   // "I have checked these against their published procedure." Sent on every
   // save: ticking it stamps who and when; saving without it clears the stamp,
@@ -65,9 +66,19 @@ const COLS = `id, name, type, location, complaints_email, complaints_url, phone,
   ombudsman_name, ombudsman_url, ombudsman_referral_months, stage1_response_days,
   stage2_response_days, ack_days, procedure_ref, stage1_clock, ombudsman_after_weeks,
   referral_from, procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence,
-  research_status, researched_at, verified_at, verified_by, notes, created_at, updated_at`;
+  procedure_sources, research_status, researched_at, verified_at, verified_by, notes, created_at, updated_at`;
 
 const who = (req) => req.user?.name || req.user?.email || null;
+
+// Where each figure came from (migration 027), saved alongside the figures.
+async function saveSources(row, d) {
+  if (!row || d.procedure_sources === undefined) return row;
+  const { rows } = await query(
+    `UPDATE organisations SET procedure_sources = $2 WHERE id = $1 RETURNING ${COLS}`,
+    [row.id, d.procedure_sources && Object.keys(d.procedure_sources).length ? JSON.stringify(d.procedure_sources) : null],
+  );
+  return rows[0];
+}
 
 // The column values shared by create and update, in COLS-free order.
 function values(d) {
@@ -210,7 +221,8 @@ router.post(
        RETURNING ${COLS}`,
       [...values(d), status, d.verified ? who(req) : null],
     );
-    res.status(201).json(rows[0]);
+    const saved = await saveSources(rows[0], d);
+    res.status(201).json(saved);
   }),
 );
 
@@ -240,6 +252,7 @@ router.put(
       [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
     );
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
+    rows[0] = await saveSources(rows[0], d);
     // A linked complaint takes its type from the organisation (the type sets
     // the defaults for anything the procedure doesn't state).
     await query('UPDATE complaints SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);

@@ -184,7 +184,7 @@ test('deriveStatus: a timescale that is only a default says so', () => {
   const c = complaint({ raised_on: '2020-01-06', stage_started_on: '2020-01-06', response_due: '2099-01-01' });
   const d = deriveStatus(c, effectiveRule(null, 'council'));
   assert.equal(d.status, 'ack_overdue');
-  assert.match(d.nextAction, /not confirmed from their own procedure/);
+  assert.match(d.nextAction, /the standard for a council \(their procedure doesn't set one\)/);
 });
 
 test('deriveStatus: with the ombudsman is not chased as overdue', () => {

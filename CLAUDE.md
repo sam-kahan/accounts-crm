@@ -366,8 +366,8 @@ the page says how far each date can be trusted.
   `referral_from` (the window runs from their *final response*, not the day it
   was raised). `procedure_ref` names their document. NULL on any field means
   "not stated" and the type default applies — `effectiveRule().defaulted` lists
-  which, and every message says "the usual timescale — not confirmed from their
-  own procedure" rather than passing a default off as their rule.
+  which, and every message says "the standard for an energy supplier (their
+  procedure doesn't set one)" rather than passing a default off as their rule.
 - **Getting it in**: upload their procedure document (`POST
   /organisations/procedure/read`, read by Claude as untrusted data, kept in
   `organisation_documents` on save) or research the website. Both return ONLY
@@ -525,6 +525,20 @@ the page says how far each date can be trusted.
   push, so run the checks locally first.
 
 ## Recent changes
+
+### 2026-09-28 — a procedure document adds to the research, it doesn't wipe it
+- **Figures are merged, not replaced** (`client/src/procedureMerge.js`,
+  `organisations.procedure_sources`, migration `027`): their procedure
+  document wins wherever it states a figure; a figure it doesn't mention keeps
+  what was there (researched, with its quote); research only fills blanks or
+  its own earlier figures, never the document's or one typed in. Reading a
+  document researches any gaps straight away.
+- **Each figure says where it came from** ("From their procedure document: …",
+  "Researched from their website: …", "typed in"), and a figure nobody
+  publishes says plainly that the standard for that kind of organisation
+  applies, instead of "not stated, please check". The complaint pages say the
+  same ("the standard for an energy supplier (their procedure doesn't set
+  one)", `basisOf` in `complaintRules.js`).
 
 ### 2026-09-28 — the account number is the main key for a complaint
 - **Matching decides on the account number first** (`orgMatch.js#issueMatch`,

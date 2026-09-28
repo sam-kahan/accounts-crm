@@ -217,6 +217,13 @@ const ORG_FIELDS = {
 };
 
 // Merge an organisation's researched/edited overrides onto the type defaults.
+// How each type reads in a sentence ("the standard for an energy supplier").
+const KIND_PHRASE = {
+  council: 'a council', housing_association: 'a housing association', water: 'a water company',
+  energy: 'an energy supplier', supplier: 'a supplier', managing_agent: 'a managing agent',
+  other: 'this kind of organisation',
+};
+
 export function effectiveRule(org, type) {
   const base = {
     stage1Clock: 'receipt',
@@ -224,7 +231,7 @@ export function effectiveRule(org, type) {
     ombudsmanAfterWeeks: null,
     ...ruleFor(type || org?.type),
   };
-  const rule = { ...base, procedureRef: null, defaulted: Object.keys(ORG_FIELDS) };
+  const rule = { ...base, procedureRef: null, defaulted: Object.keys(ORG_FIELDS), kind: KIND_PHRASE[type || org?.type] || KIND_PHRASE.other };
   if (!org) return rule;
   const defaulted = [];
   for (const [key, col] of Object.entries(ORG_FIELDS)) {
@@ -233,6 +240,12 @@ export function effectiveRule(org, type) {
     else rule[key] = v;
   }
   rule.defaulted = defaulted;
+  // Where each figure came from: their document, research of their website,
+  // or typed in (migration 027).
+  rule.sourceOf = {};
+  for (const [key, col] of Object.entries(ORG_FIELDS)) {
+    if (org.procedure_sources?.[col]) rule.sourceOf[key] = org.procedure_sources[col];
+  }
   // A named scheme with no website typed: use the known one for that name —
   // never the type default's, which would point at a different scheme.
   if (org.ombudsman_name && !org.ombudsman_url) {
@@ -259,7 +272,10 @@ export function ukDate(iso) {
 // Where a timescale comes from, said honestly: their named procedure, or the
 // general default for this kind of body when their own hasn't been confirmed.
 function basisOf(rule, key) {
-  if (rule.defaulted?.includes(key)) return 'the usual timescale, not confirmed from their own procedure';
+  if (rule.defaulted?.includes(key)) {
+    return `the standard for ${rule.kind || 'this kind of organisation'} (their procedure doesn't set one)`;
+  }
+  if (rule.sourceOf?.[key] === 'research') return 'their published complaints information (researched)';
   return rule.procedureRef || 'their procedure';
 }
 

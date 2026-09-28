@@ -1,47 +1,18 @@
 import { useEffect, useState } from 'react';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
+import { FIGURES, blank, mergeProfile } from '../procedureMerge.js';
 
 const EMPTY = {
   name: '', type: 'council', location: '', complaints_email: '', complaints_url: '',
   phone: '', ombudsman_name: '', ombudsman_url: '', ombudsman_referral_months: '',
   stage1_response_days: '', stage2_response_days: '', ack_days: '',
   procedure_ref: '', stage1_clock: '', ombudsman_after_weeks: '', referral_from: '',
-  procedure_summary: '', legal_basis: '', sources: [], unconfirmed: [], procedure_evidence: {},
+  procedure_summary: '', legal_basis: '', sources: [], unconfirmed: [], procedure_evidence: {}, procedure_sources: {},
   research_status: 'none', notes: '', verified: false,
 };
 
 function num(v) { return v === '' || v == null ? null : Number(v); }
-
-// Fill the form from a researched / read profile. Values the source didn't
-// state come back null and are cleared rather than keeping an old guess —
-// the type default then applies and is labelled as a default.
-function applyProfile(f, p, status) {
-  const v = (x) => (x === null || x === undefined ? '' : x);
-  return {
-    ...f,
-    procedure_ref: v(p.procedure_ref),
-    complaints_email: p.complaints_email || f.complaints_email,
-    complaints_url: p.complaints_url || f.complaints_url,
-    phone: p.phone || f.phone,
-    ombudsman_name: v(p.ombudsman_name),
-    ombudsman_url: v(p.ombudsman_url),
-    ombudsman_referral_months: v(p.ombudsman_referral_months),
-    referral_from: v(p.referral_from),
-    ombudsman_after_weeks: v(p.ombudsman_after_weeks),
-    ack_days: v(p.ack_days),
-    stage1_response_days: v(p.stage1_response_days),
-    stage1_clock: v(p.stage1_clock),
-    stage2_response_days: v(p.stage2_response_days),
-    procedure_summary: p.procedure_summary || '',
-    legal_basis: p.legal_basis || '',
-    sources: p.sources?.length ? p.sources : status === 'document' ? [] : f.sources,
-    unconfirmed: p.unconfirmed || [],
-    procedure_evidence: p.evidence || {},
-    research_status: status,
-    verified: false, // new values have not been checked by anyone yet
-  };
-}
 
 function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   const [form, setForm] = useState(() =>
@@ -50,6 +21,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
           ...EMPTY,
           ...Object.fromEntries(Object.entries(initial).map(([k, v]) => [k, v ?? EMPTY[k] ?? ''])),
           procedure_evidence: initial.procedure_evidence || {},
+          procedure_sources: initial.procedure_sources || {},
           unconfirmed: initial.unconfirmed || [],
           sources: initial.sources || [],
           verified: Boolean(initial.verified_at),
@@ -66,7 +38,16 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   const [pasteText, setPasteText] = useState('');
   const [error, setError] = useState(null);
   const [info, setInfo] = useState(null);
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  // A figure changed by hand is one someone entered: its quote no longer applies.
+  const set = (k, v) => setForm((f) => {
+    if (!FIGURES.includes(k)) return { ...f, [k]: v };
+    const evidence = { ...(f.procedure_evidence || {}) };
+    delete evidence[k];
+    const sources = { ...(f.procedure_sources || {}) };
+    if (blank(v)) delete sources[k]; else sources[k] = 'entered';
+    return { ...f, [k]: v, procedure_evidence: evidence, procedure_sources: sources,
+      unconfirmed: (f.unconfirmed || []).filter((u) => u !== k || blank(v)) };
+  });
 
   useEffect(() => {
     api.organisations.defaults(form.type).then(setDefaults).catch(() => setDefaults(null));
@@ -84,8 +65,11 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       const p = await api.organisations.research({
         name: form.name, type: form.type, location: form.location,
       });
-      setForm((f) => applyProfile(f, p, 'researched'));
-      setInfo('Researched from their website. Check each figure against the quoted source before ticking “checked”.');
+      const { form: next, took } = mergeProfile(form, p, 'research');
+      setForm(next);
+      setInfo(took.length
+        ? `Researched from their website: ${took.length} figure${took.length === 1 ? '' : 's'} filled in, each with the source it came from. Anything from their own procedure document was kept.`
+        : 'Researched their website: nothing new to add. Their own procedure document and anything typed in were kept.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -100,9 +84,30 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
     setInfo(null);
     try {
       const p = await api.organisations.readProcedure(file, { name: form.name, type: form.type });
-      setForm((f) => applyProfile(f, p, 'document'));
+      let { form: next, took } = mergeProfile(form, p, 'document');
       setPendingDoc(file);
-      setInfo(`Read from “${file.name}”. The document will be kept on this organisation when you save. Check each figure against the quote under it.`);
+      const kept = FIGURES.filter((k) => !took.includes(k) && !blank(next[k]));
+      // Whatever neither the document nor earlier research gave is researched
+      // now, so a gap is filled with their real figure where one is published.
+      let researched = [];
+      if (next.unconfirmed.length && researchEnabled && next.name.trim()) {
+        setForm(next);
+        setInfo(`Read from “${file.name}”. Researching the ${next.unconfirmed.length} figure${next.unconfirmed.length === 1 ? '' : 's'} it doesn't give…`);
+        try {
+          const r = await api.organisations.research({ name: next.name, type: next.type, location: next.location });
+          ({ form: next, took: researched } = mergeProfile(next, r, 'research'));
+        } catch {
+          /* research failing leaves the standard figures to apply */
+        }
+      }
+      setForm(next);
+      const parts = [
+        `${took.length} from “${file.name}”`,
+        kept.length ? `${kept.length} kept from before (the document doesn't mention ${kept.length === 1 ? 'it' : 'them'})` : null,
+        researched.length ? `${researched.length} found by research` : null,
+        next.unconfirmed.length ? `${next.unconfirmed.length} not published anywhere, so the standard for this kind of organisation applies` : null,
+      ].filter(Boolean);
+      setInfo(`Figures: ${parts.join('; ')}. Each says where it came from. The document is kept on this organisation when you save.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -152,6 +157,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       sources: form.sources || [],
       unconfirmed: form.unconfirmed || [],
       procedure_evidence: form.procedure_evidence || {},
+      procedure_sources: form.procedure_sources || {},
       // Typing any timescale in by hand makes it a procedure someone entered.
       research_status:
         form.research_status === 'none' &&
@@ -176,15 +182,21 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
 
   // A figure's source: the quote it came from, or a plain statement that the
   // general default applies because their procedure doesn't say.
+  const FROM = { document: 'From their procedure document', research: 'Researched from their website', entered: 'Typed in' };
   const Evidence = ({ k, dflt }) => {
     const q = form.procedure_evidence?.[k];
-    if (q) return <span className="muted" style={{ fontSize: 12, fontStyle: 'italic' }}>“{q}”</span>;
-    const empty = form[k] === '' || form[k] === null || form[k] === undefined;
-    if (empty && dflt !== undefined && dflt !== null) {
-      return <span className="muted" style={{ fontSize: 12 }}>Blank, so the general default ({String(dflt)}) will be used.</span>;
+    const src = form.procedure_sources?.[k];
+    const empty = blank(form[k]);
+    if (!empty && (q || src)) {
+      return (
+        <span className="muted" style={{ fontSize: 12 }}>
+          {src ? <>{FROM[src] || src}{q ? ': ' : '.'}</> : null}
+          {q ? <span style={{ fontStyle: 'italic' }}>“{q}”</span> : null}
+        </span>
+      );
     }
-    if (form.unconfirmed?.includes(k)) {
-      return <span style={{ fontSize: 12, color: 'var(--warn)' }}>Not stated in the source. Please check.</span>;
+    if (empty && dflt !== undefined && dflt !== null) {
+      return <span className="muted" style={{ fontSize: 12 }}>Not published by them, so the standard for this kind of organisation applies: {String(dflt)}.</span>;
     }
     return null;
   };
@@ -245,6 +257,14 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
                 }}>
                 {reading ? 'Reading…' : 'Read it'}
               </button>
+            </div>
+          )}
+          {researchEnabled && FIGURES.some((k) => blank(form[k])) && !researching && !reading && (
+            <div className="inline-note" style={{ marginTop: 10, fontSize: 13 }}>
+              {FIGURES.filter((k) => blank(form[k])).length} of these figures aren’t filled in, so the standard
+              for this kind of organisation is used for them. <strong>Research their website</strong> to fill
+              them with their real figures. It won’t change anything taken from their procedure document or
+              typed in.
             </div>
           )}
           {!researchEnabled && (
