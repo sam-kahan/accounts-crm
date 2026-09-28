@@ -235,7 +235,7 @@ async function runScan({ mailboxes, months, carry = null }) {
           if (hit && certain) {
             await linkCandidate(cand.id, hit.id, AUTO_SEARCH);
             found -= 1; // not a new one to look at
-          } else if (!hit && extracted.confidence === 'high' && (await getSetting('past_auto_import'))) {
+          } else if (!hit && extracted.confidence === 'high' && (await getSetting('past_auto_import')) && !(await importsPaused())) {
             // Switched on: a complaint it is sure of is imported as it is found
             // (marked "to check", like everything the system creates itself).
             await importCandidate(cand.id, AUTO_SEARCH);
@@ -707,8 +707,16 @@ export async function setAutoImport(on, by) {
 // 5-minute email check; with nothing waiting it is one query.
 let autoRunning = false;
 export const AUTO_TRIES = 3;
+// Paused while a deploy waits to restart (see scripts/wait-for-imports.mjs),
+// so a new import isn't started only to be cut off.
+export async function importsPaused() {
+  const p = await getSetting('imports_paused');
+  return Boolean(p?.until && new Date(p.until) > new Date());
+}
+
 export async function runAutoImport(by = AUTO_SEARCH) {
   if (autoRunning || !(await getSetting('past_auto_import'))) return { imported: 0, linked: 0 };
+  if (await importsPaused()) return { imported: 0, linked: 0 };
   if (!config.ms.enabled || !config.anthropic.enabled) return { imported: 0, linked: 0 };
   autoRunning = true;
   let imported = 0;
@@ -726,6 +734,7 @@ export async function runAutoImport(by = AUTO_SEARCH) {
       // eslint-disable-next-line no-await-in-loop
       await serially(async () => {
         if (!(await getSetting('past_auto_import'))) return; // switched off part-way
+        if (await importsPaused()) return; // a deploy is waiting to restart
         const still = (await query(`SELECT status FROM complaint_import_candidates WHERE id = $1`, [c.id])).rows[0];
         if (still?.status !== 'pending') return; // taken in with an earlier one of the same issue
         const group = await groupOf(c.id);

@@ -24,6 +24,11 @@ NODE_OPTIONS="--max-old-space-size=1024" nice -n 10 npm run build -w client
 echo "[$(ts)] accounts-crm: run migrations"
 npm run migrate
 
+# Don't cut an import off part-way: wait (up to 10 minutes) for any in
+# progress to finish. Never blocks the deploy on failure.
+echo "[$(ts)] accounts-crm: wait for imports in progress"
+(cd "${APP_DIR}/server" && node src/scripts/wait-for-imports.mjs) || true
+
 echo "[$(ts)] accounts-crm: restart service"
 sudo systemctl restart accounts-crm
 

@@ -19,6 +19,7 @@ import tasks from './routes/tasks.js';
 import dashboard from './routes/dashboard.js';
 import organisations from './routes/organisations.js';
 import { resumeInterruptedScan, releaseStuckImports, runAutoImport } from './services/pastComplaints.js';
+import { setSetting } from './services/settings.js';
 import complaints from './routes/complaints.js';
 import contractors from './routes/contractors.js';
 import contractorInvoices from './routes/contractorInvoices.js';
@@ -168,7 +169,8 @@ app.listen(config.port, () => {
   // was created yet; otherwise the complaint it made is flagged to check), and
   // a past-complaints search stopped by it carries on.
   // Then automatic import, if it is on, carries on with what is waiting.
-  releaseStuckImports()
+  setSetting('imports_paused', null, 'start-up') // the deploy that paused them is done
+    .then(() => releaseStuckImports())
     .catch((err) => console.error('  Stuck imports not released:', err.message))
     .then(() => runAutoImport())
     .catch((err) => console.error('  Automatic import could not carry on:', err.message));

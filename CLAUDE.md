@@ -564,6 +564,11 @@ the page says how far each date can be trusted.
   what automatic import will do with it (`auto.note`) or why it waits.
   Migration `024` also cleared the old "interrupted by a restart" note, which
   had made auto-import pass those rows by for good.
+- **A deploy waits for imports** (`scripts/wait-for-imports.mjs`, run by
+  `deploy/deploy.sh` before the restart): up to 10 minutes for any import in
+  progress to finish, with automatic import paused meanwhile
+  (`app_settings.imports_paused`, lifted at start-up, lapses after 15
+  minutes). Never blocks a deploy: any problem just means restarting now.
 - **Duplicates guarded at the group, not the thread** (from a review): the
   auto paths check every thread of a group and the merged record for a
   complaint already on file (`onFileFor`), exactly as the list does; a claim
