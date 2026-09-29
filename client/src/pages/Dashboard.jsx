@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, formatDate, daysUntil, formatMoney } from '../api';
+import { api, formatDate, daysUntil, formatMoney, plural } from '../api';
 import { useAuth } from '../auth.jsx';
 
 const CATEGORY_LABEL = {
@@ -142,7 +142,7 @@ export default function Dashboard() {
       const res = await api.sendReminders(90);
       setMsg(
         res.sent
-          ? `Reminder email sent to ${res.to.join(', ')} (${res.items} item(s)).`
+          ? `Reminder email sent to ${res.to.join(', ')} (${plural(res.items, 'item')}).`
           : `Email not sent: ${res.reason}. Configure SMTP2GO in the server .env.`,
       );
     } catch (e) {
@@ -191,15 +191,19 @@ export default function Dashboard() {
           </div>
         )}
         {complaints && (
-          <Link to="/complaints" className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}>
-            <div className="label">Complaints</div>
+          <Link
+            to={complaints.chasing || complaints.waiting || complaints.to_check || complaints.bounced || complaints.looks_resolved
+              ? '/complaints?show=attention' : '/complaints'}
+            className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}
+          >
+            <div className="label">Complaints open</div>
             <div className="value">{complaints.open}</div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              open{complaints.chasing ? ` · ${complaints.chasing} need chasing` : ''}
-              {complaints.waiting ? ` · ${complaints.waiting} email(s) to check` : ''}
-              {complaints.to_check ? ` · ${complaints.to_check} imported to check` : ''}
-              {complaints.bounced ? ` · ${complaints.bounced} bounced email(s) to look into` : ''}
-              {complaints.looks_resolved ? ` · ${complaints.looks_resolved} look resolved (confirm)` : ''}
+            <div className="muted stat-lines" style={{ fontSize: 12 }}>
+              {complaints.chasing > 0 && <div>{plural(complaints.chasing, 'needs', 'need')} chasing</div>}
+              {complaints.waiting > 0 && <div>{plural(complaints.waiting, 'email')} to check</div>}
+              {complaints.to_check > 0 && <div>{plural(complaints.to_check, 'imported complaint')} to check</div>}
+              {complaints.bounced > 0 && <div>{plural(complaints.bounced, 'bounced email')} to look into</div>}
+              {complaints.looks_resolved > 0 && <div>{plural(complaints.looks_resolved, 'looks', 'look')} resolved</div>}
             </div>
           </Link>
         )}
@@ -218,7 +222,7 @@ export default function Dashboard() {
             <div className="label">Commission to invoice</div>
             <div className="value">{formatMoney(commission.pending_commission)}</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              {commission.pending_count} invoice(s)
+              {plural(commission.pending_count, 'invoice')}
               {commission.awaiting_count > 0
                 ? ` · ${formatMoney(commission.awaiting_payment)} awaiting payment`
                 : ''}

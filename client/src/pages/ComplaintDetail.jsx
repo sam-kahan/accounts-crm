@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural } from '../api';
 import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
@@ -433,7 +433,7 @@ export default function ComplaintDetail() {
       const r = await api.complaints.fetchEmails();
       await load();
       setMsg(
-        `Inbox checked: ${r.inserted} new email(s) logged` +
+        `Inbox checked: ${plural(r.inserted, 'new email')} logged` +
           (r.configured ? '.' : ' (test inbox only, as the mailbox connection isn’t configured).'),
       );
     } catch (e) {

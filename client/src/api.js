@@ -533,3 +533,10 @@ export function signEmail(text, user) {
   else s = s.replace(new RegExp(`^[ \\t]*${SIGN_TITLE.source}[ \\t]*\\n?`, 'gim'), '').replace(SIGN_TITLE, '');
   return s;
 }
+
+// "1 invoice" / "3 invoices"; with two words, the one that agrees: "1 needs",
+// "3 need".
+export function plural(n, one, many) {
+  if (many) return `${n} ${n === 1 ? one : many}`;
+  return `${n} ${one}${n === 1 ? '' : 's'}`;
+}

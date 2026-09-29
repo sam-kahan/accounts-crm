@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, formatMoney, REGIONS, REGION_LABEL } from '../api';
+import { api, formatMoney, REGIONS, REGION_LABEL, plural } from '../api';
 import Modal from '../components/Modal.jsx';
 
 // The commission agreement is the whole point of a contractor record: set it
@@ -380,7 +380,7 @@ export default function Contractors() {
                   <td className="num">
                     <strong>{formatMoney(c.pending_commission, { blankZero: true })}</strong>
                     {c.pending_count > 0 && (
-                      <div className="muted" style={{ fontSize: 12 }}>{c.pending_count} invoice(s)</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{plural(c.pending_count, 'invoice')}</div>
                     )}
                   </td>
                   <td className="num muted">{formatMoney(c.billed_commission, { blankZero: true })}</td>

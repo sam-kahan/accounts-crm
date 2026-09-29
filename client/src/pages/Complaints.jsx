@@ -474,7 +474,11 @@ export default function Complaints() {
   const [orgs, setOrgs] = useState([]);
   const [researchEnabled, setResearchEnabled] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [filter, setFilter] = useState('open');
+  // ?show=attention (the dashboard's tile) opens the list on that view.
+  const [filter, setFilter] = useState(() => {
+    const want = new URLSearchParams(window.location.search).get('show');
+    return ['attention', 'open', 'looks_resolved', 'overdue', 'check', 'resolved', 'all'].includes(want) ? want : 'open';
+  });
   const [search, setSearch] = useState('');
   const [copiedAccount, setCopiedAccount] = useState(null);
   const [tidyKey, setTidyKey] = useState(0);

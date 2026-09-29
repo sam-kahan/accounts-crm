@@ -7,6 +7,7 @@ import {
   monthOf,
   monthLabel,
   INVOICE_STATUS_LABEL,
+  plural,
 } from '../api';
 import MonthSelect from '../components/MonthSelect.jsx';
 import OutstandingMonths from '../components/OutstandingMonths.jsx';
@@ -96,7 +97,7 @@ export default function CommissionInvoices() {
     // Say when part of it is late post from a month already invoiced — the
     // figure won't match that month's own total, and it should be obvious why.
     const carried = Number(row.carried_commission) > 0
-      ? ` Includes ${formatMoney(row.carried_commission)} from ${row.carried_count} invoice(s) received after their own month was invoiced.`
+      ? ` Includes ${formatMoney(row.carried_commission)} from ${plural(row.carried_count, 'invoice')} received after their own month was invoiced.`
       : '';
     const totalToRaise = row.raises ? row.raises.total_amount : row.pending_commission;
     if (
@@ -105,7 +106,7 @@ export default function CommissionInvoices() {
           totalToRaise,
         )} (${formatMoney(row.raises?.net_amount ?? row.pending_commission)} + VAT, from ${formatMoney(
           row.pending_commission,
-        )} of commission on ${row.pending_count} invoice(s), ${monthLabel(month)}).${carried}`,
+        )} of commission on ${plural(row.pending_count, 'invoice')}, ${monthLabel(month)}).${carried}`,
       )
     ) {
       return;
