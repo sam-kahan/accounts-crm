@@ -10,7 +10,10 @@
 // legal advice; verify against the specific body's published procedure.
 // ---------------------------------------------------------------------------
 
-// England & Wales bank holidays 2025–2028 (YYYY-MM-DD). Extend as needed.
+// England & Wales bank holidays 2025–2030 (YYYY-MM-DD). 2029 and 2030 are
+// the regular pattern (Easter worked out; the government publishes each year
+// later): a one-off added by proclamation must be added here. A date past the
+// last year here is counted without bank holidays, and the server log says so.
 const BANK_HOLIDAYS = new Set([
   // 2025
   '2025-01-01', '2025-04-18', '2025-04-21', '2025-05-05', '2025-05-26',
@@ -24,7 +27,15 @@ const BANK_HOLIDAYS = new Set([
   // 2028
   '2028-01-03', '2028-04-14', '2028-04-17', '2028-05-01', '2028-05-29',
   '2028-08-28', '2028-12-25', '2028-12-26',
+  // 2029
+  '2029-01-01', '2029-03-30', '2029-04-02', '2029-05-07', '2029-05-28',
+  '2029-08-27', '2029-12-25', '2029-12-26',
+  // 2030
+  '2030-01-01', '2030-04-19', '2030-04-22', '2030-05-06', '2030-05-27',
+  '2030-08-26', '2030-12-25', '2030-12-26',
 ]);
+const LAST_HOLIDAY_YEAR = 2030;
+let warnedPastHolidays = false;
 
 import { todayISO } from '../lib/dates.js';
 
@@ -33,6 +44,10 @@ const iso = (d) => d.toISOString().slice(0, 10);
 function isWorkingDay(d) {
   const day = d.getUTCDay();
   if (day === 0 || day === 6) return false; // Sun/Sat
+  if (d.getUTCFullYear() > LAST_HOLIDAY_YEAR && !warnedPastHolidays) {
+    warnedPastHolidays = true;
+    console.warn(`[complaints] a deadline runs past ${LAST_HOLIDAY_YEAR}: add that year's bank holidays to complaintRules.js`);
+  }
   return !BANK_HOLIDAYS.has(iso(d));
 }
 
@@ -102,11 +117,16 @@ export const RULES = {
     stage1Days: 10,
     stage2Days: 20,
     ackDays: 5,
+    // The Code counts each stage's response from the landlord's
+    // ACKNOWLEDGEMENT (5.6, 6.13), not from receipt: until they acknowledge,
+    // the latest they may is assumed (5 working days, 5.1 and 6.11).
+    stage1Clock: 'acknowledgement',
+    stage2AckDays: 5,
     ombudsman: 'Housing Ombudsman',
     ombudsmanUrl: 'https://www.housing-ombudsman.org.uk/',
     referralMonths: 12,
     legalBasis:
-      'Housing Ombudsman Complaint Handling Code (statutory from 1 Apr 2024): acknowledge within 5 working days; Stage 1 response within 10 working days; Stage 2 within 20 working days.',
+      'Housing Ombudsman Complaint Handling Code (statutory from 1 Apr 2024): acknowledge within 5 working days; Stage 1 response within 10 working days of the acknowledgement; Stage 2 acknowledged within 5 working days and answered within 20 working days of that acknowledgement.',
   },
   water: {
     label: 'Water supplier',
@@ -401,7 +421,16 @@ export function computeResponseDue(complaint, rule) {
     }
     return addWorkingDays(start, rule.stage1Days);
   }
-  if (stage === 'stage_2') return addWorkingDays(start, rule.stage2Days);
+  if (stage === 'stage_2') {
+    // Stage 2 has no clock without the day it was asked for: never the date
+    // the complaint was made standing in (weeks early, and chased).
+    if (!complaint.stage_started_on) return null;
+    // Counted from their acknowledgement of the Stage 2 request where the
+    // rules say so (housing): the latest they may acknowledge it, as no
+    // Stage 2 acknowledgement is recorded.
+    const from = rule.stage2AckDays ? addWorkingDays(start, rule.stage2AckDays) : start;
+    return addWorkingDays(from, rule.stage2Days);
+  }
   return null;
 }
 
@@ -504,10 +533,15 @@ export function deriveStatus(complaint, rule) {
   const responded = Boolean(complaint.responded_on);
   const due = complaint.response_due;
   const wd = due ? workingDaysUntil(due) : null;
-  const overdue = !responded && wd !== null && wd < 0;
+  // Overdue once the date has passed, as the checklist says: a date on a
+  // weekend or bank holiday (a calendar-week deadline, one typed in) counts
+  // 0 working days away the day after, and was a working day late. The
+  // working days are for the label only (at least 1 once it has passed).
+  const overdue = !responded && Boolean(due) && due < today;
   const ackDue = computeAckDue(complaint, rule);
   const ackWd = ackDue && !complaint.acknowledged_on ? workingDaysUntil(ackDue) : null;
-  const ackOverdue = !responded && ackWd !== null && ackWd < 0;
+  const ackOverdue = !responded && ackWd !== null && ackDue < today;
+  const late = (n) => Math.max(1, Math.abs(n || 0));
   const referFrom = computeOmbudsmanFrom(complaint, rule);
   const canReferNow = referFrom && referFrom <= today;
   const referral = referralOpen({ ...complaint, ombudsman_from: referFrom, rule }, today);
@@ -528,7 +562,12 @@ export function deriveStatus(complaint, rule) {
 
   if (responded) {
     let nextAction = null;
-    if (complaint.stage === 'stage_1') {
+    if (complaint.stage === 'stage_1' && complaint.final_response_on) {
+      // Their final response came at Stage 1: the ombudsman is next, not Stage 2.
+      nextAction = referral.open
+        ? `Final response received (${ukDate(complaint.final_response_on)}). If still unresolved, you can refer to ${theOmbudsman(rule.ombudsman)}.`
+        : `Final response received (${ukDate(complaint.final_response_on)}). Before any referral to ${theOmbudsman(rule.ombudsman)}: ${referral.why}.`;
+    } else if (complaint.stage === 'stage_1') {
       nextAction =
         'Stage 1 response received. If it doesn’t resolve things, ask for Stage 2 in writing, ' +
         'setting out each point you want reviewed and why.' + referNote;
@@ -553,7 +592,7 @@ export function deriveStatus(complaint, rule) {
     return {
       ...base,
       status: 'response_overdue',
-      label: `No response, ${plural(Math.abs(wd), 'overdue')}`,
+      label: `No response, ${plural(late(wd), 'overdue')}`,
       nextAction,
       overdue: true,
       ack_overdue: ackOverdue,
@@ -565,7 +604,7 @@ export function deriveStatus(complaint, rule) {
     return {
       ...base,
       status: 'ack_overdue',
-      label: `Not acknowledged, ${plural(Math.abs(ackWd), 'overdue')}`,
+      label: `Not acknowledged, ${plural(late(ackWd), 'overdue')}`,
       nextAction:
         `They should have acknowledged it by ${ukDate(ackDue)} (${rule.ackDays} working days, ` +
         `${basisOf(rule, 'ackDays')}). Chase for an acknowledgement; the Stage 1 outcome is still ` +
@@ -654,11 +693,21 @@ export function procedureSteps(complaint, rule) {
       : { key: 'stage1', label: 'Stage 1', date: null, state: 'past', note: 'Stage 1 finished' },
   );
 
-  if (at <= 1) {
+  const s2From = rule.stage2AckDays
+    ? `${rule.stage2Days} working days from their acknowledgement of the Stage 2 request (due within ${rule.stage2AckDays} working days of it)`
+    : `${rule.stage2Days} working days from the Stage 2 request`;
+  if (at <= 1 && complaint.final_response_on) {
+    // Their Stage 1 answer was their final response (a debt collector's
+    // FCA final response, an energy deadlock letter): no Stage 2 to ask for.
+    steps.push({
+      key: 'stage2', label: 'Stage 2', date: null, state: 'past',
+      note: `Not needed: their response of ${ukDate(complaint.final_response_on)} was their final response`,
+    });
+  } else if (at <= 1) {
     steps.push({
       key: 'stage2', label: 'Stage 2 final response', date: null,
       state: closed ? 'past' : 'upcoming',
-      note: `If needed: ask for Stage 2 in writing and they then have ${rule.stage2Days} working days`,
+      note: `If needed: ask for Stage 2 in writing and they then have ${s2From.replace(' from the Stage 2 request', '')}`,
     });
   } else if (at === 2) {
     steps.push({
@@ -666,7 +715,9 @@ export function procedureSteps(complaint, rule) {
       state: timed(complaint.response_due, Boolean(complaint.responded_on)),
       note: complaint.responded_on
         ? `Final response ${ukDate(complaint.responded_on)}`
-        : `${rule.stage2Days} working days from the Stage 2 request on ${ukDate(complaint.stage_started_on || complaint.raised_on)} (${basisOf(rule, 'stage2Days')})`,
+        : complaint.stage_started_on
+          ? `${s2From} on ${ukDate(complaint.stage_started_on)}${rule.stage2AckDays ? '. This is the latest date, if they acknowledge on time' : ''} (${basisOf(rule, 'stage2Days')})`
+          : 'No date until the day the Stage 2 request was made is recorded: add it with Edit details',
     });
   } else {
     steps.push({

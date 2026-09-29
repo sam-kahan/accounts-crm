@@ -16,6 +16,7 @@ import { syncInvoicing } from '../services/invoicingSync.js';
 import { refreshStaleReviews } from '../services/complaintReview.js';
 import { withNumbers } from '../lib/money.js';
 import { todayISO, addDays } from '../lib/dates.js';
+import { theOmbudsman, ukDate } from '../services/complaintRules.js';
 
 const router = Router();
 
@@ -110,6 +111,21 @@ export async function collectComplaintDueItems(days = 30) {
       const aiOwn = c.ai_review_current ? (multi ? c.ai_review?.by_org?.[i]?.headline : aiStep) : null;
       const detail = aiOwn || t.nextAction || null;
       // (Whose it is is company_name, shown after the label: never twice.)
+      // The last day to refer to the ombudsman: after it the complaint can't
+      // go there at all, so it is listed whatever else the track is waiting
+      // for (a final response in hand, for one, leaves nothing else due).
+      if (!['with_ombudsman', 'resolved', 'closed'].includes(t.status) && t.ombudsman_deadline && t.ombudsman_deadline <= horizon) {
+        const passed = t.ombudsman_deadline < todayISO();
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint ${passed ? 'REFER-BY DATE PASSED' : 'last day to refer to the ombudsman'}: ${c.subject}`,
+          due_date: t.ombudsman_deadline, company_name: t.org_name, overdue: passed,
+          detail: passed
+            ? `The time to refer it to ${theOmbudsman(t.rule?.ombudsman)} ended on ${ukDate(t.ombudsman_deadline)}. Check with them whether they will still take it.`
+            : `The last day ${theOmbudsman(t.rule?.ombudsman)} will take it is ${ukDate(t.ombudsman_deadline)}. ${detail || ''}`.trim(),
+          link,
+        });
+      }
       // Nothing due from them: responded, with the ombudsman, or finished.
       if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;
       // Overdue, but Greenco has just written to them: nothing to do until

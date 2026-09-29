@@ -38,8 +38,27 @@ test('workingDaysUntil is 0 for today, negative for the past, positive for the f
 test('computeResponseDue uses the stage-appropriate window', () => {
   const rule = ruleFor('council'); // stage1 10, stage2 20 working days
   const s1 = computeResponseDue({ raised_on: '2025-06-02', stage: 'stage_1' }, rule);
-  const s2 = computeResponseDue({ raised_on: '2025-06-02', stage: 'stage_2' }, rule);
+  const s2 = computeResponseDue({ raised_on: '2025-06-02', stage: 'stage_2', stage_started_on: '2025-06-02' }, rule);
   assert.ok(s2 > s1, 'stage 2 deadline should be later than stage 1');
+  // No Stage 2 date without the day it was asked for (never from raised_on).
+  assert.equal(computeResponseDue({ raised_on: '2025-06-02', stage: 'stage_2' }, rule), null);
+});
+
+test('housing associations count each stage from their acknowledgement', () => {
+  const rule = ruleFor('housing_association');
+  // Raised Thu 1 Oct 2026, not acknowledged: acknowledgement due Thu 8 Oct,
+  // then 10 working days: Thu 22 Oct (not 15 Oct from receipt).
+  assert.equal(computeResponseDue({ raised_on: '2026-10-01', stage: 'stage_1' }, rule), '2026-10-22');
+  // Acknowledged Mon 5 Oct: 10 working days from then.
+  assert.equal(computeResponseDue({ raised_on: '2026-10-01', stage: 'stage_1', acknowledged_on: '2026-10-05' }, rule), '2026-10-19');
+  // Stage 2 asked for Mon 2 Nov: acknowledged by Mon 9 Nov, 20 working days: Mon 7 Dec.
+  assert.equal(computeResponseDue({ raised_on: '2026-10-01', stage: 'stage_2', stage_started_on: '2026-11-02' }, rule), '2026-12-07');
+});
+
+test('bank holidays run to 2030', () => {
+  // 22 Dec 2028 + 10 working days skips 25, 26 Dec 2028 and 1 Jan 2029.
+  assert.equal(addWorkingDays('2028-12-22', 10), '2029-01-10');
+  assert.equal(addWorkingDays('2030-04-18', 1), '2030-04-23'); // Good Friday and Easter Monday
 });
 
 test('computeOmbudsmanDeadline adds the referral window in months', () => {

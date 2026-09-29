@@ -302,6 +302,25 @@ app.listen(config.port, () => {
       console.log('  Refer-by dates worked out from the ombudsman register');
     })
     .catch((err) => console.error('  Ombudsman register:', err.message));
+  // The deadline rules corrected on 29 Sep 2026 (housing associations count
+  // each stage from their acknowledgement; a Stage 2 with no request date
+  // has no due date rather than one from the day the complaint was made):
+  // the open complaints' stored dates are worked out again once, each
+  // change written on the complaint's timeline.
+  getSetting('deadline_rules_0929')
+    .then(async (done) => {
+      if (done) return;
+      const { recomputeForOrganisation, recomputeLooseParties } = await import('./services/complaintDeadlines.js');
+      const opts = { by: 'Automatic (deadline rules corrected)', reviewAll: false, source: 'the corrected deadline rules' };
+      let moved = 0;
+      for (const o of (await query('SELECT id FROM organisations')).rows) moved += await recomputeForOrganisation(o.id, [], opts);
+      const loose = (await query(`SELECT id FROM complaints WHERE state = 'open' AND organisation_id IS NULL`)).rows.map((r) => r.id);
+      if (loose.length) moved += await recomputeForOrganisation(null, loose, opts);
+      await recomputeLooseParties(null, { by: opts.by, source: opts.source });
+      await setSetting('deadline_rules_0929', { at: new Date().toISOString(), moved }, 'start-up');
+      if (moved) console.log(`  Deadlines re-dated under the corrected rules: ${moved}`);
+    })
+    .catch((err) => console.error('  Deadline rules re-date:', err.message));
   // Further organisations not linked to a saved organisation missed the
   // register's first re-dating: done once.
   getSetting('ombudsman_register_parties')

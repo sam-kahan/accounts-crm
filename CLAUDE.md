@@ -746,6 +746,33 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the deadline engine
+- **A final response can come at Stage 1** (a debt collector's FCA final
+  response, an energy deadlock letter): **Record their response** at Stage 1
+  has "This is their final response" (`POST /:id/events` `{final: true}`),
+  and marking an email as their response takes the AI's `final_response`
+  reading (`/emails/:id/review`, or `{final}`). It sets `final_response_on`,
+  so the ombudsman's clock runs from it (FOS: refer from then, by 6 months
+  after); the page then offers Refer, not the Stage 2 request, and the
+  checklist says Stage 2 isn't needed. The AI's reading alone never records
+  it (it waits for a person, with that reason): it starts the clock.
+- **The last day to refer is listed** on the dashboard and in the morning
+  email (`collectComplaintDueItems`: "last day to refer to the ombudsman",
+  or "REFER-BY DATE PASSED"), whatever else the track waits for. Nothing
+  warned about `ombudsman_deadline` before.
+- **Housing associations count each stage from their acknowledgement**
+  (Complaint Handling Code 5.6 / 6.13): `stage1Clock: 'acknowledgement'`
+  and `stage2AckDays: 5` on the type; dates were up to 5 working days early
+  (chased before they were due).
+- **Overdue is by the date** (`due < today`), as the checklist says: a due
+  date on a weekend or bank holiday was marked overdue a working day late.
+- **No Stage 2 due date without the day it was asked for**
+  (`computeResponseDue`): it fell back to the day the complaint was made,
+  weeks early; the checklist says to add the request date.
+- Bank holidays run to 2030 (a date past the table is logged once).
+- Start-up re-dated the open complaints once under these rules
+  (`app_settings.deadline_rules_0929`), each change on its timeline.
+
 ### 2026-09-29 — fixes from a review of the mailbox watcher and searches
 - **The catch-all has a checkpoint** (`app_settings.catchall_since`,
   `services/mailCheckpoint.js`, shared with the watched mailboxes): each check

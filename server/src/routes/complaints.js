@@ -1363,6 +1363,9 @@ router.post(
 // arrived (UK time).
 const reviewInput = z.object({
   as: z.enum(['acknowledgement', 'response', 'correspondence']),
+  // A response at Stage 1 that is their FINAL response (an FCA final
+  // response, a deadlock letter): the ombudsman's clock runs from it.
+  final: z.boolean().optional(),
   // The date on THEIR email. Defaults to what the AI read from it, then to the
   // day it arrived — for a forward, the arrival date is the day it was forwarded.
   date: isoDate.optional().nullable(),
@@ -1417,7 +1420,7 @@ router.post(
       const changes = d.as === 'acknowledgement'
         ? { acknowledged_on: on }
         : d.as === 'response'
-          ? { responded_on: on, ...(row.stage === 'stage_2' ? { final_response_on: on } : {}) }
+          ? { responded_on: on, ...(row.stage === 'stage_2' || d.final || em.analysis?.kind === 'final_response' ? { final_response_on: on } : {}) }
           : {};
       const before = Object.fromEntries(Object.keys(changes).map((k) => [k, row[k] ?? null]));
       // Replacing a date already recorded is allowed, but never silently.
@@ -1584,6 +1587,10 @@ const eventInput = z.object({
   // A step taken with a further organisation on the complaint (null: the
   // main organisation, or the complaint as a whole for a note).
   party_id: z.string().uuid().optional().nullable(),
+  // A response at Stage 1 that is their FINAL response (an FCA final
+  // response from a debt collector, an energy deadlock letter): there is no
+  // Stage 2, and the ombudsman's clock runs from it.
+  final: z.boolean().optional(),
 });
 
 router.post(
@@ -1609,9 +1616,9 @@ router.post(
       // the referral window from.
       await query(
         `UPDATE ${track.table} SET responded_on = $2,
-                final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
+                final_response_on = CASE WHEN stage = 'stage_2' OR $3 THEN $2::date ELSE final_response_on END
           WHERE id = $1`,
-        [track.row.id, d.event_date],
+        [track.row.id, d.event_date, Boolean(d.final)],
       );
     } else if (d.type === 'resolved') {
       // That organisation's part is over. The complaint as a whole stays open

@@ -80,6 +80,10 @@ const RESPONSE = (t, multi) => ({
   title: withOrg(t, multi, t.stage === 'stage_2' ? 'Record their final (Stage 2) response' : 'Record their Stage 1 response'),
   intro: 'The date on their response. Upload the letter or email itself under Documents so it’s on file.',
   defaultNote: t.stage === 'stage_2' ? 'Final (Stage 2) response received' : 'Stage 1 response received',
+  // At Stage 1 their answer can already be their final response (a debt
+  // collector's FCA final response, an energy deadlock letter): then there
+  // is no Stage 2, and the ombudsman's clock runs from it.
+  askFinal: t.stage === 'stage_1',
 });
 const ESCALATE = (t, multi) => ({
   kind: 'escalate',
@@ -725,12 +729,14 @@ export default function ComplaintDetail() {
 
   // Record a dated step. The date matters — it can move their deadlines —
   // so it is always asked for, defaulting to today.
-  async function recordAction({ date, note }) {
+  async function recordAction({ date, note, final }) {
     const a = action;
     if (a.kind === 'escalate') await api.complaints.escalate(id, date, a.party || null, a.to || null);
     else {
       await api.complaints.addEvent(id, {
-        event_date: date, type: a.kind, note: note || a.defaultNote, party_id: a.party || null,
+        event_date: date, type: a.kind, party_id: a.party || null,
+        note: note || (final ? 'Final response received (at Stage 1)' : a.defaultNote),
+        ...(a.askFinal ? { final: Boolean(final) } : {}),
       });
     }
     setAction(null);
@@ -957,7 +963,8 @@ export default function ComplaintDetail() {
         {tAt && !t.responded_on && (
           <button className="btn btn-sm" onClick={() => setAction(RESPONSE(t, multi))}>Record their response…</button>
         )}
-        {t.stage === 'stage_1' && (
+        {/* Not after their final response at Stage 1: there is no Stage 2. */}
+        {t.stage === 'stage_1' && !t.final_response_on && (
           // Asking for Stage 2 IS the email: one press opens it ready to send,
           // and sending it escalates this organisation's part. Recording it
           // without sending is for a request already made from Outlook.
@@ -972,7 +979,7 @@ export default function ComplaintDetail() {
         )}
         {/* At Stage 1 only once a referral is really open (energy: 8 weeks);
             at Stage 2 always, with a warning while it is too early. */}
-        {(t.stage === 'stage_2' || (t.stage === 'stage_1' && t.referral?.open)) && (
+        {(t.stage === 'stage_2' || (t.stage === 'stage_1' && (t.referral?.open || t.final_response_on))) && (
           <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => setAction(REFER(t, multi))}>
             Refer to ombudsman…
           </button>
@@ -2269,6 +2276,7 @@ function DatedActionModal({ action, onClose, onSubmit }) {
   // Filled in when the step came from an email (e.g. "Looks resolved").
   const [date, setDate] = useState(action.date || todayISO());
   const [note, setNote] = useState(action.noteValue || '');
+  const [final, setFinal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -2278,7 +2286,7 @@ function DatedActionModal({ action, onClose, onSubmit }) {
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ date, note: note.trim() });
+      await onSubmit({ date, note: note.trim(), final });
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -2295,6 +2303,17 @@ function DatedActionModal({ action, onClose, onSubmit }) {
           <span className="lbl">Date *</span>
           <input type="date" required value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} />
         </label>
+        {action.askFinal && (
+          <label className="field" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={final} onChange={(e) => setFinal(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>
+              This is their <strong>final response</strong>
+              <span className="muted" style={{ display: 'block', fontSize: 13 }}>
+                Tick only if their letter says so (a debt collector’s final response under the FCA rules, or an energy supplier’s deadlock letter usually does, and tells you about the ombudsman). Then there is no Stage 2 to ask for, and the time to refer counts from this date.
+              </span>
+            </span>
+          </label>
+        )}
         {!action.noNote && (
           <label className="field">
             <span className="lbl">{action.noteLabel || 'Note (optional)'}</span>

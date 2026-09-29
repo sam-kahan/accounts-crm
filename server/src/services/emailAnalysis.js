@@ -203,7 +203,9 @@ export function planOurStep(complaint, a, today = todayISO()) {
     };
   }
   if (complaint.stage === 'ombudsman') return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
-  if (complaint.stage !== 'stage_2') {
+  // From Stage 1 only once their final response came at Stage 1 (no Stage 2
+  // in their procedure); otherwise a person looks.
+  if (complaint.stage !== 'stage_2' && !(complaint.stage === 'stage_1' && complaint.final_response_on)) {
     return { auto: false, reason: 'It looks like our referral to the ombudsman, but the complaint is still at Stage 1 here' };
   }
   return {
@@ -307,6 +309,14 @@ export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', 
     };
   }
   if (a.kind === 'stage1_response' || a.kind === 'final_response') {
+    // A final response can come at Stage 1 (an FCA final response from a
+    // debt collector, an energy supplier's deadlock letter), but it starts
+    // the ombudsman's clock and ends Stage 2, so it is never recorded on the
+    // AI's word: a person records it (the email's Record as response takes
+    // the AI's "final" reading, or the tick on Record their response).
+    if (a.kind === 'final_response' && complaint.stage === 'stage_1' && !complaint.responded_on) {
+      return { auto: false, reason: 'It reads as their FINAL response, at Stage 1 (so no Stage 2): check the letter says so, then record it as their response' };
+    }
     const wantStage = a.kind === 'final_response' ? 'stage_2' : 'stage_1';
     if (complaint.stage !== wantStage) {
       return { auto: false, reason: `It reads as a ${a.kind === 'final_response' ? 'final' : 'Stage 1'} response, but the complaint is at ${complaint.stage.replace('_', ' ')}` };
@@ -319,7 +329,7 @@ export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', 
       auto: true,
       changes: {
         responded_on: date,
-        ...(wantStage === 'stage_2' ? { final_response_on: date } : {}),
+        ...(a.kind === 'final_response' ? { final_response_on: date } : {}),
         ...refChange,
       },
       reviewedAs: 'response',
