@@ -714,6 +714,12 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the morning email reads on a phone
+- **`buildDigest`** lists **Overdue** first, then **Coming up**, each item one
+  block (UK date "Tue 15 Sep 2026", what, whose, next step, link) instead of
+  table columns; the subject gives the counts ("Greenco Accounts: 2 overdue,
+  2 coming up").
+
 ### 2026-09-29 — fixes from a review of commission
 - **A late invoice is never carried into a month already invoiced**
   (`monthOpenSql` in `services/commission.js`, used by `monthEndLinesSql` and

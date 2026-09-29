@@ -91,3 +91,14 @@ test('a sender with no name signs with their email address, and a $ is kept as t
   assert.equal(signEmail('Kind regards,\n[Name]\n[Job title]\nGreenco', { email: 'a@greenco.co.uk' }), 'Kind regards,\na@greenco.co.uk\nGreenco');
   assert.equal(signEmail('[Name]', { name: 'Jo $& Co' }), 'Jo $& Co');
 });
+
+test('digest puts overdue first, with UK dates and counts in the subject', () => {
+  const d = buildDigest([
+    { due_date: '2026-10-05', label: 'Accounts due', company_name: 'X Ltd' },
+    { due_date: '2026-09-01', label: 'Chase E.ON', overdue: true },
+  ]);
+  assert.equal(d.subject, 'Greenco Accounts: 1 overdue, 1 coming up');
+  assert.ok(d.text.indexOf('Chase E.ON') < d.text.indexOf('Accounts due'));
+  assert.ok(d.text.includes('Mon 5 Oct 2026'));
+  assert.ok(!d.html.includes('2026-10-05'));
+});

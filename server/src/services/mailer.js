@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
+import { ukDate } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // Email reminders via SMTP2GO (https://www.smtp2go.com/).
@@ -158,59 +159,54 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({
 })[ch]);
 const safeLink = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : null);
 
-// Build a simple digest email body from a list of due/overdue items. An item
-// may carry `detail` (what to do) and `link` (where to do it).
+// The morning reminder email: what is overdue first, then what is coming up.
+// Each item is one block (date, what, whose, the next step and a link) rather
+// than table columns, because it is mostly read on a phone. An item may carry
+// `detail` (what to do) and `link` (where to do it).
 export function buildDigest(items) {
   if (items.length === 0) {
     return {
-      subject: 'Greenco Accounts — nothing due',
-      text: 'No key dates or tasks are due or overdue right now.',
-      html: '<p>No key dates or tasks are due or overdue right now.</p>',
+      subject: 'Greenco Accounts: nothing due',
+      text: 'No key dates, tasks or complaint deadlines are due or overdue right now.',
+      html: '<p>No key dates, tasks or complaint deadlines are due or overdue right now.</p>',
     };
   }
+  const overdue = items.filter((i) => i.overdue);
+  const coming = items.filter((i) => !i.overdue);
 
-  const rows = items
-    .map(
-      (i) =>
-        `- ${i.due_date}  ${i.label}${i.company_name ? ` (${i.company_name})` : ''}${
-          i.overdue ? '  [OVERDUE]' : ''
-        }${i.detail ? `\n    Next: ${i.detail}` : ''}${safeLink(i.link) ? `\n    ${i.link}` : ''}`,
-    )
+  const textOf = (list) => list
+    .map((i) => `- ${ukDate(i.due_date)}  ${i.label}${i.company_name ? ` (${i.company_name})` : ''}` +
+      `${i.detail ? `\n    Next: ${i.detail}` : ''}${safeLink(i.link) ? `\n    ${i.link}` : ''}`)
     .join('\n');
-
-  const htmlRows = items
-    .map(
-      (i) => `
-      <tr>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;white-space:nowrap;color:${
-          i.overdue ? '#b91c1c' : '#1e2235'
-        };font-weight:600;">${esc(i.due_date)}</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${
+  const htmlOf = (list, colour) => list
+    .map((i) => `
+      <div style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
+        <div style="font-size:13px;font-weight:600;color:${colour};">${esc(ukDate(i.due_date))}</div>
+        <div style="margin-top:2px;">${
           safeLink(i.link) ? `<a href="${esc(i.link)}" style="color:#1e2235;">${esc(i.label)}</a>` : esc(i.label)
-        }${i.detail ? `<div style="color:#6b7280;font-size:13px;margin-top:2px;">Next: ${esc(i.detail)}</div>` : ''}</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${
-          esc(i.company_name || '')
-        }</td>
-      </tr>`,
-    )
+        }${i.company_name ? `<span style="color:#6b7280;"> · ${esc(i.company_name)}</span>` : ''}</div>${
+          i.detail ? `<div style="color:#6b7280;font-size:13px;margin-top:2px;">Next: ${esc(i.detail)}</div>` : ''
+        }
+      </div>`)
     .join('');
+  const heading = (t, colour) =>
+    `<h3 style="margin:20px 0 4px;font-size:15px;color:${colour};border-bottom:2px solid #a2c533;padding-bottom:4px;">${t}</h3>`;
 
+  const counts = [
+    overdue.length ? `${overdue.length} overdue` : null,
+    coming.length ? `${coming.length} coming up` : null,
+  ].filter(Boolean).join(', ');
   return {
-    subject: `Greenco Accounts — ${items.length} item(s) due soon`,
-    text: `Upcoming and overdue items:\n\n${rows}`,
+    subject: `Greenco Accounts: ${counts}`,
+    text: [
+      overdue.length ? `OVERDUE (${overdue.length})\n\n${textOf(overdue)}` : null,
+      coming.length ? `COMING UP (${coming.length})\n\n${textOf(coming)}` : null,
+    ].filter(Boolean).join('\n\n'),
     html: `
-      <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;">
-        <h2 style="color:#1e2235;">Greenco Accounts — reminders</h2>
-        <table style="border-collapse:collapse;width:100%;max-width:640px;">
-          <thead>
-            <tr>
-              <th style="text-align:left;padding:6px 12px;border-bottom:2px solid #a2c533;">Due</th>
-              <th style="text-align:left;padding:6px 12px;border-bottom:2px solid #a2c533;">Item</th>
-              <th style="text-align:left;padding:6px 12px;border-bottom:2px solid #a2c533;">Company</th>
-            </tr>
-          </thead>
-          <tbody>${htmlRows}</tbody>
-        </table>
+      <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;max-width:640px;">
+        <h2 style="color:#1e2235;margin-bottom:0;">Greenco Accounts reminders</h2>
+        ${overdue.length ? heading(`Overdue (${overdue.length})`, '#b91c1c') + htmlOf(overdue, '#b91c1c') : ''}
+        ${coming.length ? heading(`Coming up (${coming.length})`, '#1e2235') + htmlOf(coming, '#1e2235') : ''}
       </div>`,
   };
 }
