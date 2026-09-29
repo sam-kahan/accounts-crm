@@ -218,6 +218,14 @@ function contextBlock(input) {
     }
   }
 
+  const removedOrgs = (complaint.removed_orgs || []).filter((r) => r?.name);
+  if (removedOrgs.length) {
+    lines.push(
+      `Taken off this complaint: ${removedOrgs.map((r) => r.name).join(', ')}. Their emails and entries are ` +
+        'history only: never a step with, or a date for, the organisations still on it, and never address anything to them.',
+    );
+  }
+
   lines.push('');
   // The timeline carries text taken from emails (automatic entries, their
   // reference), so it is read as data like the emails themselves.
@@ -229,7 +237,8 @@ function contextBlock(input) {
   }
   if (events?.length) {
     for (const e of events) {
-      lines.push(`- ${e.event_date} [${e.type}]${e.party_name ? ` (${e.party_name})` : ''} ${e.note || ''}`.trim());
+      const whose = e.removed_org ? ` (${e.removed_org}, since taken off this complaint)` : e.party_name ? ` (${e.party_name})` : '';
+      lines.push(`- ${e.event_date} [${e.type}]${whose} ${e.note || ''}`.trim());
     }
   } else {
     lines.push('- (no events logged)');
@@ -244,7 +253,8 @@ function contextBlock(input) {
       // received_at is a timestamp (a Date from pg), shown as its UK day.
       const when = em.received_at ? londonDateOf(new Date(em.received_at)) : '';
       lines.push(
-        `- ${when} from ${em.sender_name || em.sender_email || 'unknown'} — ` +
+        `- ${when} from ${em.sender_name || em.sender_email || 'unknown'}` +
+          `${em.removed_org ? ` (${em.removed_org}, since taken off this complaint: history only)` : ''} — ` +
           `"${em.subject || '(no subject)'}": ${(em.body_text || em.body_preview || '').slice(0, 4000)}`,
       );
     }

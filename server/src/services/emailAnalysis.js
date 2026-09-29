@@ -230,7 +230,25 @@ export function couldChangeDate(a, text = '') {
   return DATE_KINDS.has(a?.kind) || DATE_WORDS.test(`${a?.summary || ''}\n${text || ''}`);
 }
 
-export function planFromAnalysis(complaint, a, { today = todayISO(), text = '' } = {}) {
+// Words only a complaint RESPONSE uses (not "Stage 2", which every reply to
+// a Stage 2 request quotes in its subject).
+const RESPONSE_WORDS = /\b(?:final\s+(?:response|decision|position|viewpoint)|deadlock|(?:complaint|investigation)\s+(?:response|outcome|decision|findings)|outcome\s+of\s+(?:your|the|our)\s+complaint|(?:not\s+|partially\s+|partly\s+)?upheld|our\s+(?:response|decision|findings)\s+(?:to|on)\s+your\s+complaint)/i;
+
+// An acknowledgement that can't set a date: this part's acknowledgement is
+// already recorded (or it is past Stage 1, where only the response is
+// dated), and nothing in it reads like a response. Filed by itself even
+// when the AI is only fairly sure, e.g. an automatic "thanks, we aim to
+// reply within 2 working days" to our Stage 2 request.
+export function ackChangesNothing(track, a, text = '') {
+  return a?.kind === 'acknowledgement' &&
+    (track.stage !== 'stage_1' || Boolean(track.acknowledged_on) || Boolean(track.responded_on)) &&
+    !RESPONSE_WORDS.test(`${a?.summary || ''}\n${text || ''}`);
+}
+
+// `soleTrack`: false when the email isn't certainly on this organisation's
+// part (a complaint with more than one): an acknowledgement then might be
+// the other organisation's first, so it isn't settled on this part's dates.
+export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', soleTrack = true } = {}) {
   if (!a) return { auto: false, reason: 'Not analysed' };
   // Routine correspondence (a holding letter, a request for information, a
   // reply that records nothing): filed as correspondence even when the AI is
@@ -246,7 +264,9 @@ export function planFromAnalysis(complaint, a, { today = todayISO(), text = '' }
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }
   if (a.confidence !== 'high') {
-    if (a.confidence === 'medium' && routine) return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+    if (a.confidence === 'medium' && (routine || (soleTrack && ackChangesNothing(complaint, a, text)))) {
+      return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+    }
     return { auto: false, reason: 'The AI isn’t certain what this is' };
   }
   if (!a.from_organisation) {

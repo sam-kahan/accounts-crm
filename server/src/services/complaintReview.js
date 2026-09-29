@@ -86,8 +86,8 @@ export async function refreshReview(id) {
     const c = ctx.complaint;
     const londonDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
     const sent = [
-      ...(ctx.events || []).filter((e) => e.type === 'chased').map((e) => e.event_date),
-      ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at).map((e) => londonDay(e.received_at)),
+      ...(ctx.events || []).filter((e) => e.type === 'chased' && !e.removed_org).map((e) => e.event_date),
+      ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at && !e.removed_org).map((e) => londonDay(e.received_at)),
     ].filter(Boolean).sort();
     // The company a debt collector is acting for, to raise it with too.
     const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()

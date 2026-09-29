@@ -104,3 +104,46 @@ export function overallState(complaint, parties = []) {
   const ended = (t) => (['resolved', 'closed'].includes(t.stage) ? t.stage : t.state);
   return all.some((t) => ended(t) === 'resolved') ? 'resolved' : 'closed';
 }
+
+// Is this email from (or, ours, only to) an organisation taken off the
+// complaint (complaints.removed_orgs)? Their later emails are history: they
+// must never be recorded on another organisation's part. The same signs as
+// trackForEmail — their reference, who wrote it, the address — each checked
+// against the removed organisations AND the ones still on it:
+//   only a removed one          { org }            kept as correspondence
+//   a removed one and one on it { org, conflict }  left for a person
+//   neither                     null               read as usual
+export function removedOrgFor({ removed = [], tracks = [], analysis, email, ourDomain }) {
+  const keptIds = new Set(tracks.map((t) => t.row?.organisation_id).filter(Boolean));
+  const gone = (removed || []).filter((r) => r?.name && !(r.organisation_id && keptIds.has(r.organisation_id)));
+  if (!gone.length) return null;
+  const ours = String(ourDomain || '').toLowerCase();
+  const isOurs = analysis?.kind === 'our_email' || email?.direction === 'outbound';
+  const offHits = new Set();
+  const keptHits = new Set();
+  const byDomain = (d) => {
+    if (!d || d === ours) return;
+    for (const r of gone) if ((r.domains || []).includes(d)) offHits.add(r);
+    for (const t of tracks) if (t.domain === d) keptHits.add(t);
+  };
+  if (isOurs) {
+    for (const a of email?.to_addresses || []) byDomain(domainOf(a));
+    // Ours goes to them only if every outside address is theirs.
+    return offHits.size === 1 && !keptHits.size ? { org: [...offHits][0] } : null;
+  }
+  const ref = normRef(analysis?.their_reference);
+  if (ref.length >= 4) {
+    for (const r of gone) if (normRef(r.reference) === ref) offHits.add(r);
+    for (const t of tracks) if (normRef(t.reference) === ref) keptHits.add(t);
+  }
+  if (analysis?.author_org) {
+    for (const r of gone) if (sameOrgName(r.name, analysis.author_org)) offHits.add(r);
+    for (const t of tracks) if (t.names.some((n) => sameOrgName(n, analysis.author_org))) keptHits.add(t);
+  }
+  byDomain(domainOf(email?.sender_email));
+  byDomain(domainOf(analysis?.author));
+  if (!offHits.size) return null;
+  const org = [...offHits][0];
+  if (keptHits.size || offHits.size > 1) return { org, conflict: true };
+  return { org };
+}

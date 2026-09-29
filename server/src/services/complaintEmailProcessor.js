@@ -8,7 +8,7 @@ import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
 import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
-import { trackForEmail, tracksOf } from './complaintParties.js';
+import { trackForEmail, tracksOf, removedOrgFor } from './complaintParties.js';
 import { buildNumberIndex, complaintByNumber } from './numberMatch.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
@@ -282,7 +282,27 @@ async function applyEmail(em, analysis, skipped = []) {
   // the signs picked. Nothing is closed on a guess.
   let placed = !parties.length;
   const fromThem = analysis?.from_organisation && analysis.kind !== 'our_email' && analysis.confidence === 'high';
-  if (parties.length && fromThem) {
+  // An organisation taken off this complaint writing again (or an email of
+  // ours to them alone): history, never a step on another organisation's
+  // part. When the signs point at both them and one still on it, a person
+  // decides.
+  let off = null;
+  if ((complaint.removed_orgs || []).length && analysis) {
+    const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
+    const orgs = orgIds.length
+      ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+      : [];
+    off = removedOrgFor({
+      removed: complaint.removed_orgs, tracks: tracksOf(complaint, parties, orgs), analysis, email: em,
+      ourDomain: config.complaintEmail.domain,
+    });
+  }
+  if (off) {
+    placed = false;
+    plan = off.conflict
+      ? { auto: false, reason: `It may be from ${off.org.name}, which was taken off this complaint` }
+      : { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+  } else if (parties.length && fromThem) {
     const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
     const orgs = orgIds.length
       ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
@@ -314,7 +334,7 @@ async function applyEmail(em, analysis, skipped = []) {
       plan = { auto: false, reason: 'It looks like our Stage 2 request or referral, but it isn’t clear which organisation’s part it moves on' };
     }
   } else {
-    plan = planFromAnalysis(complaint, analysis, { text: emText });
+    plan = planFromAnalysis(complaint, analysis, { text: emText, soleTrack: !parties.length });
   }
   const target = party || complaint;
   const table = party ? 'complaint_parties' : 'complaints';
@@ -349,7 +369,7 @@ async function applyEmail(em, analysis, skipped = []) {
   const resolved = resolutionSuggestion(analysis, { arrived });
   // (An email from before the complaint was made can't be saying it's resolved.)
   const beforeComplaint = Boolean(complaint.raised_on && arrived < complaint.raised_on);
-  if (resolved && trackOpen(target) && !beforeComplaint && !returnedClose) {
+  if (resolved && trackOpen(target) && !beforeComplaint && !returnedClose && !off) {
     await query('UPDATE complaints SET resolution_suggested = $2 WHERE id = $1', [
       complaint.id,
       JSON.stringify({
@@ -417,7 +437,10 @@ async function applyEmail(em, analysis, skipped = []) {
   });
   const sentStep = analysis?.kind === 'our_email' && (wentOutside || analysis.forwarded);
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
-  const recorded = returnedClose
+  const offOrg = off && !off.conflict ? off.org.name : null;
+  const recorded = offOrg
+    ? ` ${offOrg} was taken off this complaint, so this is kept as history only.`
+    : returnedClose
     ? ` ${plan.step}, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`
     : plan.step
     ? ` ${plan.step}${fromWhom}: the complaint was moved on automatically, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`
@@ -425,13 +448,13 @@ async function applyEmail(em, analysis, skipped = []) {
       ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
       : '';
   const ev = await query(
-    `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [complaint.id, party?.id || null, plan.event?.date || noteDate, type, `${kind} from ${who}${summary}${skippedNote}.${recorded}`, AUTO_BY],
+    `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by, removed_org)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [complaint.id, party?.id || null, plan.event?.date || noteDate, type, `${kind} from ${who}${summary}${skippedNote}.${recorded}`, AUTO_BY, offOrg],
   );
   await query(
     `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, applied = $4,
-            party_id = $5
+            party_id = $5, removed_org = $6
       WHERE id = $1`,
     [
       em.id, plan.reviewedAs, AUTO_BY,
@@ -440,6 +463,7 @@ async function applyEmail(em, analysis, skipped = []) {
         party_id: party?.id || null,
       }),
       party?.id || null,
+      offOrg,
     ],
   );
   if (cols.length) {
@@ -487,6 +511,9 @@ export async function undoEmail(em, by) {
   if (!applied) return false;
   const cols = Object.keys(applied.before || {});
   // Recorded on a further organisation's track (migration 029), or the main one.
+  if (applied.removed_org && Object.keys(applied.before || {}).length) {
+    throw new HttpError(409, `Can’t undo: it was recorded on ${applied.removed_org}’s part, and they have been taken off this complaint since.`);
+  }
   const partyId = applied.party_id || null;
   const table = partyId ? 'complaint_parties' : 'complaints';
   const targetId = partyId || em.complaint_id;
@@ -720,7 +747,12 @@ export async function settleRoutineEmails() {
       ? (await query('SELECT * FROM complaint_parties WHERE id = $1', [e.party_id])).rows[0]
       : (await query('SELECT * FROM complaints WHERE id = $1', [e.complaint_id])).rows[0];
     if (!track) continue;
-    const plan = planFromAnalysis(track, e.analysis, { text: `${e.subject || ''}\n${e.body_text || e.body_preview || ''}` });
+    const others = e.party_id ? 1 : Number((await query('SELECT count(*) FROM complaint_parties WHERE complaint_id = $1', [e.complaint_id])).rows[0].count);
+    const plan = planFromAnalysis(track, e.analysis, {
+      text: `${e.subject || ''}\n${e.body_text || e.body_preview || ''}`,
+      // Certainly this part's: recorded against it, or the only organisation.
+      soleTrack: Boolean(e.party_id) || others === 0,
+    });
     if (!plan.auto || Object.keys(plan.changes || {}).length || plan.event) continue;
     const r = await query(
       `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = 'correspondence', reviewed_by = $2

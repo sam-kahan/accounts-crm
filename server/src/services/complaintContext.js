@@ -41,7 +41,7 @@ export async function lastTheirsByComplaint(ids) {
                      THEN (analysis->>'sent_on')::date
                      ELSE (received_at AT TIME ZONE 'Europe/London')::date END) AS d
        FROM complaint_emails
-      WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound'
+      WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound' AND removed_org IS NULL
         AND COALESCE(analysis->>'kind', '') <> 'our_email'
         AND lower(COALESCE(sender_email, '')) NOT LIKE '%@' || $2
       GROUP BY complaint_id`,
@@ -71,10 +71,10 @@ export async function decorateMany(rows) {
   const lastSent = new Map((await query(
     `SELECT complaint_id, max(d) AS d FROM (
         SELECT complaint_id, event_date AS d FROM complaint_events
-         WHERE type = 'chased' AND complaint_id = ANY($1::uuid[])
+         WHERE type = 'chased' AND complaint_id = ANY($1::uuid[]) AND removed_org IS NULL
         UNION ALL
         SELECT complaint_id, (received_at AT TIME ZONE 'Europe/London')::date FROM complaint_emails
-         WHERE direction = 'outbound' AND complaint_id = ANY($1::uuid[])
+         WHERE direction = 'outbound' AND complaint_id = ANY($1::uuid[]) AND removed_org IS NULL
       ) x GROUP BY complaint_id`,
     [rows.map((r) => r.id)],
   )).rows.map((x) => [x.complaint_id, x.d]));

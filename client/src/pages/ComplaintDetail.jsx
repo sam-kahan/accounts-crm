@@ -1824,6 +1824,11 @@ export default function ComplaintDetail() {
                     <td style={{ width: 150 }}>
                       <span className="badge grey">{EVENT_LABEL[e.type] || e.type}</span>
                       {e.party_name && <div style={{ marginTop: 4 }}><span className="badge navy">{e.party_name}</span></div>}
+                      {e.removed_org && (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="badge" title="This organisation was taken off the complaint; kept as history only">{e.removed_org} (taken off)</span>
+                        </div>
+                      )}
                     </td>
                     <td style={{ whiteSpace: 'pre-wrap' }}>
                       {e.note}

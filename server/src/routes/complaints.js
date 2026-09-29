@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
+import { removalTags } from '../services/trackContact.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
@@ -2075,6 +2076,45 @@ router.put(
   }),
 );
 
+// An organisation taken off a complaint: its emails and chasers are tagged as
+// its history (exactly those counted as its correspondence now, so the rest
+// keep the "last wrote / last heard" they had), its automatic records can't
+// be undone onto anyone else's part, and it is remembered with the addresses
+// it writes from so a later email from it is never recorded on another part.
+async function recordRemoval(db, c, parties, removed) {
+  const key = removed.id === c.id ? 'main' : removed.id;
+  const orgIds = [c, ...parties].map((t) => t.organisation_id).filter(Boolean);
+  const orgs = orgIds.length
+    ? (await db.query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+    : [];
+  const emails = (await db.query(
+    `SELECT id, direction, sender_email, to_addresses, party_id,
+            (received_at AT TIME ZONE 'Europe/London')::date::text AS received_on,
+            analysis->>'kind' AS kind, analysis->>'sent_on' AS sent_on
+       FROM complaint_emails WHERE complaint_id = $1 AND removed_org IS NULL`,
+    [c.id],
+  )).rows;
+  const events = (await db.query(
+    `SELECT id, party_id, event_date::text AS event_date, note FROM complaint_events
+      WHERE complaint_id = $1 AND type = 'chased' AND removed_org IS NULL`,
+    [c.id],
+  )).rows;
+  const tags = removalTags({ complaint: c, parties, orgs, emails, events, ourDomain: config.complaintEmail.domain }, key);
+  await db.query('UPDATE complaint_emails SET removed_org = $2 WHERE id = ANY($1::uuid[])', [tags.emailIds, removed.org_name]);
+  await db.query('UPDATE complaint_events SET removed_org = $2 WHERE id = ANY($1::uuid[])', [tags.eventIds, removed.org_name]);
+  await db.query(
+    `UPDATE complaint_emails SET applied = applied || jsonb_build_object('removed_org', $2::text)
+      WHERE complaint_id = $1 AND applied IS NOT NULL
+        AND COALESCE(applied->>'party_id', '') = $3`,
+    [c.id, removed.org_name, key === 'main' ? '' : key],
+  );
+  const entry = {
+    name: removed.org_name, organisation_id: removed.organisation_id || null, reference: removed.reference || null,
+    domains: tags.domains, removed_on: todayISO(),
+  };
+  await db.query(`UPDATE complaints SET removed_orgs = removed_orgs || $2::jsonb WHERE id = $1`, [c.id, JSON.stringify([entry])]);
+}
+
 // Taking an organisation off a complaint (added by mistake). Its timeline
 // entries and emails stay on the complaint, no longer tied to it, and the
 // removal is written on the timeline.
@@ -2083,17 +2123,31 @@ router.delete(
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.partyId).success) throw new HttpError(400, 'Invalid id');
     const { party } = await loadTrack(req.params.id, req.params.partyId);
-    await query('DELETE FROM complaint_parties WHERE id = $1', [party.id]);
-    await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-       VALUES ($1,$2,'note',$3,$4)`,
-      [
-        req.params.id, todayISO(),
-        `${party.org_name} taken off this complaint` +
-          `${party.reference ? ` (their reference was ${party.reference})` : ''}.`,
-        who(req),
-      ],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const c = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0];
+      const parties = (await client.query('SELECT * FROM complaint_parties WHERE complaint_id = $1 ORDER BY created_at', [c.id])).rows;
+      await recordRemoval(client, c, parties, party);
+      await client.query('DELETE FROM complaint_parties WHERE id = $1', [party.id]);
+      await client.query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         VALUES ($1,$2,'note',$3,$4)`,
+        [
+          req.params.id, todayISO(),
+          `${party.org_name} taken off this complaint` +
+            `${party.reference ? ` (their reference was ${party.reference})` : ''}. ` +
+            'Their emails and entries stay here as history, and any later email from them is kept as history only.',
+          who(req),
+        ],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
     await settleOverall(req.params.id);
     scheduleReview(req.params.id);
     res.json(await decoratedById(req.params.id));
@@ -2122,6 +2176,8 @@ router.post(
       if (!parties.length) throw new HttpError(400, 'It is the only organisation on this complaint: delete the complaint instead, or edit the organisation.');
       const next = d.promote_party_id ? parties.find((p) => p.id === d.promote_party_id) : parties[0];
       if (!next) throw new HttpError(400, 'That organisation isn’t on this complaint.');
+      // Tagged while every part is still in place (before the next one moves up).
+      await recordRemoval(client, c, parties, c);
       // The promoted organisation's entries become the complaint's own.
       await client.query('UPDATE complaint_events SET party_id = NULL WHERE party_id = $1', [next.id]);
       await client.query('UPDATE complaint_emails SET party_id = NULL WHERE party_id = $1', [next.id]);
@@ -2139,7 +2195,7 @@ router.post(
         [c.id, todayISO(),
           `${c.org_name} taken off this complaint${c.reference ? ` (their reference was ${c.reference})` : ''}; it had been made to them on ` +
           `${ukDate(dayOf(c.raised_on))}, at ${String(c.stage).replace('_', ' ')}. ${next.org_name} is now the main organisation, with its own ` +
-          'dates. Earlier entries and emails with them stay here as history.',
+          'dates. Earlier entries and emails with them stay here as history, and any later email from them is kept as history only.',
           who(req)],
       );
       await client.query('COMMIT');

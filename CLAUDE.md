@@ -746,6 +746,27 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — an organisation taken off stays off; unsure acknowledgements that change nothing file themselves
+- **Taking an organisation off a complaint** (a further one, or the main one
+  replaced by the next) now records it (migration `045`):
+  `complaints.removed_orgs` (name, reference, the addresses it writes from)
+  and a `removed_org` tag on its emails and chasers. `removalTags()` in
+  `trackContact.js` (pure, tested) tags exactly what counted only for it, so
+  the remaining organisations' "last wrote / last heard" is unchanged by the
+  removal (before, LCS's chaser became British Gas's and held back BG's
+  chase). Every "last sent / last heard" reader skips tagged rows, and the AI
+  is told they are history. A later email from them (`removedOrgFor()` in
+  `complaintParties.js`: their reference, who wrote it, the address) is kept
+  as history and never recorded on another part; signs pointing at both wait
+  for a person. Undo of an automatic record on a removed organisation's part
+  is refused (it would have reset the new main organisation's dates).
+- **An unsure acknowledgement that can set no date is filed by itself**
+  (`ackChangesNothing` in `emailAnalysis.js`): past Stage 1, or already
+  acknowledged, with no response wording (final response, decision,
+  outcome, upheld). E.g. OVO's automatic "we aim to reply within 2 working
+  days" to our Stage 2 request. Only when it is certainly that organisation's
+  part (`soleTrack`); the start-up tidy clears the ones already waiting.
+
 ### 2026-09-29 — fewer emails to review by hand
 - `emailAnalysis.js#planFromAnalysis`: only an email that could change a
   date (`couldChangeDate`: an acknowledgement or response by the AI's
