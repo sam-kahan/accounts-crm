@@ -191,3 +191,45 @@ test('each organisation gets its own step, guarded by its own dates', () => {
   assert.match(top.headline, /^CDER Group: Ask CDER for Stage 2 now\. Liverpool City Council: /);
   assert.equal(top.email, null);
 });
+
+test('the Stage 2 detector never takes a chaser, a condition or a refusal for the request', () => {
+  const no = [
+    { subject: 'x', body: 'We therefore ask that you send your Stage 2 response within 5 working days.' },
+    { subject: 'x', body: 'Please treat this as a Stage 1 complaint, not a Stage 2 one.' },
+    { subject: 'x', body: 'We ask that you respond within 10 working days, failing which we shall request a Stage 2 review.' },
+    { subject: 'x', body: 'This is our formal request for a Stage 1 response; a second stage review is not needed yet.' },
+    { subject: 'Stage 2 escalation - chaser', body: '' },
+    { subject: 'Re: Stage 2 review - awaiting your response', body: 'Please let us have your Stage 2 response.' },
+  ];
+  for (const e of no) assert.equal(isStage2Request(e), false, e.subject + ' ' + e.body);
+  assert.equal(isStage2Request({ subject: 'x', body: 'We request a Stage 2 review of our complaint.' }), true);
+  assert.equal(isStage2Request({ subject: 'x', body: 'We wish to escalate our complaint to Stage 2 of your procedure.' }), true);
+});
+
+test('an overdue Stage 2 answer is chased, not waited for, when the review repeats the request', () => {
+  const r = guardReview(
+    { headline: 'Ask for Stage 2.', email: { subject: 'x', body: 'Please escalate our complaint to Stage 2.' }, email_now: true },
+    { today: '2026-09-29', stage2Asked: true, anyOverdue: true, nextDue: null },
+  );
+  assert.equal(r.email, null);
+  assert.match(r.headline, /their answer is overdue: chase them for it/);
+});
+
+test('their email forwarded in by a colleague is theirs, not Greenco writing to them', () => {
+  const m = contactByTrack({
+    complaint: cder, parties: [council], orgs,
+    emails: [...emails, { direction: 'inbound', sender_email: 'sam@greenco.co.uk', kind: 'response', sent_on: '2026-10-01', received_on: '2026-10-02', party_id: 'p1' }],
+    events: [], ourDomain: 'greenco.co.uk',
+  });
+  assert.equal(m.get('p1').lastSentOn, '2026-09-29');
+  assert.equal(m.get('p1').lastTheirsOn, '2026-10-01');
+});
+
+test('"sent it from Outlook" on the main organisation\'s step counts for the main organisation', () => {
+  const m = contactByTrack({
+    complaint: cder, parties: [council], orgs, emails: [],
+    events: [{ event_date: '2026-09-30', party_id: null, note: 'Sent the email "Stage 2" from Outlook to CDER Group.' }],
+    ourDomain: 'greenco.co.uk',
+  });
+  assert.equal(m.get('main').lastSentOn, '2026-09-30');
+});

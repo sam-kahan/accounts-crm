@@ -621,21 +621,37 @@ export function normaliseNextAction(a) {
 //            complaint to Stage 2", "we are escalating this to Stage 2"
 // ---------------------------------------------------------------------------
 const STAGE2 = String.raw`stage\s*(?:2|two)\b`;
+// What is asked for must BE the Stage 2 review: the complaint escalated or
+// passed on to it, or "a Stage 2 review" itself. Asking for their Stage 2
+// RESPONSE is a chaser at Stage 2, not the request.
+const REVIEW = String.raw`(?:${STAGE2}(?:\s*\(?\s*(?:internal\s+)?review\)?|\s+escalation)?|independent\s+(?:internal\s+)?review|second[-\s]stage(?:\s+review)?)`;
 const SUBJECT_STAGE2 = new RegExp(
-  String.raw`\b(?:request(?:ing)?|ask(?:ing)?)\b(?:\s+\w+){0,3}\s+${STAGE2}|\b${STAGE2}\s*(?:review\s+)?(?:request|escalation)\b|\bescalat\w*\s+to\s+${STAGE2}`,
+  String.raw`\brequest(?:ing)?\s+(?:for\s+)?(?:an?\s+)?${STAGE2}\s*(?:review|escalation)\b` +
+  String.raw`|\b${STAGE2}\s*(?:review\s+)?request\b|\bescalat(?:e|ion|ing)\s+to\s+${STAGE2}`,
   'i',
 );
-const ASKS = /\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request|wish to escalate|are escalating|would like to escalate|want to escalate)|please\s+(?:escalate|pass|refer|treat|move|take)|this\s+is\s+(?:our|a)\s+(?:formal\s+)?request)\b/i;
-const CONDITIONAL = /\b(?:if|unless|otherwise|will|may|might|could|would\s+have\s+to|intend)\b/i;
-const MENTIONS_STAGE2 = new RegExp(`\\b${STAGE2}|\\bindependent\\s+(?:internal\\s+)?review\\b|\\bsecond\\s+stage\\b`, 'i');
+// In the body, one sentence that asks, and asks for Stage 2 itself.
+const ASKS_FOR_STAGE2 = new RegExp(
+  String.raw`\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request)|please)\b.{0,120}?` +
+    String.raw`\b(?:escalat\w*|pass(?:ed)?|refer(?:red)?|move[ds]?|progress(?:ed)?|take[n]?)\b.{0,80}?\b(?:to|for|into)\s+(?:an?\s+|the\s+|your\s+)?(?:\w+\s+){0,4}${REVIEW}` +
+  String.raw`|\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request)(?:\s+for)?|please\s+(?:arrange|carry\s+out|open|start))\s+(?:an?\s+|the\s+)?(?:\w+\s+){0,3}${REVIEW}` +
+  String.raw`|\bwe\s+(?:wish|would\s+like|want)\s+to\s+escalate\b.{0,80}?\bto\s+(?:\w+\s+){0,3}${REVIEW}` +
+  String.raw`|\bwe\s+are\s+(?:now\s+)?escalating\b.{0,80}?\bto\s+(?:\w+\s+){0,3}${REVIEW}` +
+  String.raw`|\bthis\s+is\s+(?:our|a)\s+(?:formal\s+)?request\s+(?:for|to\s+escalate\b.{0,60}?\bto)\s+(?:an?\s+|the\s+)?(?:\w+\s+){0,3}${REVIEW}`,
+  'i',
+);
+// A sentence that only threatens it, conditions it or turns it down is not
+// the request.
+const NOT_NOW = /\b(?:if|unless|otherwise|will|shall|should|may|might|could|would\s+have\s+to|intend|failing|before|not|no|never|yet)\b|n['’]t\b/i;
+const CHASER_SUBJECT = /\b(?:chas(?:e|er|ing)|reminder|response|reply|follow[-\s]?up)\b/i;
 
 export function isStage2Request(email) {
   const subject = String(email?.subject || '');
   const body = String(email?.body || '');
-  if (SUBJECT_STAGE2.test(subject) && !CONDITIONAL.test(subject)) return true;
+  if (SUBJECT_STAGE2.test(subject) && !CHASER_SUBJECT.test(subject) && !NOT_NOW.test(subject)) return true;
   // Quoted history below the reply is theirs or older: only our own words.
   const own = body.split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
   return own
     .split(/(?<=[.!?])\s+|\n+/)
-    .some((s) => ASKS.test(s) && MENTIONS_STAGE2.test(s) && !CONDITIONAL.test(s.replace(ASKS, '')));
+    .some((s) => ASKS_FOR_STAGE2.test(s) && !NOT_NOW.test(s));
 }

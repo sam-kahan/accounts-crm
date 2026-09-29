@@ -32,7 +32,11 @@ export function contactByTrack({ complaint, parties = [], orgs = [], emails = []
   const partyDomains = new Set(tracks.filter((t) => t.party && t.domain).map((t) => t.domain));
   const valid = new Set(out.keys());
   const senderDomainOf = (e) => domainOf(e.sender_email);
-  const isOurs = (e) => e.direction === 'outbound' || e.kind === 'our_email' || (ours && senderDomainOf(e) === ours);
+  // Ours: sent from here, or read as our own email. One of theirs forwarded
+  // in by a colleague comes from our address but is read as theirs (an
+  // acknowledgement, a response): it is never Greenco writing to them.
+  const isOurs = (e) => e.direction === 'outbound' || e.kind === 'our_email' ||
+    (ours && senderDomainOf(e) === ours && !e.kind);
   const outsideOf = (e) => (isOurs(e) ? (e.to_addresses || []).map(domainOf) : [senderDomainOf(e)])
     .filter((d) => d && d !== ours);
   // An email recorded against a further organisation teaches its address
@@ -81,6 +85,12 @@ export function contactByTrack({ complaint, parties = [], orgs = [], emails = []
     if (/^Email sent: /.test(ev.note || '')) continue;
     if (ev.party_id && valid.has(ev.party_id)) { bump([ev.party_id], 'lastSentOn', ev.event_date); continue; }
     if (!parties.length) { bump(['main'], 'lastSentOn', ev.event_date); continue; }
+    // "Sent … from Outlook to <main organisation>." (the page's button on the
+    // main organisation's step, which has no party to record it against).
+    if (complaint.org_name && String(ev.note || '').trim().endsWith(` to ${complaint.org_name}.`)) {
+      bump(['main'], 'lastSentOn', ev.event_date);
+      continue;
+    }
     const named = (String(ev.note || '').match(/[^<>\s,;"'()]+@[^<>\s,;"'()]+/g) || []).map(domainOf);
     if (named.length) bump(keysFor(named, null), 'lastSentOn', ev.event_date);
     else if (!firstParty || ev.event_date < firstParty) bump(['main'], 'lastSentOn', ev.event_date);

@@ -694,6 +694,25 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the Stage 2 / per-organisation changes
+- **`isStage2Request` asks for Stage 2 itself**: the request must be for the
+  review/escalation (not "your Stage 2 response"), and a sentence with a
+  condition, threat or refusal (if / will / shall / failing / not / yet …)
+  never counts; a subject that is a chaser (chase / reminder / response /
+  reply) never counts. A Stage 1 chaser sent with plain Send can no longer
+  escalate the complaint.
+- **The "Stage 2 already asked for" guard doesn't say "wait" when their Stage
+  2 answer is overdue**: it says to chase it or refer.
+- **A colleague's forward of THEIR email is theirs** in `contactByTrack` (an
+  email from our domain counts as ours only when it has no reading, or is read
+  as `our_email`); "Sent … from Outlook to <main organisation>." counts for
+  the main organisation.
+- **`settleOwnCopies`' fallback** (emails sent before the Message-ID was kept)
+  also needs the same opening words, so a different email from accounts@ with
+  the same subject is read, not filed as a copy.
+- The complaints list's "Next:" is the page's next step (the AI's only while
+  current, otherwise the dates', per organisation).
+
 ### 2026-09-29 — two organisations on one complaint: a next step for EACH, never mixed
 - **The problem**: the next step was worked out for the complaint as a whole,
   so the complaint just sent to Liverpool City Council ("you wrote to them on

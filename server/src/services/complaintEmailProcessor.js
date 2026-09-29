@@ -228,8 +228,16 @@ export async function settleOwnCopies(emailId = null) {
         AND (e.complaint_id IS NULL OR e.complaint_id = o.complaint_id)
         AND (
           (o.message_id = e.message_id)
-          OR (lower(substring(e.sender_email from '[^<>\\s]+@[^<>\\s]+')) = lower(substring(o.sender_email from '[^<>\\s]+@[^<>\\s]+'))
+          -- Sent before the Message-ID was kept (their id is our own 'out-…'):
+          -- the same sender, subject AND opening words, within two days. The
+          -- opening words keep a different email sent from Outlook with the
+          -- same subject (a Stage 2 request, say) from being taken for it.
+          OR (o.message_id LIKE 'out-%'
+              AND lower(substring(e.sender_email from '[^<>\\s]+@[^<>\\s]+')) = lower(substring(o.sender_email from '[^<>\\s]+@[^<>\\s]+'))
               AND lower(btrim(COALESCE(e.subject, ''))) = lower(btrim(COALESCE(o.subject, '')))
+              AND length(btrim(COALESCE(o.body_preview, ''))) >= 20
+              AND left(regexp_replace(lower(btrim(COALESCE(e.body_preview, ''))), '\\s+', ' ', 'g'), 60)
+                = left(regexp_replace(lower(btrim(o.body_preview)), '\\s+', ' ', 'g'), 60)
               AND e.received_at BETWEEN o.received_at - interval '1 hour' AND o.received_at + interval '2 days')
         )`,
     [emailId, COPY_BY],

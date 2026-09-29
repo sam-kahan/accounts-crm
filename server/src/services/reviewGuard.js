@@ -73,6 +73,13 @@ export function guardReview(review, facts) {
   // of it is still there): a review written before that still offers the
   // same request. It is never offered twice; the next step is their answer.
   if (facts.stage2Asked && isStage2Request(review.email)) {
+    // Their Stage 2 answer is overdue: asking for Stage 2 again is still
+    // wrong, but "wait" would be too. Chase that answer, or refer.
+    if (facts.anyOverdue) {
+      const h = 'Stage 2 has already been asked for and their answer is overdue: chase them for it, ' +
+        'or refer the complaint to the ombudsman if their procedure allows it now.';
+      return { ...review, headline: h, recommended_action: h, email: null, email_now: false, next_action: null };
+    }
     const h = `Stage 2 has been asked for. Nothing to send now: ${facts.nextDue
       ? `wait for ${facts.nextDue.what}, due ${ukDate(facts.nextDue.date)}`
       : 'wait for their Stage 2 response'}.`;
