@@ -77,7 +77,7 @@ async function collectDueItems(days = 30) {
 // Collect open complaints whose response is overdue or falls due within `days`
 // — plus any not acknowledged in time — as digest items. Uses the rules engine
 // to derive live status so a missed deadline shows up as OVERDUE in the reminder.
-async function collectComplaintDueItems(days = 30) {
+export async function collectComplaintDueItems(days = 30) {
   const { rows } = await query(
     `SELECT * FROM complaints WHERE state = 'open'`,
   );
@@ -109,14 +109,26 @@ async function collectComplaintDueItems(days = 30) {
       // when there is more than one), never another organisation's.
       const aiOwn = c.ai_review_current ? (multi ? c.ai_review?.by_org?.[i]?.headline : aiStep) : null;
       const detail = aiOwn || t.nextAction || null;
-      const whose = c.parties?.length ? ` (${t.org_name})` : '';
+      // (Whose it is is company_name, shown after the label: never twice.)
       // Nothing due from them: responded, with the ombudsman, or finished.
       if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;
+      // Overdue, but Greenco has just written to them: nothing to do until
+      // the hold ends, so it is listed as coming up on that day, never as
+      // overdue beside a step that says to wait (chase_held_until).
+      if (t.chase_held_until) {
+        if (t.chase_held_until > horizon) continue;
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint: chased, waiting for their reply: ${c.subject}`,
+          due_date: t.chase_held_until, company_name: t.org_name, overdue: false, detail, link,
+        });
+        continue;
+      }
       if (t.status === 'ack_overdue') {
         items.push({
           type: 'complaint',
           id: c.id,
-          label: `Complaint NOT ACKNOWLEDGED${whose}: ${c.subject}`,
+          label: `Complaint NOT ACKNOWLEDGED: ${c.subject}`,
           due_date: t.ack_due,
           company_name: t.org_name,
           overdue: true,
@@ -129,7 +141,7 @@ async function collectComplaintDueItems(days = 30) {
       items.push({
         type: 'complaint',
         id: c.id,
-        label: `Complaint ${t.overdue ? 'response OVERDUE' : 'response due'}${whose}: ${c.subject}`,
+        label: `Complaint ${t.overdue ? 'response OVERDUE' : 'response due'}: ${c.subject}`,
         due_date: t.response_due,
         company_name: t.org_name,
         overdue: t.overdue,
