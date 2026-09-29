@@ -308,6 +308,29 @@ function parseRecipients(raw) {
   return list;
 }
 
+// Queue an email on a complaint, refusing it (409) when `guard` finds one
+// already there. The check and the insert run under a lock on the complaint,
+// so two presses at once (two tabs, a retried request) can't both pass the
+// check and send it twice.
+async function queueOutbox(complaintId, { guard, refusal }, insertSql, params) {
+  const client = await pool.connect();
+  let row;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('complaint_outbox:' || $1))`, [complaintId]);
+    if ((await client.query(guard.sql, guard.params)).rows[0]) throw new HttpError(409, refusal);
+    row = (await client.query(insertSql, params)).rows[0];
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  setImmediate(() => deliverOutbox(row.id).catch((err) => console.error('[outbox]', err.message)));
+  return row;
+}
+
 // Sending runs in the background: the page is answered as soon as the email
 // is checked and queued (complaint_outbox), and doesn't wait on the mail
 // server. Once it has gone it is recorded on the complaint and, when it was
@@ -340,17 +363,22 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
-    const out = (await query(
-      `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [
-        complaint.id, party?.id || null, Boolean(party), to, cc,
-        // Signed by whoever is sending (a draft's "[Name]" never goes out).
-        signEmail(d.subject, req.user), signEmail(d.body, req.user),
-        d.then === 'escalate', who(req),
-      ],
-    )).rows[0];
-    setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+    // Signed by whoever is sending (a draft's "[Name]" never goes out).
+    const subject = signEmail(d.subject, req.user);
+    const body = signEmail(d.body, req.user);
+    // The same email to the same people, queued in the last ten minutes and
+    // not failed, is a second press, not a second email.
+    const out = await queueOutbox(complaint.id, {
+      guard: {
+        sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND subject = $2 AND body = $3 AND to_addresses = $4
+                AND status <> 'failed' AND created_at > now() - interval '10 minutes'`,
+        params: [complaint.id, subject, body, to],
+      },
+      refusal: 'This email has just been sent (or is being sent) from this complaint, so it wasn’t sent again.',
+    },
+    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [complaint.id, party?.id || null, Boolean(party), to, cc, subject, body, d.then === 'escalate', who(req)]);
     res.status(202).json({ queued: true, outbox_id: out.id, escalating: d.then === 'escalate' });
   }),
 );
@@ -359,34 +387,57 @@ router.post(
 // by one statement (pending → sending), so it is never sent twice.
 export async function deliverOutbox(outboxId) {
   const o = (await query(
-    `UPDATE complaint_outbox SET status = 'sending' WHERE id = $1 AND status = 'pending' RETURNING *`, [outboxId],
+    `UPDATE complaint_outbox SET status = 'sending', claimed_at = now() WHERE id = $1 AND status = 'pending' RETURNING *`, [outboxId],
   )).rows[0];
   if (!o) return;
   let sent;
   try {
     sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body });
   } catch (err) {
-    await query(`UPDATE complaint_outbox SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`,
+    // The mail server refused it outright, so it certainly didn't go (a
+    // Try again after a restart that may have sent it included): no "It
+    // went" beside it.
+    await persistStatus(o.id,
+      `UPDATE complaint_outbox SET status = 'failed', uncertain = false, error = $2, finished_at = now() WHERE id = $1`,
       [o.id, String(err.message || err).slice(0, 500)]);
     return;
   }
   await afterSent(o, sent?.messageId || null);
 }
 
+// A status write that must not be lost: a row left at "sending" shows as
+// sending until the next restart, which then offers Try again on an email
+// that may have gone. Tried a few times before giving up.
+async function persistStatus(id, sql, params) {
+  for (let i = 0; i < 4; i += 1) {
+    try {
+      await query(sql, params);
+      return true;
+    } catch (err) {
+      console.error(`[outbox] could not update ${id}:`, err.message);
+      await new Promise((r) => setTimeout(r, 500 * 2 ** i));
+    }
+  }
+  return false;
+}
+
 // The half after the mail server has taken it: marked sent, recorded on the
 // complaint, and the step it was taken. Also run by "It went" for an email
-// that went although it shows as failed, so it is never sent twice.
-async function afterSent(o, messageId) {
+// that went although it shows as failed, so it is never sent twice; then
+// `sentAt` is when it was handed to the mail server, and everything is dated
+// from that, not from the day someone confirmed it.
+async function afterSent(o, messageId, { sentAt = null } = {}) {
   // It has gone: from here on nothing may put it back to "not sent".
-  try {
-    await query(`UPDATE complaint_outbox SET status = 'sent', error = NULL, uncertain = false, finished_at = now() WHERE id = $1`, [o.id]);
-  } catch (err) {
-    console.error('[outbox] sent but not marked sent:', err.message);
-  }
+  await persistStatus(o.id,
+    `UPDATE complaint_outbox SET status = 'sent', error = NULL, uncertain = false, finished_at = now() WHERE id = $1`, [o.id]);
   // Every step it takes is dated the day it actually went, not the day Send
   // was first pressed: after a failure and Try again those differ, and the
   // deadlines run from when they had it.
-  const sentOn = todayISO();
+  const sentOn = sentAt ? londonDateOf(new Date(sentAt)) : todayISO();
+  const note = (text, partyId = null) => query(
+    `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+    [o.complaint_id, partyId, sentOn, text, o.sent_by],
+  );
   try {
     const emailId = await recordOutboundEmail({
       complaintId: o.complaint_id,
@@ -398,36 +449,47 @@ async function afterSent(o, messageId) {
       sentBy: o.sent_by,
       messageId,
       partyId: o.party_id,
+      sentAt,
     });
+    const cur = (await query('SELECT * FROM complaints WHERE id = $1', [o.complaint_id])).rows[0];
     if (o.then_supplier) {
-      await joinSupplier(o.complaint_id, o.then_supplier, { sentOn, emailId, subject: o.subject, by: o.sent_by });
+      // Already joined some other way while this waited (added by hand, say):
+      // never a second copy of them.
+      const s = o.then_supplier;
+      if (!(await joinSupplierOnce(o.complaint_id, s, { sentOn, emailId, subject: o.subject, by: o.sent_by }))) {
+        await note(`The complaint to ${s.org_name} was sent, but they were already on this complaint by then, so nothing was added.`);
+      }
+      scheduleReview(o.complaint_id);
+      return;
+    }
+    // To an organisation since taken off the complaint: nothing to escalate
+    // or start, and never the main organisation's part in its place.
+    if (o.to_party && !o.party_id) {
+      if (o.then_formal) {
+        await note('The formal complaint was sent, but that organisation had been taken off the complaint, so its dates were not changed.');
+      } else if (o.then_escalate || isStage2Request({ subject: o.subject, body: o.body })) {
+        await note('The Stage 2 request was sent, but that organisation had been taken off the complaint, so nothing was escalated.');
+      }
       scheduleReview(o.complaint_id);
       return;
     }
     if (o.then_formal) {
-      await startFormalComplaint(o.complaint_id, sentOn, o.sent_by, { subject: o.subject, fromHere: true });
+      // Only while the question is still open: if it was settled while this
+      // waited (recorded as sent from Outlook, or "It is a complaint: keep
+      // it"), starting again would wipe the dates recorded since.
+      if (!(await startFormalComplaint(o.complaint_id, sentOn, o.sent_by, { subject: o.subject, fromHere: true }))) {
+        await note('The formal complaint email was sent, but the complaint had already been settled as a formal complaint by then, so its dates were not changed.');
+        scheduleReview(o.complaint_id);
+      }
       return;
     }
     // The Stage 2 request moves the complaint on whichever button sent it:
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
     // with the review offering the same request again.
-    // To an organisation since taken off the complaint: nothing to escalate,
-    // and never the main organisation's part in its place.
-    if (o.to_party && !o.party_id) {
-      if (o.then_escalate || isStage2Request({ subject: o.subject, body: o.body })) {
-        await query(
-          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
-          [o.complaint_id, sentOn, 'The Stage 2 request was sent, but that organisation had been taken off the complaint, so nothing was escalated.', o.sent_by],
-        );
-      }
-      scheduleReview(o.complaint_id);
-      return;
-    }
     const party = o.party_id
       ? (await query('SELECT * FROM complaint_parties WHERE id = $1', [o.party_id])).rows[0] || null
       : null;
-    const cur = (await query('SELECT * FROM complaints WHERE id = $1', [o.complaint_id])).rows[0];
     const atStage1 = (party || cur)?.stage === 'stage_1';
     const track = o.then_escalate
       ? (atStage1 ? { party } : null)
@@ -436,10 +498,7 @@ async function afterSent(o, messageId) {
         : null;
     if (track) await escalateFromEmail(o.complaint_id, track.party?.id || null, sentOn, o.sent_by, emailId);
     else if (o.then_escalate && !atStage1) {
-      await query(
-        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
-        [o.complaint_id, o.party_id, sentOn, 'The Stage 2 request was sent, but it was already past Stage 1 by then, so nothing was escalated.', o.sent_by],
-      );
+      await note('The Stage 2 request was sent, but it was already past Stage 1 by then, so nothing was escalated.', o.party_id);
     }
     scheduleReview(o.complaint_id);
   } catch (err) {
@@ -473,11 +532,15 @@ router.post(
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.outboxId).success) throw new HttpError(400, 'Invalid id');
     const o = (await query(
-      `UPDATE complaint_outbox SET status = 'sending' WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING *`,
+      `UPDATE complaint_outbox SET status = 'sending' WHERE id = $1 AND complaint_id = $2 AND status = 'failed' AND uncertain RETURNING *`,
       [req.params.outboxId, req.params.id],
     )).rows[0];
-    if (!o) throw new HttpError(409, 'That email isn’t waiting to be dealt with.');
-    await afterSent(o, null);
+    // Only an email a restart cut short may have gone: one the mail server
+    // refused certainly didn't.
+    if (!o) throw new HttpError(409, 'That email isn’t waiting to be dealt with, or it certainly didn’t go (use Try again).');
+    // Dated when it was handed to the mail server (rows from before that was
+    // kept: when the restart found it).
+    await afterSent(o, null, { sentAt: o.claimed_at || o.finished_at || null });
     res.status(204).end();
   }),
 );
@@ -2044,15 +2107,21 @@ router.post(
 // ---------------------------------------------------------------------------
 async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere = false } = {}) {
   const before = (await query('SELECT raised_on, stage FROM complaints WHERE id = $1', [id])).rows[0];
-  if (!before) return;
-  await query(
+  if (!before) return false;
+  // Only while the question is still open, in the same statement that
+  // answers it, so two at once (a send and a record from Outlook) can't both
+  // start it: the second would wipe the dates recorded after the first.
+  const r = await query(
     `UPDATE complaints
         SET raised_on = $2, stage = 'stage_1', stage_started_on = $2, acknowledged_on = NULL,
             responded_on = NULL, final_response_on = NULL, response_due_manual = false,
             channel = 'email', complaint_doubt = NULL
-      WHERE id = $1`,
+      WHERE id = $1 AND complaint_doubt->>'kind' = 'not_complaint'
+        AND COALESCE((complaint_doubt->>'answered')::boolean, false) = false
+      RETURNING id`,
     [id, sentOn],
   );
+  if (!r.rows[0]) return false;
   await recomputeDeadlines(id);
   await query(
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'raised',$3,$4)`,
@@ -2063,6 +2132,7 @@ async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere =
       by],
   );
   scheduleReview(id);
+  return true;
 }
 
 router.post(
@@ -2115,27 +2185,35 @@ router.post(
     if (!d.send && !d.sent_on) throw new HttpError(400, 'Send the complaint from here, or give the date it was sent.');
     const c = await decoratedById(req.params.id);
     if (c.state !== 'open') throw new HttpError(409, 'This complaint is closed.');
+    // Only while the question is open: starting it again later would wipe
+    // the dates recorded since it was made.
+    if (c.complaint_doubt?.kind !== 'not_complaint' || c.complaint_doubt.answered) {
+      throw new HttpError(409, 'This complaint is already recorded as a formal complaint.');
+    }
+    // One formal complaint at a time: a waiting one (sending, or failed with
+    // Try again) is dealt with first, whichever way this one went.
+    const formalGuard = {
+      guard: { sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_formal AND status <> 'sent'`, params: [c.id] },
+      refusal: 'The formal complaint is already being sent, or failed and is waiting on this complaint: deal with that one first (Try again, It went, or Discard).',
+    };
+    if ((await query(formalGuard.guard.sql, formalGuard.guard.params)).rows[0]) throw new HttpError(409, formalGuard.refusal);
     if (d.send) {
       if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
-      const waiting = (await query(
-        `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_formal AND status <> 'sent'`, [c.id],
-      )).rows[0];
-      if (waiting) throw new HttpError(409, 'The formal complaint is already being sent (or failed and is waiting) on this complaint.');
       const to = parseRecipients(d.send.to);
       const cc = parseRecipients(d.send.cc);
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
-      const out = (await query(
+      const out = await queueOutbox(c.id, formalGuard,
         `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal)
          VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req)],
-      )).rows[0];
-      setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req)]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
     if (d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');
-    await startFormalComplaint(c.id, d.sent_on, who(req), { fromHere: false });
+    if (!(await startFormalComplaint(c.id, d.sent_on, who(req), { fromHere: false }))) {
+      throw new HttpError(409, 'This complaint is already recorded as a formal complaint.');
+    }
     res.status(201).json(await decoratedById(c.id));
   }),
 );
@@ -2163,23 +2241,22 @@ router.post(
     if (!d.send && d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');
     const supplier = { organisation_id: d.organisation_id || null, org_name: d.org_name, org_type: d.org_type || 'supplier' };
     // Refused now, not after the email has gone: they can't join twice.
-    const already = (d.organisation_id && d.organisation_id === c.organisation_id) ||
-      (c.parties || []).some((p) => (d.organisation_id && p.organisation_id === d.organisation_id) ||
-        p.org_name.trim().toLowerCase() === d.org_name.trim().toLowerCase());
-    if (already) throw new HttpError(409, `${d.org_name} is already on this complaint.`);
+    if (supplierOnComplaint(c, c.parties || [], supplier)) throw new HttpError(409, `${d.org_name} is already on this complaint.`);
     // They already have a complaint about this account: combine the two
     // rather than start a second complaint with them.
     const theirs = (await sameAccountComplaints(c)).find((o) => o.org_names.some((n) => sameOrgName(n, d.org_name)));
     if (theirs) {
       throw new HttpError(409, `There is already a complaint with ${d.org_name} about this account (${theirs.ref_code}, made ${readable(theirs.raised_on)}). Combine the two complaints (the button at the top of this page) rather than raising a new one.`);
     }
+    // One complaint to a supplier at a time: a waiting one (sending, or
+    // failed with Try again) is dealt with first, whichever way this one went.
+    const supplierGuard = {
+      guard: { sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_supplier IS NOT NULL AND status <> 'sent'`, params: [c.id] },
+      refusal: 'A complaint to a supplier is already being sent, or failed and is waiting on this complaint: deal with that one first (Try again, It went, or Discard).',
+    };
+    if ((await query(supplierGuard.guard.sql, supplierGuard.guard.params)).rows[0]) throw new HttpError(409, supplierGuard.refusal);
     if (d.send) {
       if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
-      const waiting = (await query(
-        `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_supplier IS NOT NULL AND status <> 'sent'`,
-        [c.id],
-      )).rows[0];
-      if (waiting) throw new HttpError(409, 'A complaint to a supplier is already being sent (or failed and waiting) on this complaint.');
       const to = parseRecipients(d.send.to);
       const cc = parseRecipients(d.send.cc);
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
@@ -2188,18 +2265,46 @@ router.post(
       // In the background like every send from a complaint: the supplier
       // joins once it has gone (dated that day), and nothing is added if it
       // fails — it waits on the complaint with Try again / Discard.
-      const out = (await query(
+      const out = await queueOutbox(c.id, supplierGuard,
         `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier],
-      )).rows[0];
-      setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
-    await joinSupplier(c.id, supplier, { sentOn: d.sent_on, by: who(req) });
+    if (!(await joinSupplierOnce(c.id, supplier, { sentOn: d.sent_on, by: who(req) }))) {
+      throw new HttpError(409, `${d.org_name} is already on this complaint.`);
+    }
     res.status(201).json(await decoratedById(c.id));
   }),
 );
+
+// Whether a supplier is already on the complaint: the main organisation or
+// a further one, by saved organisation or by name.
+function supplierOnComplaint(c, parties, s) {
+  const name = String(s.org_name).trim().toLowerCase();
+  return Boolean((s.organisation_id && c.organisation_id === s.organisation_id) ||
+    parties.some((p) => (s.organisation_id && p.organisation_id === s.organisation_id) ||
+      p.org_name.trim().toLowerCase() === name));
+}
+
+// joinSupplier unless they are already on it, checked and joined under a
+// lock on the complaint so two at once (two presses, or a send finishing as
+// someone records it from Outlook) can't add them twice. False if they were.
+async function joinSupplierOnce(complaintId, supplier, opts) {
+  const lock = await pool.connect();
+  try {
+    await lock.query(`SELECT pg_advisory_lock(hashtext('complaint_supplier:' || $1))`, [complaintId]);
+    const c = (await query('SELECT organisation_id FROM complaints WHERE id = $1', [complaintId])).rows[0];
+    if (!c) return false;
+    const parties = (await query('SELECT organisation_id, org_name FROM complaint_parties WHERE complaint_id = $1', [complaintId])).rows;
+    if (supplierOnComplaint(c, parties, supplier)) return false;
+    await joinSupplier(complaintId, supplier, opts);
+    return true;
+  } finally {
+    await lock.query(`SELECT pg_advisory_unlock(hashtext('complaint_supplier:' || $1))`, [complaintId]).catch(() => {});
+    lock.release();
+  }
+}
 
 // The supplier joins the complaint as a further organisation, dated the day
 // the complaint to them went. With an email sent from here, that email (and
@@ -2403,7 +2508,16 @@ router.post(
           WHERE complaint_id = $1 AND applied->>'party_id' = $2`,
         [c.id, next.id],
       );
-      await client.query('UPDATE complaint_outbox SET party_id = NULL WHERE party_id = $1', [next.id]);
+      // Emails still waiting to go: those to the organisation taken off are
+      // marked as to an organisation no longer on it (so they never move the
+      // new main organisation's part), and the promoted one's become the
+      // complaint's own. A complaint to a supplier is to neither.
+      await client.query(
+        `UPDATE complaint_outbox SET to_party = true
+          WHERE complaint_id = $1 AND party_id IS NULL AND then_supplier IS NULL AND status <> 'sent'`,
+        [c.id],
+      );
+      await client.query('UPDATE complaint_outbox SET party_id = NULL, to_party = false WHERE party_id = $1', [next.id]);
       await client.query('DELETE FROM complaint_parties WHERE id = $1', [next.id]);
       const set = TRACK_MOVE.map((k, i) => `${k} = $${i + 2}`).join(', ');
       await client.query(`UPDATE complaints SET ${set} WHERE id = $1`, [c.id, ...TRACK_MOVE.map((k) => next[k] ?? null)]);

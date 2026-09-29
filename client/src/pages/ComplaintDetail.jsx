@@ -259,8 +259,11 @@ export default function ComplaintDetail() {
   // Bumped when a look fails, so one blip (a deploy, a dropped connection)
   // can't leave the page saying "Sending…" until it is reloaded.
   const [pollMiss, setPollMiss] = useState(0);
+  // The complaint itself has gone (deleted or combined into another while
+  // an email was going): stop looking, and say so.
+  const [pollGone, setPollGone] = useState(false);
   useEffect(() => {
-    if (!sendingNow) return undefined;
+    if (!sendingNow || pollGone) return undefined;
     const t = setTimeout(() => {
       api.complaints.get(id).then((fresh) => {
         setC(fresh);
@@ -281,10 +284,19 @@ export default function ComplaintDetail() {
             ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
             : esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
         }
-      }).catch(() => setPollMiss((n) => n + 1));
+      }).catch((e) => {
+        if (e.status === 404) {
+          setPollGone(true);
+          setMsg('This complaint no longer exists (it was deleted, or combined into another), so the email being sent can’t be followed here. Look for it on the complaint it was combined into.');
+          return;
+        }
+        // Looked at less often the longer it fails, never given up on
+        // while the email may still be going.
+        setTimeout(() => setPollMiss((n) => n + 1), Math.min(30000, 3000 * (pollMiss + 1)));
+      });
     }, 3000);
     return () => clearTimeout(t);
-  }, [c, sendingNow, pollMiss]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [c, sendingNow, pollMiss, pollGone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A re-check running in the background (the button, or one started before
   // a reload): look again every few seconds until the server says how it
@@ -309,20 +321,27 @@ export default function ComplaintDetail() {
     return () => clearTimeout(t);
   }, [c, recheckRunning, recheckMiss]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function retryOutbox(o) {
-    try { await api.complaints.retryOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
+  // The email whose Try again / It went / Discard is running: its buttons
+  // wait, so a second press can't meet the first.
+  const [outboxBusy, setOutboxBusy] = useState(null);
+  async function outboxAction(o, run) {
+    setOutboxBusy(o.id);
+    try { await run(); } catch (e) { setMsg(e.message); } finally { setOutboxBusy(null); }
   }
-  async function outboxWent(o) {
-    if (!confirm(`Record "${o.subject}" as sent? Only if the copy is in utilities@: it won't be sent again.`)) return;
-    try {
+  function retryOutbox(o) {
+    return outboxAction(o, async () => { await api.complaints.retryOutbox(id, o.id); await load(); });
+  }
+  function outboxWent(o) {
+    if (!confirm(`Record "${o.subject}" as sent? Only if the copy is in utilities@: it won't be sent again.`)) return undefined;
+    return outboxAction(o, async () => {
       await api.complaints.outboxWent(id, o.id);
       await load();
-      setMsg('Recorded as sent, and any step it was taken.');
-    } catch (e) { setMsg(e.message); }
+      setMsg('Recorded as sent on the day it went, and any step it was taken.');
+    });
   }
-  async function discardOutbox(o) {
-    if (!confirm(`Discard "${o.subject}"? It wasn't sent, and won't be.`)) return;
-    try { await api.complaints.discardOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
+  function discardOutbox(o) {
+    if (!confirm(`Discard "${o.subject}"? It wasn't sent, and won't be.`)) return undefined;
+    return outboxAction(o, async () => { await api.complaints.discardOutbox(id, o.id); await load(); });
   }
 
   // While the review is being brought up to date, look again every few
@@ -1068,10 +1087,10 @@ export default function ComplaintDetail() {
             <div style={{ fontSize: 13, marginTop: 2 }}>{o.error}</div>
             <div className="btn-row" style={{ marginTop: 6 }}>
               {o.uncertain && (
-                <button className="btn-primary btn-sm" onClick={() => outboxWent(o)}>It went: record it</button>
+                <button className="btn-primary btn-sm" disabled={outboxBusy === o.id} onClick={() => outboxWent(o)}>It went: record it</button>
               )}
-              <button className={o.uncertain ? 'btn btn-sm' : 'btn-primary btn-sm'} onClick={() => retryOutbox(o)}>Try again</button>
-              <button className="btn btn-sm" onClick={() => discardOutbox(o)}>Discard</button>
+              <button className={o.uncertain ? 'btn btn-sm' : 'btn-primary btn-sm'} disabled={outboxBusy === o.id} onClick={() => retryOutbox(o)}>Try again</button>
+              <button className="btn btn-sm" disabled={outboxBusy === o.id} onClick={() => discardOutbox(o)}>Discard</button>
             </div>
           </div>
         ) : (

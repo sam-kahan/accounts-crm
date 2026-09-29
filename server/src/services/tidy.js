@@ -200,6 +200,18 @@ export async function mergeComplaints(keepId, mergeId, by) {
     keep = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [keepId])).rows[0];
     gone = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [mergeId])).rows[0];
     if (!keep || !gone) throw Object.assign(new Error('One of those complaints no longer exists.'), { status: 404 });
+    // An email still waiting on either (being sent, or failed with Try
+    // again / It went) is dealt with first: the merge would delete the
+    // merged one's with it, or leave an email that goes out with nowhere to
+    // be recorded and its step never taken. The row locks above hold off a
+    // new one being queued meanwhile.
+    const waiting = (await client.query(
+      `SELECT count(*)::int AS n FROM complaint_outbox WHERE complaint_id = ANY($1::uuid[]) AND status <> 'sent'`,
+      [[keepId, mergeId]],
+    )).rows[0].n;
+    if (waiting) {
+      throw Object.assign(new Error(`An email from one of these complaints is still being sent, or failed and is waiting on the complaint. Deal with it first (it has Try again and Discard on the complaint), then combine them.`), { status: 409 });
+    }
     // Never merge a live complaint into a finished one: its stage, dates and
     // deadlines would be thrown away and the complaint would read as closed.
     if (keep.state !== 'open' && gone.state === 'open') {

@@ -1,6 +1,6 @@
 import { query, pool } from '../db/pool.js';
 import { complaintEmailAddress, complaintInboxAddress } from '../config.js';
-import { todayISO } from '../lib/dates.js';
+import { todayISO, londonDateOf } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // Email-to-complaint ingestion. The mailbox we poll is a shared, domain-wide
@@ -121,7 +121,10 @@ export function listComplaintEmails(complaintId) {
 // they are recognised as this email rather than stored as a new one.
 // `partyId`: the further organisation it was sent to (migration 029), so
 // "when did we last write to them" is answered per organisation.
-export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null, partyId = null }) {
+// `sentAt` is when it went, when that isn't now (an email confirmed as gone
+// after a restart cut its send short): the record and its "sent" entry are
+// dated then, never the day someone confirmed it.
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null, partyId = null, sentAt = null }) {
   const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
   const graphId = `out-${globalThis.crypto.randomUUID()}`;
   const client = await pool.connect();
@@ -132,18 +135,18 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
          (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
           to_addresses, body_preview, received_at, direction, match_method,
           reviewed_at, reviewed_as, reviewed_by, party_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent',now(),'sent',$9,$10)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($11::timestamptz, now()),'outbound','sent',now(),'sent',$9,$10)
        RETURNING id`,
       [
         complaintId, graphId, messageId || graphId, subject, 'You (sent from CRM)', fromEmail,
-        recipients, (body || '').slice(0, 2000), sentBy || null, partyId,
+        recipients, (body || '').slice(0, 2000), sentBy || null, partyId, sentAt,
       ],
     )).rows[0];
     await client.query(
       `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
        VALUES ($1, $5, $2, 'chased', $3, $4)`,
       [
-        complaintId, todayISO(),
+        complaintId, sentAt ? londonDateOf(new Date(sentAt)) : todayISO(),
         `Email sent: ${subject || '(no subject)'}, to ${recipients.join(', ')}`,
         sentBy || null, partyId,
       ],

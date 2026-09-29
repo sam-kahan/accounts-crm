@@ -746,6 +746,35 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of sending from a complaint
+- **Nothing sent twice by two presses at once**: every send is queued by
+  `queueOutbox()` (routes/complaints.js), the check and the insert under an
+  advisory lock on the complaint. Plain Send refuses the same email to the
+  same people queued in the last 10 minutes (not failed); the formal
+  complaint and the supplier complaint allow one waiting at a time, and
+  their "sent from Outlook" paths refuse while one waits (deal with it
+  first).
+- **A formal complaint is started once**: `startFormalComplaint` answers the
+  question in the same UPDATE that restarts the dates (only while
+  `complaint_doubt` is an unanswered `not_complaint`), so a later send, It
+  went or Outlook record can't wipe dates recorded since; it says so on the
+  timeline instead. A supplier joins once (`joinSupplierOnce`, under a lock).
+- **It went is dated when it went** (migration `048`,
+  `complaint_outbox.claimed_at`, set on the pending → sending claim): the
+  email, its "sent" entry and its step (Stage 2, formal start, supplier) are
+  dated then, not the day someone confirmed it. Only an `uncertain` row (a
+  restart cut its send short) can be recorded as gone; a hard failure clears
+  `uncertain`.
+- **Taking the main organisation off** marks its waiting emails as to an
+  organisation no longer on the complaint (`to_party`), and the promoted
+  one's as the complaint's own: a Stage 2 request to the removed one no
+  longer escalates its replacement, and the replacement's own request does.
+- **Tidy up won't combine** complaints while either has an email waiting
+  (the delete took the merged one's with it).
+- Status writes are retried (`persistStatus`), never leaving a row at
+  "sending"; the page stops following a complaint that has gone (404) and
+  its Try again / It went / Discard buttons wait while they run.
+
 ### 2026-09-29 — fixes from a review of the email filing pipeline
 - **Filing by number never matches inside another number, a date or an
   amount** (`numberMatch.js#numberPattern`/`quotes`): only spaces and
