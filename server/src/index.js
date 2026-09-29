@@ -223,6 +223,22 @@ app.listen(config.port, () => {
       if (k) console.log(`  Copies of emails sent from here filed as ours: ${k}`);
     })
     .catch((err) => console.error('  Earlier emails:', err.message));
+  // An organisation marked as having its procedure "entered" only because a
+  // save sent the standard figures the form shows for blanks (fixed 29 Sep):
+  // nothing of its own is on file (no figure of theirs, no procedure name, no
+  // document, never researched, never ticked as checked), so it goes back to
+  // "not researched" and its warning shows again. No AI; harmless to repeat.
+  import('./services/orgProcedure.js')
+    .then(async ({ statesOwnProcedure }) => {
+      const rows = (await query(
+        `SELECT o.* FROM organisations o
+          WHERE o.research_status = 'manual' AND o.researched_at IS NULL AND o.verified_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM organisation_documents d WHERE d.organisation_id = o.id)`,
+      )).rows.filter((o) => !statesOwnProcedure(o) && Object.keys(o.procedure_sources || {}).length);
+      for (const o of rows) await query(`UPDATE organisations SET research_status = 'none' WHERE id = $1`, [o.id]);
+      if (rows.length) console.log(`  Organisations put back to "not researched" (only standard figures): ${rows.length}`);
+    })
+    .catch((err) => console.error('  Standard-only procedures:', err.message));
   // Complaints against more than one organisation: the email that raised it
   // with the second one is theirs, and each organisation gets its own next
   // step, so a review written before that is written again (once each).

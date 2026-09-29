@@ -746,6 +746,31 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of organisation and register editing
+- **Opening a never-researched organisation and saving it no longer marks
+  its procedure "entered"**: the form fills blanks with the standard (marked
+  `standard`), and those figures made the save send `research_status:
+  'manual'`, so the "not researched" warnings vanished. Only a figure of
+  THEIRS (not `standard`) or a procedure name counts
+  (`services/orgProcedure.js#statesOwnProcedure`, client and server both);
+  start-up puts back to `none` any organisation marked `manual` with nothing
+  of its own on file (no own figure, name, document, research or check).
+- **"Checked by X" is decided in one place** (`procedureChanged`, pure,
+  tested): a figure only showing the standard is not a change (it used to
+  restamp the checker on the first save after opening), and a change of
+  **ombudsman scheme** is (it kept the old check). The form unticks on a
+  scheme change too; the Ombudsmen form unticks on any edit (a wrong wait
+  saved on a checked scheme counted as checked and could open referrals).
+- An organisation save refreshes its complaints' AI reviews only when the
+  procedure changed (`reviewAll: changed`; dates that moved are always
+  reviewed); `recomputeForOrganisation` returns how many complaints' dates
+  MOVED, and the messages say so ("have new dates").
+- Deleting an organisation re-dates its further-party tracks visibly
+  (`partyIds`, timeline note "their organisation was deleted") and removes
+  its document files only after the delete succeeded.
+- `research-and-create` records its figures as `research`; the ombudsman
+  stage's due date reads "response due", not "Stage 1 outcome due".
+
 ### 2026-09-29 — the dashboard lists complaint deadlines; merges keep the new fields
 - **The dashboard's Overdue / Upcoming lists are the morning email's list**:
   key dates and tasks, plus (for someone who may see complaints) each

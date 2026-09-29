@@ -347,10 +347,20 @@ export async function deleteOrgDocument(docId) {
 // Before an organisation is deleted: its rows cascade, but the files would be
 // left on disk with nothing pointing at them.
 export async function removeOrgDocumentFiles(orgId) {
+  await removeOrgFiles(await orgDocumentFiles(orgId));
+}
+
+// An organisation's document files, read so they can be removed only once
+// the organisation itself has been deleted (a delete that fails keeps them).
+export async function orgDocumentFiles(orgId) {
   const { rows } = await query(
     'SELECT storage_path FROM organisation_documents WHERE organisation_id = $1',
     [orgId],
   );
-  for (const r of rows) await fs.unlink(r.storage_path).catch(() => {});
+  return { orgId, paths: rows.map((r) => r.storage_path) };
+}
+
+export async function removeOrgFiles({ orgId, paths }) {
+  for (const p of paths) await fs.unlink(p).catch(() => {});
   await fs.rmdir(path.join(ORG_ROOT, orgId)).catch(() => {});
 }

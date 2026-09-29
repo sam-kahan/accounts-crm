@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, formatDate, ORG_TYPE_LABEL } from '../api';
+import { api, formatDate, ORG_TYPE_LABEL, plural } from '../api';
 import Modal from '../components/Modal.jsx';
 import { FIGURES, blank, mergeProfile, fillStandard } from '../procedureMerge.js';
 
@@ -47,7 +47,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   // Changing anything that sets a date un-ticks "checked against their
   // procedure": what was checked is no longer what is saved.
   const set = (k, v) => setForm((f) => {
-    const procedural = FIGURES.includes(k) || k === 'type' || k === 'procedure_ref';
+    const procedural = FIGURES.includes(k) || k === 'type' || k === 'procedure_ref' || k === 'ombudsman_id';
     if (procedural && String(f[k] ?? '') !== String(v ?? '')) f = { ...f, verified: false };
     if (!FIGURES.includes(k)) return { ...f, [k]: v };
     const evidence = { ...(f.procedure_evidence || {}) };
@@ -180,11 +180,13 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       procedure_evidence: form.procedure_evidence || {},
       procedure_sources: form.procedure_sources || {},
       researched_now: Boolean(form.researched_now),
-      // Typing any timescale in by hand makes it a procedure someone entered.
+      // Typing a timescale of THEIRS in by hand makes it a procedure someone
+      // entered; the standard figures the form shows for blanks never do.
       research_status:
-        form.research_status === 'none' &&
-        [form.ack_days, form.stage1_response_days, form.stage2_response_days, form.procedure_ref]
-          .some((x) => x !== '' && x !== null && x !== undefined)
+        form.research_status === 'none' && (
+          !blank(form.procedure_ref) ||
+          ['ack_days', 'stage1_response_days', 'stage2_response_days', 'ombudsman_after_weeks', 'ombudsman_referral_months']
+            .some((k) => !blank(form[k]) && form.procedure_sources?.[k] !== 'standard'))
           ? 'manual'
           : form.research_status,
       verified: Boolean(form.verified),
@@ -495,7 +497,7 @@ export default function Organisations() {
     const n = Number(o.complaint_count || 0);
     if (!confirm(
       `Delete ${o.name}?` +
-        (n ? `\n\n${n} complaint(s) against it will fall back to general timescales.` : ''),
+        (n ? `\n\n${plural(n, 'complaint')} against it will fall back to the standard timescales (each date that moves is noted on its timeline).` : ''),
     )) return;
     try {
       await api.organisations.remove(o.id);
@@ -583,7 +585,7 @@ export default function Organisations() {
             setEditing(null);
             setNote(
               saved?.recalculated
-                ? `Saved. ${saved.recalculated} open complaint(s) against them were re-dated from this procedure. Any date that moved is noted on its timeline, and each AI review is being refreshed.`
+                ? `Saved. ${saved.recalculated === 1 ? '1 open complaint against them has' : `${saved.recalculated} open complaints against them have`} new dates from this procedure: each change is noted on its timeline, and its AI review is being refreshed.`
                 : 'Saved.',
             );
             load();

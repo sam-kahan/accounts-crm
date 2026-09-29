@@ -76,19 +76,27 @@ export async function recomputeLooseParties(types, { by, source }) {
       WHERE c.state = 'open' AND p.state = 'open' AND p.organisation_id IS NULL AND ($1::text[] IS NULL OR p.org_type = ANY($1::text[]))`,
     [types],
   )).rows;
+  let moved = 0;
   for (const p of rows) {
     const after = await recomputePartyDeadlines(p.id);
     if (after && (p.ombudsman_deadline || null) !== (after.ombudsman_deadline || null)) {
+      moved += 1;
       await query(
         `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
         [p.complaint_id, p.id, todayISO(), `${p.org_name}: refer-by date ${readable(p.ombudsman_deadline) || '(none)'} → ${readable(after.ombudsman_deadline) || '(none)'} (from ${source}).`, by],
       );
     }
   }
-  return rows.length;
+  return moved;
 }
 
-export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)', reviewAll = true, source: sourceOverride = null } = {}) {
+// What the stage's due date is called in a note.
+const dueLabel = (stage) => (stage === 'stage_2' ? 'Stage 2 response due' : stage === 'stage_1' ? 'Stage 1 outcome due' : 'response due');
+
+// `partyIds`: further-organisation tracks to re-date as well (an organisation
+// deleted: its parties are no longer found by its id). Returns how many
+// complaints' dates actually moved.
+export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)', reviewAll = true, source: sourceOverride = null, partyIds = [] } = {}) {
   const { rows } = await query(
     `SELECT id, response_due, ombudsman_deadline, stage FROM complaints
       WHERE state = 'open' AND (organisation_id = $1 OR id = ANY($2::uuid[]))`,
@@ -103,7 +111,7 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
     const after = await recomputeDeadlines(r.id);
     if (!after) continue; // removed (merged or deleted) since the list was read
     const moves = [];
-    const label = r.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
+    const label = dueLabel(r.stage);
     if ((r.response_due || null) !== (after.response_due || null)) {
       moves.push(`${label} ${readable(r.response_due) || '(none)'} → ${readable(after.response_due) || '(none)'}`);
     }
@@ -121,19 +129,19 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
   }
   // The same organisation as a further party on other complaints (LCS on a
   // British Gas complaint): its track there follows its procedure too.
-  const parties = orgId
+  const parties = orgId || partyIds.length
     ? (await query(
       `SELECT p.id, p.complaint_id, p.org_name, p.response_due, p.ombudsman_deadline, p.stage
          FROM complaint_parties p JOIN complaints c ON c.id = p.complaint_id
-        WHERE c.state = 'open' AND p.state = 'open' AND p.organisation_id = $1`,
-      [orgId],
+        WHERE c.state = 'open' AND p.state = 'open' AND (p.organisation_id = $1 OR p.id = ANY($2::uuid[]))`,
+      [orgId, partyIds],
     )).rows
     : [];
   for (const p of parties) {
     const after = await recomputePartyDeadlines(p.id);
     if (!after) continue;
     const moves = [];
-    const label = p.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
+    const label = dueLabel(p.stage);
     if ((p.response_due || null) !== (after.response_due || null)) {
       moves.push(`${label} ${readable(p.response_due) || '(none)'} → ${readable(after.response_due) || '(none)'}`);
     }
@@ -141,6 +149,7 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
       moves.push(`refer-by date ${readable(p.ombudsman_deadline) || '(none)'} → ${readable(after.ombudsman_deadline) || '(none)'}`);
     }
     if (moves.length) {
+      changed += 1;
       await query(
         `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
          VALUES ($1,$2,$3,'note',$4,$5)`,
@@ -149,5 +158,5 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
     }
     if (moves.length || reviewAll) scheduleReview(p.complaint_id);
   }
-  return rows.length + parties.length;
+  return changed;
 }

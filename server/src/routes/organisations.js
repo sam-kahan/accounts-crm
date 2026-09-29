@@ -5,7 +5,8 @@ import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js
 import { config } from '../config.js';
 import { ruleFor, ombudsmanUrlFor } from '../services/complaintRules.js';
 import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
-import { recomputeForOrganisation, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
+import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
+import { procedureChanged, statesOwnProcedure } from '../services/orgProcedure.js';
 import {
   orgDocumentUpload,
   procedureMemoryUpload,
@@ -13,7 +14,8 @@ import {
   saveOrgDocument,
   getOrgDocument,
   deleteOrgDocument,
-  removeOrgDocumentFiles,
+  orgDocumentFiles,
+  removeOrgFiles,
 } from '../services/attachments.js';
 
 const router = Router();
@@ -184,7 +186,14 @@ router.post(
        RETURNING ${COLS}`,
       values({ ...p, name, type, location, procedure_evidence: p.evidence }),
     );
-    res.status(201).json(rows[0]);
+    // Each figure it found is marked as researched, so it is described as
+    // their published information (and research may later update it).
+    const found = Object.fromEntries(
+      ['ack_days', 'stage1_response_days', 'stage2_response_days', 'stage1_clock', 'ombudsman_name', 'ombudsman_url',
+        'ombudsman_referral_months', 'referral_from', 'ombudsman_after_weeks']
+        .filter((k) => p[k] !== null && p[k] !== undefined && p[k] !== '').map((k) => [k, 'research']),
+    );
+    res.status(201).json(await saveSources(rows[0], { procedure_sources: found }));
   }),
 );
 
@@ -228,7 +237,8 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
-    const status = d.research_status || 'none';
+    // Standard figures alone are not a procedure someone entered.
+    const status = d.research_status === 'manual' && !statesOwnProcedure(d) ? 'none' : d.research_status || 'none';
     const { rows } = await query(
       `INSERT INTO organisations
         (name, type, location, complaints_email, complaints_url, phone,
@@ -248,18 +258,30 @@ router.post(
   }),
 );
 
-// Nothing that sets a date changed (compared with the row as it was).
-const PROC_SAME = `(type IS NOT DISTINCT FROM $3 AND ombudsman_name IS NOT DISTINCT FROM $8
-  AND ombudsman_url IS NOT DISTINCT FROM $9 AND ombudsman_referral_months IS NOT DISTINCT FROM $10
-  AND stage1_response_days IS NOT DISTINCT FROM $11 AND stage2_response_days IS NOT DISTINCT FROM $12
-  AND ack_days IS NOT DISTINCT FROM $13 AND procedure_ref IS NOT DISTINCT FROM $14
-  AND stage1_clock IS NOT DISTINCT FROM $15 AND ombudsman_after_weeks IS NOT DISTINCT FROM $16
-  AND referral_from IS NOT DISTINCT FROM $17)`;
-
 router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
+    const old = (await query('SELECT * FROM organisations WHERE id = $1', [req.params.id])).rows[0];
+    if (!old) throw new HttpError(404, 'Organisation not found');
+    // Did anything that sets a date change? (orgProcedure.js: a figure only
+    // showing the standard is not a change, a new scheme is.)
+    const [, type, , , , , ombudsman_name, ombudsman_url, ombudsman_referral_months, stage1_response_days,
+      stage2_response_days, ack_days, procedure_ref, stage1_clock, ombudsman_after_weeks, referral_from] = values(d);
+    const changed = procedureChanged(old, {
+      type, ombudsman_name, ombudsman_url, ombudsman_referral_months, stage1_response_days, stage2_response_days,
+      ack_days, procedure_ref, stage1_clock, ombudsman_after_weeks, referral_from,
+      procedure_sources: d.procedure_sources, ombudsman_id: d.ombudsman_id,
+    });
+    // "Checked by X on date" stays X's when nothing procedural changed (a
+    // phone number, a note), is stamped afresh when it did, and is cleared
+    // when saved without the tick.
+    const keepCheck = d.verified && old.verified_at && !changed;
+    const verifiedAt = !d.verified ? null : keepCheck ? old.verified_at : new Date();
+    const verifiedBy = !d.verified ? null : keepCheck ? old.verified_by : who(req);
+    // Standard figures alone are not a procedure someone entered.
+    const status = d.research_status === 'manual' && (old.research_status || 'none') === 'none' && !statesOwnProcedure(d)
+      ? 'none' : d.research_status || null;
     const { rows } = await query(
       `UPDATE organisations SET
         name=$2, type=$3, location=$4, complaints_email=$5, complaints_url=$6, phone=$7,
@@ -270,23 +292,15 @@ router.put(
         procedure_evidence=$22, notes=$23,
         research_status=COALESCE($24, research_status),
         -- researched_at says their WEBSITE was researched, so only research
-        -- stamps it (reading their document is not research — it used to be
-        -- stamped too, and then research never filled the gaps by itself).
-        -- A plain edit re-sends the same status and must not move the date.
+        -- stamps it (reading their document is not research). A plain edit
+        -- re-sends the same status and must not move the date.
         researched_at=CASE WHEN $24 = 'researched' AND $24 IS DISTINCT FROM research_status
                            THEN now()
                            WHEN $24 = 'researched' AND researched_at IS NULL THEN now()
                            ELSE researched_at END,
-        -- "Checked by X on date" stays X's when the procedure itself didn't
-        -- change (a notes edit), and is stamped afresh when it did.
-        verified_at=CASE WHEN NOT $25 THEN NULL
-                         WHEN verified_at IS NOT NULL AND ${PROC_SAME} THEN verified_at
-                         ELSE now() END,
-        verified_by=CASE WHEN NOT $25 THEN NULL
-                         WHEN verified_at IS NOT NULL AND ${PROC_SAME} THEN verified_by
-                         ELSE $26 END
+        verified_at=$25, verified_by=$26
        WHERE id=$1 RETURNING ${COLS}`,
-      [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
+      [req.params.id, ...values(d), status, verifiedAt, verifiedBy],
     );
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
     rows[0] = await saveScheme(await saveSources(rows[0], d), d);
@@ -294,8 +308,10 @@ router.put(
     // the defaults for anything the procedure doesn't state).
     await query('UPDATE complaints SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);
     await query('UPDATE complaint_parties SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);
-    // Its open complaints are re-dated from the procedure as it now stands.
-    const recalculated = await recomputeForOrganisation(req.params.id);
+    // Its open complaints are re-dated from the procedure as it now stands;
+    // their AI reviews are refreshed only when the procedure changed (a
+    // phone number or a note isn't worth a review each).
+    const recalculated = await recomputeForOrganisation(req.params.id, [], { reviewAll: changed });
     res.json({ ...rows[0], recalculated });
   }),
 );
@@ -314,13 +330,21 @@ router.delete(
     const linkedParties = (
       await query(`SELECT id FROM complaint_parties WHERE organisation_id = $1 AND state = 'open'`, [req.params.id])
     ).rows.map((r) => r.id);
-    await removeOrgDocumentFiles(req.params.id);
+    // Its document files, read before the row (and their records) go, are
+    // removed only once the delete has succeeded.
+    const files = await orgDocumentFiles(req.params.id);
     const { rowCount } = await query('DELETE FROM organisations WHERE id = $1', [
       req.params.id,
     ]);
     if (!rowCount) throw new HttpError(404, 'Organisation not found');
-    if (linked.length) await recomputeForOrganisation(req.params.id, linked);
-    for (const id of linkedParties) await recomputePartyDeadlines(id);
+    await removeOrgFiles(files);
+    // Re-dated by the type's standard now, each moved date written on the
+    // complaint's timeline, the further-party tracks included.
+    if (linked.length || linkedParties.length) {
+      await recomputeForOrganisation(req.params.id, linked, {
+        by: 'Automatic (organisation deleted)', source: 'the standard timescales (their organisation was deleted)', partyIds: linkedParties,
+      });
+    }
     res.status(204).end();
   }),
 );

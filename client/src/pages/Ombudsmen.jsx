@@ -141,7 +141,7 @@ export default function Ombudsmen() {
           onClose={() => setEditing(null)}
           onSaved={(r) => {
             setEditing(null);
-            setMsg(`Saved ${r.name}.${r.recalculated ? ` The deadlines of ${r.recalculated === 1 ? '1 open complaint were' : `${r.recalculated} open complaints were`} worked out again.` : ''}`);
+            setMsg(`Saved ${r.name}.${r.recalculated ? ` ${r.recalculated === 1 ? '1 open complaint has' : `${r.recalculated} open complaints have`} new dates; each change is noted on its timeline.` : ''}`);
             load();
           }}
         />
@@ -161,7 +161,13 @@ function EditScheme({ scheme, onClose, onSaved }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  // Changing anything un-ticks "checked": what was checked against their
+  // website is no longer what will be saved, and an unchecked scheme never
+  // opens a referral (a wrong wait typed in must not count as checked).
+  const set = (k) => (e) => {
+    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    setF((cur) => ({ ...cur, [k]: v, ...(k !== 'verified' && String(cur[k] ?? '') !== String(v ?? '') ? { verified: false } : {}) }));
+  };
   const num = (v) => (v === '' || v === null ? null : Number(v));
   async function save(e) {
     e.preventDefault();
