@@ -93,7 +93,7 @@ test('"Don\'t chase" / "Nothing to send": the email is the one kept ready', () =
   assert.equal(guardReview({ headline: "Don't chase yet.", email: { body: 'x' } }, { anyOverdue: false, today: '2026-09-29' }).email_now, false);
 });
 
-import { isStage2Request } from '../src/services/complaintRules.js';
+import { isStage2Request, missedStage2Requests } from '../src/services/complaintRules.js';
 
 test('an email of ours that asks for Stage 2 is read as the request; a chaser that threatens it is not', () => {
   assert.equal(isStage2Request({ subject: 'Re: 2186700 - Our complaint of 17 August 2026 (ref GC-C-BLV2WK) - request for Stage 2 review' }), true);
@@ -263,4 +263,55 @@ test('chaseHeldUntil: overdue but just written to is "wait", by the same rule as
   assert.equal(chaseHeldUntil({ lastSentOn: null, today: '2026-09-29' }), null);
   // Greenco wrote last and their own deadline is later: held to that.
   assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', nextDue: { date: '2026-10-09' }, today: '2026-10-07' }), '2026-10-09');
+});
+
+test('the Stage 2 request is recognised however it is politely worded', () => {
+  const yes = [
+    'We have not received your Stage 1 response, which was due on 23 July 2026. We therefore ask that you now escalate our complaint to Stage 2 of your complaints procedure.',
+    'As we have had no response, we would like our complaint to be escalated to Stage 2 of your complaints procedure.',
+    'Please treat this email as our formal request for a Stage 2 review.',
+    'We are now requesting that the complaint is escalated to Stage 2.',
+    'We now wish to escalate this complaint to Stage 2.',
+    'Please escalate this complaint to stage two of your procedure and confirm the date by which we can expect your response.',
+    'We request that our complaint be escalated to the second stage of your complaints procedure.',
+    'Please accept this email as our request to escalate the complaint to Stage 2.',
+    'Given the delay, we are escalating our complaint to Stage 2 of your complaints procedure.',
+    'We ask that this is now considered at Stage 2 of your complaints process.',
+    'Could you please escalate our complaint to Stage 2.',
+    'We would be grateful if you could escalate our complaint to Stage 2.',
+    'Kindly escalate this complaint to Stage 2.',
+    'We now formally request a Stage 2 review of our complaint.',
+    'We are writing to request that our complaint is escalated to Stage 2.',
+    'We are writing to ask for our complaint to be reviewed at Stage 2.',
+  ];
+  for (const b of yes) assert.equal(isStage2Request({ subject: 'x', body: b }), true, b);
+  const no = [
+    'Failing a response by 6 October, we would like our complaint to be escalated to Stage 2.',
+    'Please escalate our complaint to Stage 2 if you do not reply by Friday.',
+    'We asked for a Stage 2 review on 1 September and have heard nothing.',
+    'Please confirm you received our request to escalate the complaint to Stage 2.',
+    'Please let us have your Stage 2 response by 5 October.',
+  ];
+  for (const b of no) assert.equal(isStage2Request({ subject: 'x', body: b }), false, b);
+});
+
+test('missedStage2Requests: a request we sent that left the complaint at Stage 1', () => {
+  const main = { party_id: null, org_name: 'Liverpool City Council', stage: 'stage_1', state: 'open', raised_on: '2026-07-09' };
+  const ask = { id: 'e1', subject: 'Request for Stage 2 review', body: 'Please escalate our complaint to Stage 2.', sent_on: '2026-09-29', party_id: null, from_here: true };
+  const [m] = missedStage2Requests([main], [ask]);
+  assert.equal(m.email_id, 'e1');
+  assert.equal(m.sent_on, '2026-09-29');
+  assert.equal(m.certain, true);
+  // Already moved on, or a person put it back to Stage 1 afterwards: nothing.
+  assert.deepEqual(missedStage2Requests([{ ...main, stage: 'stage_2' }], [ask]), []);
+  assert.deepEqual(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'Details corrected: stage: Stage 2 → Stage 1' }]), []);
+  // Only mentions it (a threat): offered for a person to decide, never certain.
+  const threat = { ...ask, id: 'e2', subject: 'Chasing', body: 'If we do not hear by Friday we will escalate our complaint to Stage 2.' };
+  assert.equal(missedStage2Requests([main], [threat])[0].certain, false);
+  // A chaser that doesn't mention Stage 2: nothing.
+  assert.deepEqual(missedStage2Requests([main], [{ ...ask, subject: 'Chasing', body: 'Please reply by Friday.' }]), []);
+  // Two organisations and not sent from here with none named: a person says whose.
+  const cder = { party_id: 'p1', org_name: 'CDER Group', stage: 'stage_1', state: 'open', raised_on: '2026-08-01' };
+  assert.deepEqual(missedStage2Requests([main, cder], [{ ...ask, from_here: false }]), []);
+  assert.equal(missedStage2Requests([main, cder], [{ ...ask, party_id: 'p1' }])[0].org_name, 'CDER Group');
 });

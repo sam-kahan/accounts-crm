@@ -249,7 +249,12 @@ export function effectiveRule(org, type) {
     ombudsmanAfterWeeks: null,
     ...ruleFor(type || org?.type),
   };
-  const rule = { ...base, procedureRef: null, defaulted: Object.keys(ORG_FIELDS), kind: KIND_PHRASE[type || org?.type] || KIND_PHRASE.other };
+  const rule = {
+    ...base, procedureRef: null, defaulted: Object.keys(ORG_FIELDS), kind: KIND_PHRASE[type || org?.type] || KIND_PHRASE.other,
+    // Nobody has found out their procedure, so a default can't be said to
+    // be because "their procedure doesn't set one" (basisOf).
+    unresearched: !procedureOnFile(org),
+  };
   if (!org) return rule;
   const defaulted = [];
   for (const [key, col] of Object.entries(ORG_FIELDS)) {
@@ -329,7 +334,9 @@ export function ukDate(iso) {
 // general default for this kind of body when their own hasn't been confirmed.
 function basisOf(rule, key) {
   if (rule.defaulted?.includes(key)) {
-    return `the standard for ${rule.kind || 'this kind of organisation'} (their procedure doesn't set one)`;
+    return rule.unresearched
+      ? `the standard for ${rule.kind || 'this kind of organisation'} (their own procedure hasn't been researched yet)`
+      : `the standard for ${rule.kind || 'this kind of organisation'} (their procedure doesn't set one)`;
   }
   if (rule.sourceOf?.[key] === 'research') return 'their published complaints information (researched)';
   return rule.procedureRef || 'their procedure';
@@ -644,46 +651,123 @@ export function normaliseNextAction(a) {
 //            complaint to Stage 2", "we are escalating this to Stage 2"
 // ---------------------------------------------------------------------------
 const STAGE2 = String.raw`stage\s*(?:2|two)\b`;
-// What is asked for must BE the Stage 2 review: the complaint escalated or
-// passed on to it, or "a Stage 2 review" itself. Asking for their Stage 2
-// RESPONSE is a chaser at Stage 2, not the request.
-const REVIEW = String.raw`(?:${STAGE2}(?:\s*\(?\s*(?:internal\s+)?review\)?|\s+escalation)?|independent\s+(?:internal\s+)?review|second[-\s]stage(?:\s+review)?)`;
+// The subject alone can say it: "… request for Stage 2 review", "Stage 2
+// request", "Escalation to Stage 2" — unless it is a chaser.
 const SUBJECT_STAGE2 = new RegExp(
   String.raw`\brequest(?:ing)?\s+(?:for\s+)?(?:an?\s+)?${STAGE2}\s*(?:review|escalation)\b` +
   String.raw`|\b${STAGE2}\s*(?:review\s+)?request\b|\bescalat(?:e|ion|ing)\s+to\s+${STAGE2}`,
   'i',
 );
-// In the body, one sentence that asks, and asks for Stage 2 itself.
-const ASKS_FOR_STAGE2 = new RegExp(
-  String.raw`\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request)|please)\b.{0,120}?` +
-    String.raw`\b(?:escalat\w*|pass(?:ed)?|refer(?:red)?|move[ds]?|progress(?:ed)?|take[n]?)\b.{0,80}?\b(?:to|for|into)\s+(?:an?\s+|the\s+|your\s+)?(?:\w+\s+){0,4}${REVIEW}` +
-  String.raw`|\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request)(?:\s+for)?|please\s+(?:arrange|carry\s+out|open|start))\s+(?:an?\s+|the\s+)?(?:\w+\s+){0,3}${REVIEW}` +
-  String.raw`|\bwe\s+(?:wish|would\s+like|want)\s+to\s+escalate\b.{0,80}?\bto\s+(?:\w+\s+){0,3}${REVIEW}` +
-  String.raw`|\bwe\s+are\s+(?:now\s+)?escalating\b.{0,80}?\bto\s+(?:\w+\s+){0,3}${REVIEW}` +
-  String.raw`|\bthis\s+is\s+(?:our|a)\s+(?:formal\s+)?request\s+(?:for|to\s+escalate\b.{0,60}?\bto)\s+(?:an?\s+|the\s+)?(?:\w+\s+){0,3}${REVIEW}`,
+const CHASER_SUBJECT = /\b(?:chas(?:e|er|ing)|reminder|response|reply|follow[-\s]?up)\b/i;
+
+// In the body, a sentence is the request when it has all three, in order:
+//   1. an ask made now, by us: "we ask / request / are requesting / would
+//      like / wish", "please", "kindly", "could you", "we would be grateful",
+//      "we are writing to ask", "we are escalating", "as our request";
+//   2. what is asked: escalated / passed / referred / moved / progressed /
+//      reviewed / considered / a review / a request;
+//   3. Stage 2 itself ("Stage 2", "stage two", "the second stage", "an
+//      independent review") — never their Stage 2 RESPONSE, which is a
+//      chaser at Stage 2.
+// And it is not the request when:
+//   - a condition or a future stands before the ask ("If …", "Failing …",
+//     "Before …", "Should you …", "we will …");
+//   - the ask itself is negative ("please do not escalate", "is not needed");
+//   - a negative condition follows ("… to Stage 2 if you do not reply");
+//   - it reports an earlier request ("we asked for …", "confirm you received
+//     our request to …").
+// A reason before the ask is only a reason: "As you have not responded, we
+// request that it is escalated to Stage 2" IS the request.
+const ASK = new RegExp(String.raw`\b(?:` + [
+  String.raw`we\s+(?:(?:therefore|now|hereby|formally|also|would\s+now|must\s+now)\s+)*(?:ask|request|are\s+(?:now\s+)?(?:requesting|asking)|would\s+like|wish|want|are\s+(?:now\s+)?escalating|are\s+writing\s+to\s+(?:ask|request))`,
+  String.raw`we\s+would\s+be\s+grateful`,
+  String.raw`please`, String.raw`kindly`, String.raw`could\s+you`, String.raw`can\s+you`,
+  String.raw`(?:this\s+is|as)\s+(?:our|a)\s+(?:formal\s+)?request`,
+].join('|') + String.raw`)\b`, 'i');
+const ACTION = /\b(?:escalat\w*|pass(?:ed|ing)?|refer(?:red|ring)?|mov(?:e|ed|ing)|progress(?:ed|ing)?|review(?:ed|ing)?|consider(?:ed|ing)?|request|take[n]?|look(?:ed)?\s+at)\b/i;
+const TARGET = new RegExp(
+  String.raw`\b(?:${STAGE2}|second[-\s]stage|independent\s+(?:internal\s+)?review)(?!\s*(?:\(\s*)?(?:response|reply|outcome|decision|answer|letter|timescale|deadline|findings)\b)`,
   'i',
 );
-// A sentence that only threatens it, conditions it or turns it down is not
-// the request.
-const NOT_NOW = /\b(?:if|unless|otherwise|will|shall|should|may|might|could|would\s+have\s+to|intend|failing|before|not|no|never|yet)\b|n['’]t\b/i;
-// Before the ask, only a condition or a future makes it not the request. A
-// reason stays a reason: "As you have not responded … we request that it is
-// escalated to Stage 2" IS the request (a combined chaser and request always
-// says what they have not done), so "not", "no" and "yet" are only read in
-// the ask itself ("please do not escalate…").
-const CONDITION_BEFORE = /\b(?:if|unless|otherwise|failing|will|shall|may|might|could|would\s+have\s+to|intend|before|should\s+(?:you|we|they|this|it|the|your|there))\b/i;
-const CHASER_SUBJECT = /\b(?:chas(?:e|er|ing)|reminder|response|reply|follow[-\s]?up)\b/i;
+const CONDITION_BEFORE = /\b(?:if|unless|otherwise|failing|before|until|will|shall|intend|going\s+to|should\s+(?:you|we|they|this|it|the|your|there|no))\b/i;
+const NEGATIVE = /\b(?:not|no|never)\b|n['’]t\b/i;
+const REPORTS_EARLIER = /\bwe\s+(?:have\s+)?(?:already\s+)?(?:asked|requested)\b|\b(?:received|receipt\s+of|acknowledg\w*|following|further\s+to|regarding|about|chas\w*)\s+(?:of\s+)?our\s+(?:earlier\s+|previous\s+|last\s+)?(?:request|email|letter)\b/i;
+
+function asksForStage2(sentence) {
+  // "grateful if you could …" is politeness, not a condition.
+  const s = sentence.replace(/\bif\s+you\s+(?:could|would|can)\b/gi, 'you could');
+  const ask = ASK.exec(s);
+  if (!ask) return false;
+  const afterAsk = s.slice(ask.index);
+  const target = TARGET.exec(afterAsk);
+  if (!target) return false;
+  const span = afterAsk.slice(0, target.index + target[0].length); // the ask up to Stage 2
+  if (!ACTION.test(span)) return false;
+  if (CONDITION_BEFORE.test(s.slice(0, ask.index)) || CONDITION_BEFORE.test(span)) return false;
+  if (NEGATIVE.test(span)) return false;
+  if (REPORTS_EARLIER.test(s)) return false;
+  const rest = afterAsk.slice(target.index + target[0].length);
+  // "… a second stage review is not needed": turned down, not asked for.
+  if (/^\W*(?:\w+\s+){0,2}(?:is|are|was|would\s+be)\s+(?:not|n['’]t)\b|^\W*(?:\w+\s+){0,2}(?:isn|aren|wasn)['’]t\b/i.test(rest)) return false;
+  if (/\b(?:if|unless)\b.{0,60}(?:\b(?:not|no|fail\w*|still)\b|n['’]t\b)|\botherwise\b|\bfailing\b/i.test(rest)) return false;
+  return true;
+}
 
 export function isStage2Request(email) {
   const subject = String(email?.subject || '');
   const body = String(email?.body || '');
-  if (SUBJECT_STAGE2.test(subject) && !CHASER_SUBJECT.test(subject) && !NOT_NOW.test(subject)) return true;
+  if (SUBJECT_STAGE2.test(subject) && !CHASER_SUBJECT.test(subject) && !/\b(?:if|unless|not|no)\b/i.test(subject)) return true;
   // Quoted history below the reply is theirs or older: only our own words.
   const own = body.split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
-  return own
-    .split(/(?<=[.!?])\s+|\n+/)
-    .some((s) => {
-      const m = ASKS_FOR_STAGE2.exec(s);
-      return Boolean(m) && !NOT_NOW.test(s.slice(m.index)) && !CONDITION_BEFORE.test(s.slice(0, m.index));
+  // A semicolon starts a clause of its own ("… a Stage 1 response; a Stage 2
+  // review is not needed"), so the ask and Stage 2 must be in one clause.
+  return own.split(/(?<=[.!?;])\s+|\n+/).some(asksForStage2);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 requests of ours the complaint hasn't caught up with: an email we
+// sent asks for Stage 2, yet the organisation it went to is still at Stage 1
+// (sent before the words were recognised, or from Outlook with nothing
+// recorded). Pure; the page prompts with it and start-up acts on the certain
+// ones sent from here.
+//   tracks: [{ party_id (null = main), org_name, stage, state, raised_on }]
+//   emails: our emails, [{ id, subject, body, sent_on, party_id, from_here, our_step }]
+//   events: [{ type, party_id, event_date, note }]
+// Returns one per track (its latest such email): { email_id, subject,
+// sent_on, party_id, org_name, certain, from_here }. `certain`: the words
+// (or the email analysis) say it is the request; otherwise it only mentions
+// escalating to Stage 2 and a person decides.
+// ---------------------------------------------------------------------------
+const MENTIONS_STAGE2 = new RegExp(
+  String.raw`\bescalat\w*\b.{0,80}\b(?:${STAGE2}|second[-\s]stage)(?!\s*(?:response|reply|outcome|decision|answer)\b)` +
+  String.raw`|\b(?:${STAGE2}|second[-\s]stage)\s+(?:review|escalation|request)\b`,
+  'i',
+);
+export function missedStage2Requests(tracks, emails, events = []) {
+  const found = new Map();
+  const sorted = [...emails].filter((e) => e.sent_on).sort((a, b) => a.sent_on.localeCompare(b.sent_on));
+  for (const e of sorted) {
+    const certain = e.our_step === 'stage2_request' || isStage2Request(e);
+    const own = String(e.body || '').split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
+    if (!certain && !MENTIONS_STAGE2.test(`${e.subject || ''}\n${own}`)) continue;
+    // Whose track: the one it was sent for; with one organisation, that one;
+    // sent from here with none named, the main one. Otherwise a person says.
+    const t = e.party_id ? tracks.find((x) => x.party_id === e.party_id)
+      : tracks.length === 1 || e.from_here ? tracks.find((x) => !x.party_id) : null;
+    if (!t || !trackOpen(t) || t.stage !== 'stage_1' || (t.raised_on && e.sent_on < t.raised_on)) continue;
+    // A person put it back to Stage 1 (or recorded an escalation) after it
+    // was sent: their decision stands.
+    const later = events.some((ev) => (ev.party_id || null) === (t.party_id || null) && ev.event_date >= e.sent_on &&
+      (ev.type === 'escalated' || /^Details corrected:.*\bstage\b/i.test(ev.note || '')));
+    if (later) continue;
+    // The latest per organisation, but a certain request is never replaced
+    // by a later email that only mentions Stage 2.
+    const prev = found.get(t.party_id || 'main');
+    if (prev?.certain && !certain) continue;
+    found.set(t.party_id || 'main', {
+      email_id: e.id, subject: e.subject || '', sent_on: e.sent_on, party_id: t.party_id || null,
+      org_name: t.org_name, certain, from_here: Boolean(e.from_here),
     });
+  }
+  return [...found.values()];
 }

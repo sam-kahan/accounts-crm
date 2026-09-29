@@ -183,9 +183,14 @@ test('deriveStatus: unacknowledged past the deadline needs chasing', () => {
 
 test('deriveStatus: a timescale that is only a default says so', () => {
   const c = complaint({ raised_on: '2020-01-06', stage_started_on: '2020-01-06', response_due: '2099-01-01' });
-  const d = deriveStatus(c, effectiveRule(null, 'council'));
+  // Researched, and it states no acknowledgement time: "doesn't set one".
+  const d = deriveStatus(c, effectiveRule({ research_status: 'researched' }, 'council'));
   assert.equal(d.status, 'ack_overdue');
   assert.match(d.nextAction, /the standard for a council \(their procedure doesn't set one\)/);
+  // Nobody has looked: never claimed that their procedure doesn't set one.
+  const u = deriveStatus(c, effectiveRule(null, 'council'));
+  assert.match(u.nextAction, /the standard for a council \(their own procedure hasn't been researched yet\)/);
+  assert.doesNotMatch(u.nextAction, /doesn't set one/);
 });
 
 test('deriveStatus: with the ombudsman is not chased as overdue', () => {

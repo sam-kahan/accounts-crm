@@ -194,6 +194,8 @@ export default function ComplaintDetail() {
   const [supplierFor, setSupplierFor] = useState(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
+  // Moving an organisation to Stage 2 from the request we already sent.
+  const [catchingUp, setCatchingUp] = useState(null);
 
   // Timers started by a button (watching a search or a re-check finish) are
   // stopped when the page is left or another complaint is opened, so one
@@ -823,6 +825,41 @@ export default function ComplaintDetail() {
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+      {/* We sent the Stage 2 request but the complaint is still at Stage 1
+          (sent before its words were recognised, or from Outlook). */}
+      {(c.stage2_missed || []).map((m) => (
+        <div key={m.party_id || 'main'} className="inline-note warn" style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }} role="alert">
+          <span>
+            <strong>Still at Stage 1{(c.parties || []).length ? ` for ${m.org_name}` : ''}, but your email of {formatDate(m.sent_on)}</strong>{' '}
+            “{m.subject || '(no subject)'}” {m.certain ? 'asks for Stage 2.' : 'mentions escalating to Stage 2. If it asked for it,'}{' '}
+            Move it to Stage 2 from that date so the deadlines and next steps follow.
+          </span>
+          <button className="btn-primary btn-sm" disabled={catchingUp !== null}
+            onClick={async () => {
+              if (!confirm(`Move ${m.org_name} to Stage 2 from ${formatDate(m.sent_on)}? Their Stage 2 deadline runs from that day.`)) return;
+              setCatchingUp(m.party_id || 'main');
+              try {
+                await api.complaints.escalate(id, m.sent_on, m.party_id);
+                await load();
+                setMsg(`Moved to Stage 2 from ${formatDate(m.sent_on)}. The next steps will update in a couple of minutes.`);
+              } catch (e) { setMsg(e.message); } finally { setCatchingUp(null); }
+            }}>
+            {catchingUp === (m.party_id || 'main') ? 'Moving…' : `Move to Stage 2 from ${formatDate(m.sent_on)}`}
+          </button>
+        </div>
+      ))}
+      {/* The last re-check didn't finish (a restart) or failed: said on
+          opening the page, not only on the timeline, for three days or until
+          the next re-check. */}
+      {!msg && !recheckRunning && ['interrupted', 'failed'].includes(c.recheck_progress?.status) &&
+        Date.now() - new Date(c.recheck_progress.finished_at || c.recheck_progress.started_at).getTime() < 3 * 86400000 && (
+        <div className="inline-note warn" style={{ marginBottom: 16 }}>
+          {c.recheck_progress.status === 'failed'
+            ? <>The last re-check failed: {c.recheck_progress.error || 'no reason given'}. Nothing was changed.</>
+            : <>The last re-check was cut off by a server restart before it finished.</>}
+          {' '}Press <strong>Re-check &amp; update next steps</strong> to run it again.
+        </div>
+      )}
       {recheckRunning && (
         <div className="inline-note" style={{ marginBottom: 16 }} role="status">
           <strong>Re-checking:</strong> {c.recheck_progress.step || 'starting'}…

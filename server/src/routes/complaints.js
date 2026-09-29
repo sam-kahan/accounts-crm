@@ -6,7 +6,7 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf } from '../services/complaintRecheck.js';
@@ -1044,6 +1044,7 @@ router.get(
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const decorated = await decorate({ ...rows[0], recheck_progress: recheckProgressOf(rows[0]) });
+    decorated.stage2_missed = (await stage2MissedFor([rows[0].id])).get(rows[0].id) || [];
     const events = await listEvents(req.params.id);
     const emails = await listComplaintEmails(req.params.id);
     const attachments = await listAttachments(req.params.id);
@@ -1326,6 +1327,68 @@ async function stage2TrackFor(complaintId, to) {
   const domains = new Set(to.map((a) => String(a).toLowerCase().split('@')[1]).filter(Boolean));
   const hits = tracksOf(complaint, parties, orgs).filter((t) => t.domain && domains.has(t.domain));
   return hits.length === 1 && hits[0].row.stage === 'stage_1' ? { party: hits[0].party } : null;
+}
+
+// Stage 2 requests we sent that the complaint hasn't caught up with
+// (complaintRules.js#missedStage2Requests), for one complaint or several.
+async function stage2MissedFor(ids) {
+  if (!ids.length) return new Map();
+  const complaints = (await query(`SELECT id, org_name, stage, state, raised_on FROM complaints WHERE id = ANY($1::uuid[])`, [ids])).rows;
+  const parties = (await query(`SELECT id, complaint_id, org_name, stage, state, raised_on FROM complaint_parties WHERE complaint_id = ANY($1::uuid[])`, [ids])).rows;
+  const emails = (await query(
+    `SELECT id, complaint_id, subject, COALESCE(body_text, body_preview) AS body, party_id, direction = 'outbound' AS from_here,
+            analysis->>'our_step' AS our_step,
+            CASE WHEN analysis->>'sent_on' ~ '^\d{4}-\d{2}-\d{2}$' THEN analysis->>'sent_on'
+                 ELSE to_char((received_at AT TIME ZONE 'Europe/London')::date, 'YYYY-MM-DD') END AS sent_on
+       FROM complaint_emails
+      WHERE complaint_id = ANY($1::uuid[]) AND (direction = 'outbound' OR analysis->>'kind' = 'our_email')`,
+    [ids],
+  )).rows;
+  const events = (await query(
+    `SELECT complaint_id, type, party_id, to_char(event_date, 'YYYY-MM-DD') AS event_date, note FROM complaint_events
+      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%')`,
+    [ids],
+  )).rows;
+  const out = new Map();
+  for (const c of complaints) {
+    const tracks = [
+      { party_id: null, org_name: c.org_name, stage: c.stage, state: c.state, raised_on: c.raised_on },
+      ...parties.filter((p) => p.complaint_id === c.id).map((p) => ({ party_id: p.id, org_name: p.org_name, stage: p.stage, state: p.state, raised_on: p.raised_on })),
+    ];
+    out.set(c.id, missedStage2Requests(tracks, emails.filter((e) => e.complaint_id === c.id), events.filter((e) => e.complaint_id === c.id)));
+  }
+  return out;
+}
+
+// At start-up: a Stage 2 request sent FROM HERE that didn't move its
+// organisation on (sent before its words were recognised) does now, dated the
+// day it was sent — what Send does today. Only certain ones; anything else is
+// offered on the complaint page for a person to confirm.
+export async function escalateMissedStage2Requests() {
+  const ids = (await query(
+    `SELECT DISTINCT c.id FROM complaints c
+       LEFT JOIN complaint_parties p ON p.complaint_id = c.id
+      WHERE c.state = 'open' AND (c.stage = 'stage_1' OR p.stage = 'stage_1')`,
+  )).rows.map((r) => r.id);
+  let n = 0;
+  for (const [id, list] of await stage2MissedFor(ids)) {
+    for (const m of list.filter((x) => x.certain && x.from_here)) {
+      try {
+        await escalateTrack(id, m.party_id, m.sent_on, 'Automatic (Stage 2 request sent from here)');
+        await query(
+          `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+          [id, m.party_id, m.sent_on,
+            `Moved to Stage 2 from ${ukDate(m.sent_on)}: the email sent from here that day, "${m.subject}", asked for Stage 2, but it wasn't recognised as the request at the time. Use Edit details if this is wrong.`,
+            'Automatic (Stage 2 request sent from here)'],
+        );
+        scheduleReview(id);
+        n += 1;
+      } catch (err) {
+        console.error(`[complaints] Stage 2 catch-up for ${id}:`, err.message);
+      }
+    }
+  }
+  return n;
 }
 
 async function escalateTrack(complaintId, partyId, date, by) {

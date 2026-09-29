@@ -11,6 +11,7 @@ import {
   trackOpen,
   isStage2Request,
   procedureOnFile,
+  ukDate,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil } from './reviewGuard.js';
@@ -96,6 +97,11 @@ export async function decorateMany(rows) {
       if (!own?.needs_chasing) continue;
       const k = c.parties.length ? byTrack?.get(t.key) || {} : { lastSentOn: lastSent.get(r.id) || null, lastTheirsOn: lastTheirs.get(r.id) || null };
       own.chase_held_until = chaseHeldUntil({ lastSentOn: k.lastSentOn || null, lastTheirsOn: k.lastTheirsOn || null, nextDue: nextDueFromThem([own]) });
+      // The step worked out from the dates says the same as the review would:
+      // wait, not "chase in writing" the day after chasing.
+      if (own.chase_held_until) {
+        own.nextAction = `Nothing to send yet: you wrote to them on ${ukDate(k.lastSentOn)}. Wait for their reply until ${ukDate(own.chase_held_until)}.`;
+      }
     }
     for (const t of [c, ...c.parties]) t.chase_now = Boolean(t.needs_chasing && !t.chase_held_until);
     c.any_chase_now = [c, ...c.parties].some((t) => t.chase_now);

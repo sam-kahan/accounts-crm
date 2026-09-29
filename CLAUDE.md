@@ -739,6 +739,27 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — a Stage 2 request sent is never left at Stage 1
+- **`isStage2Request` rewritten** (`complaintRules.js#asksForStage2`): per
+  clause, an ask made now ("we would like", "please", "kindly", "could you",
+  "we are writing to request" …), an action (escalated / passed / reviewed /
+  considered …) and Stage 2 itself (never "your Stage 2 response"). Not when
+  a condition or future comes before or inside the ask, the ask is negative,
+  a negative condition follows ("… if you do not reply"), or it reports an
+  earlier request. The old pattern missed 12 of 18 ordinary wordings, so Send
+  left complaints at Stage 1 and the review drafted the request again.
+- **Catch-up** (`missedStage2Requests`, pure, tested): an email of ours that
+  asks for Stage 2 while its organisation is still at Stage 1 (and nobody
+  put it back since). Start-up escalates the certain ones sent from here,
+  dated the day sent, with a timeline note (`escalateMissedStage2Requests`);
+  the complaint page offers **Move to Stage 2 from <date>** for the rest
+  (`stage2_missed`: Outlook copies, or emails that only mention Stage 2).
+- The dates' next step says "Nothing to send yet: you wrote to them on …"
+  when chasing is held (`chase_held_until`), like the review; a default is
+  "their own procedure hasn't been researched yet" (not "doesn't set one")
+  when nobody has looked; a failed or cut-off re-check is shown on opening
+  the page for three days.
+
 ### 2026-09-29 — procedure-not-researched warning; re-check never stuck; Stage 2 button; "Need chasing" agrees with the next step
 - **A complaint against an organisation whose procedure hasn't been
   researched is flagged** (`complaintRules.js#procedureOnFile`: researched,

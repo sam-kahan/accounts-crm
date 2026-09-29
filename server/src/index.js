@@ -264,6 +264,12 @@ app.listen(config.port, () => {
     .then(({ settleInterruptedRechecks }) => settleInterruptedRechecks())
     .then((n) => n && console.log(`  Re-checks cut off by the restart: ${n}`))
     .catch((err) => console.error('  Interrupted re-checks:', err.message));
+  // A Stage 2 request sent from here before its words were recognised moves
+  // its organisation on now, dated the day it went (no AI).
+  import('./routes/complaints.js')
+    .then(({ escalateMissedStage2Requests }) => escalateMissedStage2Requests())
+    .then((n) => n && console.log(`  Stage 2 requests caught up: ${n}`))
+    .catch((err) => console.error('  Stage 2 catch-up:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));
