@@ -621,6 +621,22 @@ export default function ComplaintDetail() {
       setSearchBusy(false);
     }
   }
+  const [removingMain, setRemovingMain] = useState(false);
+  async function removeMain(t) {
+    const next = parties[0];
+    if (!confirm(`Take ${t.org_name} off this complaint?\n\n${next.org_name} becomes the main organisation, with its own dates, stage and reference. Earlier entries and emails with ${t.org_name} stay on the complaint as history.`)) return;
+    setRemovingMain(true);
+    setMsg(null);
+    try {
+      await api.complaints.removeMain(id, next.id);
+      await load();
+      setMsg(`${t.org_name} taken off. ${next.org_name} is now the main organisation.`);
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setRemovingMain(false);
+    }
+  }
   async function removeParty(p) {
     if (!confirm(`Take ${p.org_name} off this complaint? Its timeline entries and emails stay on the complaint.`)) return;
     setMsg(null);
@@ -1609,6 +1625,12 @@ export default function ComplaintDetail() {
                     <button className="btn-ghost btn-sm" onClick={() => setPartyForm(t)}>Edit {t.org_name}’s details</button>
                     <button className="btn-ghost btn-sm" onClick={() => removeParty(t)}>Take off this complaint</button>
                   </>
+                )}
+                {/* The main organisation too: the next one takes its place. */}
+                {!partyIdOf(t) && parties.length > 0 && (
+                  <button className="btn-ghost btn-sm" disabled={removingMain} onClick={() => removeMain(t)}>
+                    {removingMain ? 'Taking off…' : 'Take off this complaint'}
+                  </button>
                 )}
               </div>
             </>

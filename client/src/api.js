@@ -314,6 +314,9 @@ export const api = {
     // Raise it with the supplier a debt collector is acting for: an AI draft,
     // then send it from here (or record it sent from Outlook) and join them on.
     // Making it a formal complaint (the emails show none was made): the AI's draft, then sent or recorded.
+    // Take the main organisation off; the next one (or the one given) takes its place.
+    removeMain: (id, promotePartyId = null) =>
+      request(`/complaints/${id}/main/remove`, { method: 'POST', body: JSON.stringify({ promote_party_id: promotePartyId }) }),
     formalDraft: (id) => request(`/complaints/${id}/formal/draft`, { method: 'POST' }),
     formalRaise: (id, data) => request(`/complaints/${id}/formal/raise`, { method: 'POST', body: JSON.stringify(data) }),
     supplierDraft: (id, data) =>

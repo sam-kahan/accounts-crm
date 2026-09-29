@@ -93,6 +93,8 @@ async function settleOverall(complaintId) {
 // Other open complaints about the same account (one account, one complaint):
 // shown on the complaint with a Combine button, and checked before a supplier
 // is added, so the same account never runs as two complaints.
+const dayOf = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null);
+
 async function sameAccountComplaints(c) {
   const others = (await query(
     `SELECT c.id, c.ref_code, c.subject, c.org_name, c.raised_on, c.reference, c.account_numbers, c.needs_check, ${PARTY_COLS}
@@ -2092,6 +2094,62 @@ router.delete(
         who(req),
       ],
     );
+    await settleOverall(req.params.id);
+    scheduleReview(req.params.id);
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
+// Taking the MAIN organisation off a complaint with more than one: the next
+// organisation (the one chosen, else the first added) takes its place, with
+// its own dates, stage and reference; its timeline entries and emails become
+// the complaint's own. The removed organisation's entries and emails stay on
+// the complaint as history, and the change is written on the timeline. One
+// transaction.
+const TRACK_MOVE = ['organisation_id', 'org_name', 'org_type', 'reference', 'raised_on', 'channel', 'stage',
+  'stage_started_on', 'acknowledged_on', 'responded_on', 'final_response_on', 'response_due',
+  'response_due_manual', 'ombudsman_deadline', 'outcome', 'closed_on'];
+router.post(
+  '/:id/main/remove',
+  asyncHandler(async (req, res) => {
+    const d = parse(z.object({ promote_party_id: z.string().uuid().optional().nullable() }), req.body || {});
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const c = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0];
+      if (!c) throw new HttpError(404, 'Complaint not found');
+      const parties = (await client.query('SELECT * FROM complaint_parties WHERE complaint_id = $1 ORDER BY created_at FOR UPDATE', [c.id])).rows;
+      if (!parties.length) throw new HttpError(400, 'It is the only organisation on this complaint: delete the complaint instead, or edit the organisation.');
+      const next = d.promote_party_id ? parties.find((p) => p.id === d.promote_party_id) : parties[0];
+      if (!next) throw new HttpError(400, 'That organisation isn’t on this complaint.');
+      // The promoted organisation's entries become the complaint's own.
+      await client.query('UPDATE complaint_events SET party_id = NULL WHERE party_id = $1', [next.id]);
+      await client.query('UPDATE complaint_emails SET party_id = NULL WHERE party_id = $1', [next.id]);
+      await client.query(
+        `UPDATE complaint_emails SET applied = applied - 'party_id'
+          WHERE complaint_id = $1 AND applied->>'party_id' = $2`,
+        [c.id, next.id],
+      );
+      await client.query('UPDATE complaint_outbox SET party_id = NULL WHERE party_id = $1', [next.id]);
+      await client.query('DELETE FROM complaint_parties WHERE id = $1', [next.id]);
+      const set = TRACK_MOVE.map((k, i) => `${k} = $${i + 2}`).join(', ');
+      await client.query(`UPDATE complaints SET ${set} WHERE id = $1`, [c.id, ...TRACK_MOVE.map((k) => next[k] ?? null)]);
+      await client.query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [c.id, todayISO(),
+          `${c.org_name} taken off this complaint${c.reference ? ` (their reference was ${c.reference})` : ''}; it had been made to them on ` +
+          `${ukDate(dayOf(c.raised_on))}, at ${String(c.stage).replace('_', ' ')}. ${next.org_name} is now the main organisation, with its own ` +
+          'dates. Earlier entries and emails with them stay here as history.',
+          who(req)],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+    await recomputeDeadlines(req.params.id);
     await settleOverall(req.params.id);
     scheduleReview(req.params.id);
     res.json(await decoratedById(req.params.id));
