@@ -34,6 +34,7 @@ import {
   parseImportedComplaint,
 } from '../services/complaintAssistant.js';
 import { sendMail, fromAddress, withExternalCc } from '../services/mailer.js';
+import { signEmail } from '../lib/signature.js';
 import {
   listAttachments,
   attachmentTexts,
@@ -294,6 +295,9 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
+    // Signed by whoever is sending (a draft's "[Name]" never goes out).
+    d.body = signEmail(d.body, req.user);
+    d.subject = signEmail(d.subject, req.user);
     const sent = await sendMail({ to, cc, subject: d.subject, text: d.body });
     await recordOutboundEmail({
       complaintId: complaint.id,
@@ -1492,6 +1496,7 @@ router.post(
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
+      d.send.body = signEmail(d.send.body, req.user);
       const sent = await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
       sentEmailId = await recordOutboundEmail({
         complaintId: c.id, fromEmail: fromAddress(), to, cc,

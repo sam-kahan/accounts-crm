@@ -254,7 +254,12 @@ export function effectiveRule(org, type) {
   const defaulted = [];
   for (const [key, col] of Object.entries(ORG_FIELDS)) {
     const v = org[col];
-    if (v === null || v === undefined || v === '') defaulted.push(key);
+    // A figure marked 'standard' was only filled in to show the standard
+    // (their procedure gives none), so the standard itself applies, exactly
+    // as for a blank: a debt collector's 8 calendar weeks stays 8 weeks,
+    // never becomes "40 working days" (a later date) because the form was
+    // saved.
+    if (v === null || v === undefined || v === '' || org.procedure_sources?.[col] === 'standard') defaulted.push(key);
     else rule[key] = v;
   }
   rule.defaulted = defaulted;

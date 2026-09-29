@@ -25,6 +25,17 @@ export function fillStandard(f, defaults) {
   const sources = { ...(f.procedure_sources || {}) };
   let changed = false;
   for (const [k, dk] of Object.entries(STANDARD_KEY)) {
+    // A standard counted in calendar WEEKS (a debt collector's 8) has no
+    // working-days figure to show: left blank, so the standard itself
+    // applies, rather than an approximate day count that dates it later.
+    if (k === 'stage1_response_days' && defaults.stage1Weeks) {
+      if (sources[k] === 'standard') {
+        out[k] = '';
+        delete sources[k];
+        changed = true;
+      }
+      continue;
+    }
     const std = defaults[dk];
     if (std === null || std === undefined || std === '') continue;
     if (blank(out[k]) || sources[k] === 'standard') {

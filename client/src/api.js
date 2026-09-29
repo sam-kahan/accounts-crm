@@ -512,3 +512,17 @@ export function dueClass(d) {
   if (n <= 14) return 'soon';
   return '';
 }
+
+// A draft signed by the person sending it: "[Name]" / "[Your name]" becomes
+// their name and "[Job title]" their title (dropped, with its line, when none
+// is set). The same rule as server/src/lib/signature.js, which signs anything
+// sent as a backstop, so what is shown and copied is what goes out.
+const SIGN_NAME = /\[\s*(?:your\s+)?(?:full\s+)?name\s*\]/gi;
+const SIGN_TITLE = /\[\s*(?:your\s+)?(?:job\s*title|position|role|title)\s*\]/gi;
+export function signEmail(text, user) {
+  let s = String(text ?? '');
+  if (user?.name) s = s.replace(SIGN_NAME, user.name);
+  if (user?.job_title) s = s.replace(SIGN_TITLE, user.job_title);
+  else s = s.replace(new RegExp(`^[ \\t]*${SIGN_TITLE.source}[ \\t]*\\n?`, 'gim'), '').replace(SIGN_TITLE, '');
+  return s;
+}

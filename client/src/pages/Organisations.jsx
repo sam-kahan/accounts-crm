@@ -39,7 +39,11 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   const [error, setError] = useState(null);
   const [info, setInfo] = useState(null);
   // A figure changed by hand is one someone entered: its quote no longer applies.
+  // Changing anything that sets a date un-ticks "checked against their
+  // procedure": what was checked is no longer what is saved.
   const set = (k, v) => setForm((f) => {
+    const procedural = FIGURES.includes(k) || k === 'type' || k === 'procedure_ref';
+    if (procedural && String(f[k] ?? '') !== String(v ?? '')) f = { ...f, verified: false };
     if (!FIGURES.includes(k)) return { ...f, [k]: v };
     const evidence = { ...(f.procedure_evidence || {}) };
     delete evidence[k];

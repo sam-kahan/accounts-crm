@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail } from '../api';
+import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
 
@@ -128,6 +129,8 @@ const trackOpen = (t) => t.state === 'open' && !['resolved', 'closed'].includes(
 
 export default function ComplaintDetail() {
   const { id } = useParams();
+  // Drafts are signed by whoever is looking at them ("[Name]" → their name).
+  const { user: me } = useAuth();
   const navigate = useNavigate();
   const [c, setC] = useState(null);
   const location = useLocation();
@@ -250,7 +253,7 @@ export default function ComplaintDetail() {
     setTimeout(() => setCopied((w) => (w === what ? null : w)), 2000);
   }
   function copyEmail(em) {
-    copyText(em.body);
+    copyText(signEmail(em.body, me));
     flashCopied('email');
   }
   // Sent from Outlook (and perhaps without copying this complaint's address
@@ -300,12 +303,14 @@ export default function ComplaintDetail() {
   // moves the complaint to Stage 2 (one press, not two).
   function openSend(draft, then = null, t = null) {
     setSend({
-      to: (t || c).org_email || '',
+      // Their complaints address, or failing that the address their latest
+      // email came from.
+      to: (t || c).org_email || replyTarget(c, t)?.sender_email || '',
       party_id: partyIdOf(t),
       org_name: t && multi ? t.org_name : null,
       cc: '',
-      subject: draft?.subject || `Re: ${c.subject} [${c.ref_code}]`,
-      body: draft?.body || '',
+      subject: signEmail(draft?.subject, me) || `Re: ${c.subject} [${c.ref_code}]`,
+      body: signEmail(draft?.body || '', me),
       then,
     });
   }
@@ -609,7 +614,7 @@ export default function ComplaintDetail() {
           </div>
         )}
         <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
-          {em.body}
+          {signEmail(em.body, me)}
         </pre>
         {(() => {
           const esc = !later && (t || c).stage === 'stage_1' && (!multi || t) &&
@@ -657,6 +662,30 @@ export default function ComplaintDetail() {
   // The step buttons for one organisation's part.
   // `secondary`: under the next step, so these read as "or do it yourself"
   // rather than a second set of instructions.
+  // The Stage 2 request for one organisation: the AI's draft when its review
+  // has one for them, otherwise a plain one from the facts on file (no AI).
+  const stage2Draft = (t) => {
+    const i = tracks.findIndex((x) => x.id === t.id);
+    const own = multi ? c.ai_review?.by_org?.[i] : c.ai_review;
+    if (c.ai_review_current && own?.email?.body && own.email_step === 'stage2_request') return own.email;
+    const accounts = (c.account_numbers || []).join(', ');
+    const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
+    const days = t.rule?.stage2Days;
+    return {
+      subject: `Our complaint of ${formatDate(t.raised_on)}${about ? ` (${about})` : ''}: request for Stage 2 review [${c.ref_code}]`,
+      body:
+        `Dear ${t.org_name} Complaints Team,\n\n` +
+        `Re: ${about || c.subject} (our reference ${c.ref_code})\n\n` +
+        `Thank you for your attention to our complaint of ${formatDate(t.raised_on)}. ` +
+        `We are not satisfied that it has been resolved. We therefore ask that it is now escalated to Stage 2 ` +
+        `of your complaints procedure for an independent review.\n\n` +
+        `Please confirm that this has been done and let us have your Stage 2 response` +
+        `${days ? ` within ${days} working days, as your procedure sets out` : ' within the time your procedure sets out'}.\n\n` +
+        `If you need anything further from us to take this forward, please let us know.\n\nKind regards,\n\n` +
+        '[Name]\n[Job title]\nGreenco',
+    };
+  };
+
   const trackButtons = (t, secondary = false) => {
     const tAt = t.stage === 'stage_1' || t.stage === 'stage_2';
     if (!trackOpen(t)) return null;
@@ -669,9 +698,22 @@ export default function ComplaintDetail() {
         {tAt && !t.responded_on && (
           <button className="btn btn-sm" onClick={() => setAction(RESPONSE(t, multi))}>Record their response…</button>
         )}
-        {tAt && (
+        {t.stage === 'stage_1' && (
+          // Asking for Stage 2 IS the email: one press opens it ready to send,
+          // and sending it escalates this organisation's part. Recording it
+          // without sending is for a request already made from Outlook.
+          <>
+            <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => openSend(stage2Draft(t), 'escalate', t)}>
+              Send the Stage 2 request…
+            </button>
+            <button className="btn-ghost btn-sm" onClick={() => setAction(ESCALATE(t, multi))}>
+              Already asked for it? Record it…
+            </button>
+          </>
+        )}
+        {t.stage === 'stage_2' && (
           <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => setAction(ESCALATE(t, multi))}>
-            {t.stage === 'stage_1' ? 'Escalate to Stage 2…' : 'Refer to ombudsman…'}
+            Refer to ombudsman…
           </button>
         )}
         <button className="btn btn-sm" onClick={() => setAction(RESOLVE(t, multi))}>Mark resolved…</button>
@@ -1482,7 +1524,7 @@ export default function ComplaintDetail() {
                         <div className="btn-row">
                           <button
                             className="btn btn-sm"
-                            onClick={() => copyText(`Subject: ${ai.email.subject}\n\n${ai.email.body}`)}
+                            onClick={() => copyText(`Subject: ${ai.email.subject}\n\n${signEmail(ai.email.body, me)}`)}
                           >
                             Copy
                           </button>
@@ -1504,7 +1546,7 @@ export default function ComplaintDetail() {
                             margin: '4px 0 0', lineHeight: 1.5,
                           }}
                         >
-                          {ai.email.body}
+                          {signEmail(ai.email.body, me)}
                         </pre>
                       </div>
                     </div>
@@ -2036,6 +2078,7 @@ function EmailSearch({ s, busy, onSearch }) {
 // utilities@) or say it went from Outlook. Either way the supplier joins this
 // complaint as a further organisation, dated the day it was sent.
 function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
+  const { user: me } = useAuth();
   const [orgs, setOrgs] = useState([]);
   const [orgId, setOrgId] = useState('');
   const [name, setName] = useState(suggestedName || '');
@@ -2064,7 +2107,7 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
     setBusy('draft'); setError(null);
     try {
       const d = await api.complaints.supplierDraft(c.id, { organisation_id: orgId || null, org_name: name.trim() });
-      setDraft({ ...d, to: d.to || '' });
+      setDraft({ ...d, body: signEmail(d.body, me), to: d.to || '' });
     } catch (e) { setError(e.message); } finally { setBusy(null); }
   }
   async function sendNow() {

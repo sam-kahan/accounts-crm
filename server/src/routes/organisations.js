@@ -227,7 +227,7 @@ router.post(
          procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence, notes,
          research_status, researched_at, verified_at, verified_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-               $23, ${status === 'researched' || status === 'document' ? 'now()' : 'NULL'},
+               $23, ${status === 'researched' ? 'now()' : 'NULL'},
                ${d.verified ? 'now()' : 'NULL'}, $24)
        RETURNING ${COLS}`,
       [...values(d), status, d.verified ? who(req) : null],
@@ -236,6 +236,14 @@ router.post(
     res.status(201).json(saved);
   }),
 );
+
+// Nothing that sets a date changed (compared with the row as it was).
+const PROC_SAME = `(type IS NOT DISTINCT FROM $3 AND ombudsman_name IS NOT DISTINCT FROM $8
+  AND ombudsman_url IS NOT DISTINCT FROM $9 AND ombudsman_referral_months IS NOT DISTINCT FROM $10
+  AND stage1_response_days IS NOT DISTINCT FROM $11 AND stage2_response_days IS NOT DISTINCT FROM $12
+  AND ack_days IS NOT DISTINCT FROM $13 AND procedure_ref IS NOT DISTINCT FROM $14
+  AND stage1_clock IS NOT DISTINCT FROM $15 AND ombudsman_after_weeks IS NOT DISTINCT FROM $16
+  AND referral_from IS NOT DISTINCT FROM $17)`;
 
 router.put(
   '/:id',
@@ -250,15 +258,22 @@ router.put(
         procedure_summary=$18, legal_basis=$19, sources=$20, unconfirmed=$21,
         procedure_evidence=$22, notes=$23,
         research_status=COALESCE($24, research_status),
-        -- Stamp researched_at whenever fresh research or a document is applied
-        -- (the client sends the status it arrived at); a plain edit re-sends
-        -- the same status and must not move the date.
-        researched_at=CASE WHEN $24 IN ('researched','document') AND $24 IS DISTINCT FROM research_status
+        -- researched_at says their WEBSITE was researched, so only research
+        -- stamps it (reading their document is not research — it used to be
+        -- stamped too, and then research never filled the gaps by itself).
+        -- A plain edit re-sends the same status and must not move the date.
+        researched_at=CASE WHEN $24 = 'researched' AND $24 IS DISTINCT FROM research_status
                            THEN now()
-                           WHEN $24 IN ('researched','document') AND researched_at IS NULL THEN now()
+                           WHEN $24 = 'researched' AND researched_at IS NULL THEN now()
                            ELSE researched_at END,
-        verified_at=CASE WHEN $25 THEN now() ELSE NULL END,
-        verified_by=CASE WHEN $25 THEN $26 ELSE NULL END
+        -- "Checked by X on date" stays X's when the procedure itself didn't
+        -- change (a notes edit), and is stamped afresh when it did.
+        verified_at=CASE WHEN NOT $25 THEN NULL
+                         WHEN verified_at IS NOT NULL AND ${PROC_SAME} THEN verified_at
+                         ELSE now() END,
+        verified_by=CASE WHEN NOT $25 THEN NULL
+                         WHEN verified_at IS NOT NULL AND ${PROC_SAME} THEN verified_by
+                         ELSE $26 END
        WHERE id=$1 RETURNING ${COLS}`,
       [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
     );

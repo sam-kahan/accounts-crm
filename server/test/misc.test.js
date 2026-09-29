@@ -75,3 +75,14 @@ test('a recurring date rolls to the right day, never drifting past a month end',
   assert.equal(nextOccurrence('2026-09-29', 'monthly', '2026-09-29'), '2026-10-29');
   assert.equal(nextOccurrence('2026-01-15', 'none', '2026-09-29'), null);
 });
+
+import { signEmail } from '../src/lib/signature.js';
+
+test('a draft is signed by the person sending it, never with a placeholder', () => {
+  const body = 'Kind regards,\n\n[Name]\n[Job title]\nGreenco';
+  assert.equal(signEmail(body, { name: 'Imogen Moore', job_title: 'Accounts Administrator' }), 'Kind regards,\n\nImogen Moore\nAccounts Administrator\nGreenco');
+  // No title set: the title line goes, not left as "[Job title]".
+  assert.equal(signEmail(body, { name: 'Sam Kahan' }), 'Kind regards,\n\nSam Kahan\nGreenco');
+  assert.equal(signEmail('Yours,\n[Your Name]', { name: 'Sam Kahan' }), 'Yours,\nSam Kahan');
+  assert.equal(signEmail('No placeholders.', { name: 'Sam' }), 'No placeholders.');
+});

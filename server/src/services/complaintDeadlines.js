@@ -59,7 +59,10 @@ export async function recomputePartyDeadlines(partyId, db = { query }) {
 // were handled against. Each date that moved is written on that complaint's
 // timeline ("Stage 1 outcome due 22 Oct → 19 Oct"), and its AI review is
 // refreshed so the next step follows the new rules.
-export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)' } = {}) {
+// `reviewAll: false` (the start-up correction): only complaints whose dates
+// actually moved get a fresh AI review — the rest are unchanged and a review
+// each would be paid for nothing.
+export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)', reviewAll = true } = {}) {
   const { rows } = await query(
     `SELECT id, response_due, ombudsman_deadline, stage FROM complaints
       WHERE state = 'open' AND (organisation_id = $1 OR id = ANY($2::uuid[]))`,
@@ -88,7 +91,7 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
         [r.id, todayISO(), `Deadlines updated from ${source}: ${moves.join('; ')}.`, by],
       );
     }
-    scheduleReview(r.id);
+    if (moves.length || reviewAll) scheduleReview(r.id);
   }
   // The same organisation as a further party on other complaints (LCS on a
   // British Gas complaint): its track there follows its procedure too.
@@ -118,7 +121,7 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
         [p.complaint_id, p.id, todayISO(), `${p.org_name}: deadlines updated from ${source}: ${moves.join('; ')}.`, by],
       );
     }
-    scheduleReview(p.complaint_id);
+    if (moves.length || reviewAll) scheduleReview(p.complaint_id);
   }
   return rows.length + parties.length;
 }

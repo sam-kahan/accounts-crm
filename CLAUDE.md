@@ -713,6 +713,33 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — emails signed by the sender; Stage 2 request from each organisation's section; organisation fixes
+- **Every draft is signed by whoever sends it.** The AI signs off with the
+  placeholders `[Name]` / `[Job title]` (its system prompt says so), and
+  `signEmail()` — `client/src/api.js` for what is shown and copied,
+  `server/src/lib/signature.js` as the backstop on every send — fills them
+  with the logged-in person's name and title (a title line with no title set
+  is dropped). `req.user` now carries `job_title`.
+- **"Send the Stage 2 request…" in each organisation's section** (and the
+  single-organisation step buttons) replaces the bare "Escalate to Stage 2…":
+  it opens the request addressed to THAT organisation — the AI's draft when
+  its review has one for them, otherwise a plain one from the facts on file
+  (`stage2Draft`, no AI) — and sending escalates that organisation's part.
+  "Already asked for it? Record it…" keeps the date-only escalation for a
+  request sent from Outlook. With no complaints address on file, the To is
+  the address their latest email came from.
+- **A "standard" figure is the standard rule** (`effectiveRule`): a figure the
+  form filled in because their procedure gives none no longer overrides the
+  type's rule — saving a debt collector turned its 8 calendar weeks into 40
+  working days, a LATER deadline. The form leaves a weeks-based standard
+  blank; start-up re-dates the open complaints of organisations with standard
+  figures (only moved ones are noted and reviewed: `reviewAll: false`).
+- **"Checked against their procedure"** un-ticks when anything that sets a
+  date is changed on the form, and a save that changes nothing procedural
+  keeps who checked it and when (`PROC_SAME`).
+- **`researched_at` means their website was researched** — reading their
+  document no longer stamps it, so gaps are still researched automatically.
+
 ### 2026-09-29 — fixes from a review of access, staff accounts and key dates
 - **The nightly jobs need the right access when a person runs them**
   (`sessionOrCronKey(section)`, see Auth): a read-only user could set off

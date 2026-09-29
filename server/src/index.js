@@ -218,6 +218,18 @@ app.listen(config.port, () => {
       if (rows.length) console.log(`  Reviews to give each organisation its own step: ${rows.length}`);
     })
     .catch((err) => console.error('  Per-organisation steps:', err.message));
+  // Organisations whose form filled in a standard figure: that figure was
+  // wrongly treated as their own (a debt collector's 8 calendar weeks read
+  // as 40 working days — a later deadline). Re-date their open complaints;
+  // only those whose dates move are noted and reviewed. Harmless to repeat.
+  query(`SELECT id FROM organisations WHERE procedure_sources::text LIKE '%"standard"%'`)
+    .then(async ({ rows }) => {
+      const { recomputeForOrganisation } = await import('./services/complaintDeadlines.js');
+      for (const o of rows) {
+        await recomputeForOrganisation(o.id, [], { by: 'Automatic (standard timescales corrected)', reviewAll: false });
+      }
+    })
+    .catch((err) => console.error('  Standard timescales:', err.message));
   import('./services/accountNumbers.js')
     .then(({ removeDigitSlips }) => removeDigitSlips())
     .then((n) => n && console.log(`  Mistyped account numbers removed on ${n} complaint(s)`))

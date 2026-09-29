@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { accountOrReference, api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL } from '../api';
+import { accountOrReference, api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, signEmail } from '../api';
+import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import EmailAutomation from '../components/EmailAutomation.jsx';
 import TidyUp from '../components/TidyUp.jsx';
@@ -397,6 +398,7 @@ function NewComplaintModal({
 }
 
 function OverdueDraftsModal({ onClose }) {
+  const { user: me } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
@@ -427,7 +429,7 @@ function OverdueDraftsModal({ onClose }) {
               <>
                 <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{d.draft.email?.subject}</div>
                 <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, margin: '6px 0 0' }}>
-                  {d.draft.email?.body}
+                  {signEmail(d.draft.email?.body, me)}
                 </pre>
                 <div style={{ marginTop: 8 }}>
                   <button
@@ -435,7 +437,7 @@ function OverdueDraftsModal({ onClose }) {
                     onClick={async () => {
                       try {
                         await navigator.clipboard?.writeText(
-                          `Subject: ${d.draft.email?.subject}\n\n${d.draft.email?.body}`,
+                          `Subject: ${d.draft.email?.subject}\n\n${signEmail(d.draft.email?.body, me)}`,
                         );
                         setCopiedId(d.id);
                         setTimeout(() => setCopiedId((c) => (c === d.id ? null : c)), 1500);

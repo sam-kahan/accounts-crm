@@ -268,3 +268,17 @@ test('a debt collector: final response within 8 calendar WEEKS (FCA), then 6 mon
   const theirs = effectiveRule({ type: 'debt_collector', stage1_response_days: 15 }, 'debt_collector');
   assert.equal(theirs.stage1Weeks, null);
 });
+
+test('a standard figure filled in on the form never replaces the standard rule (a collector keeps 8 calendar weeks)', () => {
+  const org = {
+    type: 'debt_collector', stage1_response_days: 40,
+    procedure_sources: { stage1_response_days: 'standard' },
+  };
+  const rule = effectiveRule(org, 'debt_collector');
+  assert.equal(rule.stage1Weeks, 8);
+  assert.ok(rule.defaulted.includes('stage1Days'));
+  // Their own stated figure still replaces it.
+  const own = effectiveRule({ ...org, procedure_sources: { stage1_response_days: 'document' } }, 'debt_collector');
+  assert.equal(own.stage1Weeks, null);
+  assert.equal(own.stage1Days, 40);
+});
