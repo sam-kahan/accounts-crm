@@ -56,10 +56,14 @@ function reconcile({ net, vat, total }) {
   return { netP: Math.max(0, netP), totalP: Math.max(0, totalP) };
 }
 
+// A markup is added to the contractor's own price, which never includes VAT,
+// so it is always taken on the net (dealFor() on the server says the same).
+const onGross = (c) => c?.commission_on === 'gross' && (c?.commission_basis || 'markup') !== 'markup';
+
 export function previewCommission(contractor, { net, vat, total, commissionable }) {
   if (!contractor) return 0;
   const { netP, totalP } = reconcile({ net, vat, total });
-  const whole = Math.max(0, contractor.commission_on === 'gross' ? totalP : netP);
+  const whole = Math.max(0, onGross(contractor) ? totalP : netP);
   // The part of the invoice carrying commission, when it isn't all of it.
   const partP = toPence(commissionable);
   const part = partP === null ? null : Math.max(0, Math.min(partP, whole));
@@ -88,7 +92,7 @@ export function previewCommission(contractor, { net, vat, total, commissionable 
 // commissionableCeiling() on the server.
 export function ceilingFor(contractor, { net, vat, total }) {
   const { netP, totalP } = reconcile({ net, vat, total });
-  return (contractor?.commission_on === 'gross' ? totalP : netP) / 100;
+  return (onGross(contractor) ? totalP : netP) / 100;
 }
 
 // One line saying what the rate was applied to, for the commission callout —
@@ -96,7 +100,7 @@ export function ceilingFor(contractor, { net, vat, total }) {
 export function describePart(value, note, owner, amounts) {
   if (value === '' || value === null || value === undefined) return '';
   const ceiling = ceilingFor(owner, amounts);
-  const measure = owner?.commission_on === 'gross' ? 'total' : 'net';
+  const measure = onGross(owner) ? 'total' : 'net';
   return ` · on ${formatMoney(Number(value) || 0)} of the ${formatMoney(ceiling)} ${measure}${
     note ? ` (${note})` : ''
   }`;

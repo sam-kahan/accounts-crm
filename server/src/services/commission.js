@@ -22,10 +22,14 @@ export function dealFor(contractor = {}) {
   const type = COMMISSION_TYPES.includes(contractor.commission_type)
     ? contractor.commission_type
     : 'percentage';
-  const on = COMMISSION_ON.includes(contractor.commission_on) ? contractor.commission_on : 'net';
   const basis = COMMISSION_BASES.includes(contractor.commission_basis)
     ? contractor.commission_basis
     : 'markup';
+  // A markup is added to the contractor's OWN price, which never includes
+  // VAT: taken on the gross it charged commission on the VAT (and VAT on
+  // that). So a markup is always on the net, whatever the form said.
+  const on = basis === 'markup' ? 'net'
+    : COMMISSION_ON.includes(contractor.commission_on) ? contractor.commission_on : 'net';
   return {
     commission_type: type,
     commission_rate: Number(contractor.commission_rate ?? 0) || 0,
@@ -484,10 +488,22 @@ export function normaliseName(name) {
 // One name contains the other, and the shorter is distinctive enough to mean
 // something: a bare "plumbing" must not auto-select Bob's Plumbing and apply
 // their rate to someone else's invoice.
+// One name inside the other as whole words ("Bobs Plumbing" in "Bobs
+// Plumbing and Heating"), never inside a longer word ("J Smith Electrical"
+// is not inside "AJ Smith Electrical").
 function containsName(a, b) {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   if (shorter.split(' ').length < 2) return false;
-  return longer.includes(shorter);
+  return ` ${longer} `.includes(` ${shorter} `);
+}
+
+// Both names start with an initial or a first name, and they differ, while
+// the rest agrees: "k smith plumbing" / "j smith plumbing".
+function differentLead(a, b) {
+  const wa = a.split(' ');
+  const wb = b.split(' ');
+  if (wa.length < 2 || wb.length < 2) return false;
+  return wa[0] !== wb[0] && wa.slice(1).join(' ') === wb.slice(1).join(' ');
 }
 
 // Match a name read off an invoice against the contractors on file. Returns the
@@ -510,18 +526,29 @@ export function matchContractorByName(name, contractors = []) {
       // "Bobs Plumbing" inside "Bobs Plumbing and Heating".
       score = 0.85;
     } else if (targetWords.size) {
-      // Otherwise judge on how much of the distinctive wording they share.
+      // Otherwise judge on how much of the distinctive wording they share:
+      // never confident on its own (below 0.8), since "K Smith Plumbing" and
+      // "J Smith Plumbing" share every long word and are two businesses.
       const candidateWords = candidate.split(' ').filter((w) => w.length > 2);
       const shared = candidateWords.filter((w) => targetWords.has(w)).length;
       const ratio = shared / Math.max(targetWords.size, candidateWords.length || 1);
-      if (ratio >= 0.5) score = 0.5 + ratio * 0.3;
+      if (ratio >= 0.5) score = 0.5 + ratio * 0.29;
     }
+    // Different initials or first names in front of the same words are
+    // different people: "K Smith" is not "J Smith".
+    if (score > 0 && score < 1 && differentLead(candidate, target)) score = Math.min(score, 0.6);
 
-    if (score > 0 && (!best || score > best.score)) best = { contractor, score };
+    if (score > 0) {
+      if (!best || score > best.score) best = { contractor, score, tied: false };
+      else if (score === best.score) best.tied = true;
+    }
   }
 
   if (!best) return null;
-  return { ...best, confident: best.score >= 0.8 };
+  // Two contractors fit equally well: neither is selected (the wrong one
+  // would apply its rate), and a person chooses.
+  const { tied, ...rest } = best;
+  return { ...rest, confident: best.score >= 0.8 && !tied };
 }
 
 // Everything needed to set up a contractor we haven't dealt with before, taken

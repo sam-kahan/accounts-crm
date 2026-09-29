@@ -872,9 +872,11 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   // deal today — the same snapshot the server recomputes from.
   const computed = useMemo(
     () =>
+      // A field cleared is left as it was by the save (the server keeps the
+      // stored figure for one not sent), so the preview uses that figure too.
       previewCommission(invoice, {
-        net: form.net_amount,
-        vat: form.vat_amount,
+        net: form.net_amount === '' ? invoice.net_amount : form.net_amount,
+        vat: form.vat_amount === '' ? invoice.vat_amount : form.vat_amount,
         total: pricedTotal,
         commissionable: form.commissionable_amount,
       }),

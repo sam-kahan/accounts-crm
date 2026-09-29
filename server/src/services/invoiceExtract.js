@@ -126,6 +126,13 @@ function cleanStr(v, max) {
 
 function cleanAmount(v) {
   if (v === null || v === undefined || v === '') return null;
+  // A figure written the continental way ("1.234,56") or with more than one
+  // full stop is not read at all: the commas would be dropped as thousands
+  // separators and it would come out as £1.23. A person types it.
+  if (typeof v === 'string') {
+    const t = v.replace(/[£\s]/g, '');
+    if ((t.match(/\./g) || []).length > 1 || /\.\d*,/.test(t)) return null;
+  }
   // Via integer pence, not `Math.round(n * 100) / 100` — that naive form
   // mis-rounds a value like 1.005 (see lib/money.js's own header comment for
   // why), and this only pre-fills a form a person then reviews, but a wrong
@@ -150,8 +157,10 @@ function cleanAmount(v) {
 const PERSON_PATTERNS = [
   // A title, with or without "and": "Mrs J Smith", "Mr & Mrs Smith", "Dr Patel".
   /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev)\b[\s.]*(and|&|\+)?\s*(mr|mrs|miss|ms|dr)?\b[\s.]*[a-z][a-z'’-]*(\s+[a-z][a-z'’-]*){0,3}$/i,
-  // Initials then a surname: "J Smith", "A.B. Patel", "J.S. O'Neill".
-  /^([a-z]\.?\s*){1,3}[a-z][a-z'’-]{1,}$/i,
+  // Initials then a surname: "J Smith", "A.B. Patel", "J.S. O'Neill". Each
+  // initial is a single letter followed by a full stop or a space, so a plain
+  // word ("Kingsway", "Birkenhead") or "The Albany" is never taken for one.
+  /^([a-z](?:\.\s*|\s+)){1,3}[a-z][a-z'’-]+$/i,
   // Two or three plain words that are all names — only when flagged as a person
   // by the marker stripped below (handled by the caller).
 ];

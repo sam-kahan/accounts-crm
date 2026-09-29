@@ -99,15 +99,19 @@ test('mark-up is the default basis — an unstated deal is not read as a slice',
   assert.equal(commissionFor(deal, { net_amount: 99, total_amount: 99 }), 9);
 });
 
-test('mark-up on the gross, when that is how it was agreed', () => {
+test('a mark-up is always on the net, even if the deal says gross', () => {
   const deal = {
     commission_type: 'percentage',
     commission_rate: 10,
     commission_basis: 'markup',
     commission_on: 'gross',
   };
-  // £118.80 gross carries £10.80 of commission (£108 + 10%).
-  assert.equal(commissionFor(deal, { net_amount: 99, vat_amount: 19.8, total_amount: 118.8 }), 10.8);
+  // They add 10% to their own £90 price (before VAT): £99 + £19.80 VAT. Ours
+  // is the £9 inside the £99; the VAT on it is added on our invoice (£10.80
+  // in all). Taken on the gross it was £10.80 as the NET, with VAT again on
+  // top (£12.96): VAT on VAT.
+  assert.equal(commissionFor(deal, { net_amount: 99, vat_amount: 19.8, total_amount: 118.8 }), 9);
+  assert.equal(commissionableCeiling(deal, { net_amount: 99, vat_amount: 19.8, total_amount: 118.8 }), 99);
 });
 
 test('mark-up rounds to the penny and stays exact at odd rates', () => {
@@ -167,7 +171,9 @@ test('a part caps the commission at the part, not at the invoice', () => {
 test('the commissionable part is measured against whatever the deal is taken on', () => {
   const amounts = { net_amount: 100, vat_amount: 20, total_amount: 120 };
   assert.equal(commissionableCeiling({ commission_on: 'net' }, amounts), 100);
-  assert.equal(commissionableCeiling({ commission_on: 'gross' }, amounts), 120);
+  assert.equal(commissionableCeiling({ commission_on: 'gross', commission_basis: 'inclusive' }, amounts), 120);
+  // A mark-up is on the net whatever it says.
+  assert.equal(commissionableCeiling({ commission_on: 'gross' }, amounts), 100);
 });
 
 test('a slice-of-the-invoice deal still works, for contractors worded that way', () => {
@@ -1162,4 +1168,13 @@ test('a voided invoice whose push failed may still be standing there', () => {
   assert.equal(needsWithdrawing({ status: 'void', external_id: null, external_error: 'didn’t respond in time' }), true);
   assert.equal(needsWithdrawing({ status: 'void', external_id: null, external_error: null }), false);
   assert.equal(needsWithdrawing({ status: 'sent', external_id: null, external_error: 'x' }), false);
+});
+
+test('a contractor name is matched as whole words, and a tie or a different initial is never confident', () => {
+  const cs = [{ name: 'AJ Smith Electrical' }, { name: 'J Smith Plumbing' }, { name: 'John Smith Plumbing' }, { name: 'Smith Plumbing & Heating' }];
+  assert.equal(matchContractorByName('J Smith Electrical', cs)?.confident, false);
+  assert.equal(matchContractorByName('K Smith Plumbing Ltd', cs)?.confident, false);
+  assert.equal(matchContractorByName('Smith Plumbing', cs)?.confident, false); // two fit equally
+  assert.equal(matchContractorByName('J Smith Plumbing Ltd', cs)?.contractor.name, 'J Smith Plumbing');
+  assert.equal(matchContractorByName('J Smith Plumbing Ltd', cs)?.confident, true);
 });

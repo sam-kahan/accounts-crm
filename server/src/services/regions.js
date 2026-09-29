@@ -45,7 +45,9 @@ export function isRegion(value) {
 
 // A UK outward code is 1–2 letters, then 1–2 digits, then an optional letter:
 // M1, M20, WA9, CH41, L1, EC1A. We only ever need the outward half.
-const OUTWARD = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\s*\d[A-Z]{2}\b/i;
+// A floor ("Unit M4 1ST FLOOR", "Suite B1 2ND FLOOR") has the shape of a
+// postcode and is never one.
+const OUTWARD = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\s*\d[A-Z]{2}\b(?!\s*(?:FLOOR|FLR|FL)\b)/i;
 const OUTWARD_ALL = new RegExp(OUTWARD.source, 'gi');
 const OUTWARD_ALONE = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\b(?!\s*[A-Z]{2}\b)/i;
 
@@ -134,8 +136,10 @@ const SPLIT_AREAS = {
     liverpool: {
       41: 'Birkenhead', 42: 'Birkenhead', 43: 'Prenton', 44: 'Wallasey', 45: 'Wallasey',
       46: 'Upton', 47: 'Hoylake', 48: 'West Kirby', 49: 'Wirral',
-      60: 'Heswall', 61: 'Wirral', 62: 'Bebington', 63: 'Bebington', 64: 'Ellesmere Port',
-      65: 'Ellesmere Port', 66: 'Ellesmere Port',
+      60: 'Heswall', 61: 'Wirral', 62: 'Bebington', 63: 'Bebington',
+      // CH64 (Neston) and CH65/66 (Ellesmere Port) are Cheshire West and
+      // Chester, like Chester itself: not placed, so the form asks (or the
+      // contractor's usual office applies).
     },
   },
   // PR is Preston, but its seaside end is Sefton — Southport is Merseyside.

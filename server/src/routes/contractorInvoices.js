@@ -156,13 +156,15 @@ async function getContractor(id) {
 // than taken on trust. A hand-typed figure that differs from the computed one
 // is kept, but flagged, so a month-end total can always be explained.
 function resolveCommission(contractor, d, amounts, commissionable = null) {
-  const deal = {
+  // Read through dealFor as a whole, so an override is held to the same
+  // rules as the contractor's own deal (a markup is always on the net).
+  const deal = dealFor({
     ...dealFor(contractor),
     ...(d.commission_type ? { commission_type: d.commission_type } : {}),
     ...(d.commission_rate !== undefined ? { commission_rate: d.commission_rate } : {}),
     ...(d.commission_on ? { commission_on: d.commission_on } : {}),
     ...(d.commission_basis ? { commission_basis: d.commission_basis } : {}),
-  };
+  });
   // A commissionable part bigger than what it is a part OF is a typo, and
   // silently clamping it would cost the wrong commission without saying so.
   if (commissionable !== null && commissionable !== undefined) {
@@ -220,14 +222,20 @@ async function duplicatesFor({ contractor_id, invoice_number, invoice_date, tota
   const number = String(invoice_number ?? '').trim();
   if (!contractor_id || (!number && !invoice_date)) return { exact: null, similar: [] };
 
+  // Only the rows that could be one: the same number (exactly, or written
+  // differently), or near the date. Every numbered invoice newest first,
+  // capped, missed a repeat of one older than the cap.
+  const loose = number.toLowerCase().replace(/[^a-z0-9]/g, '');
   const { rows } = await query(
     `SELECT ${JOINED} ${FROM}
       WHERE i.contractor_id = $1
-        AND (($2 <> '' AND i.invoice_number IS NOT NULL)
+        AND (($2 <> '' AND i.invoice_number IS NOT NULL
+              AND (lower(i.invoice_number) = lower($2)
+                   OR ($4 <> '' AND regexp_replace(lower(i.invoice_number), '[^a-z0-9]', '', 'g') = $4)))
              OR ($3::date IS NOT NULL AND i.invoice_date BETWEEN $3::date - 45 AND $3::date + 45))
       ORDER BY i.invoice_date DESC
       LIMIT 500`,
-    [contractor_id, number, invoice_date || null],
+    [contractor_id, number, invoice_date || null, loose],
   );
 
   const found = findDuplicates(

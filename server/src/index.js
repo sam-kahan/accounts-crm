@@ -302,6 +302,45 @@ app.listen(config.port, () => {
       console.log('  Refer-by dates worked out from the ombudsman register');
     })
     .catch((err) => console.error('  Ombudsman register:', err.message));
+  // A markup is always on the net (commission.js#dealFor): invoices logged
+  // under a deal set to "markup on the gross" claimed commission on the VAT.
+  // Those not yet on a commission invoice are costed again once (a
+  // hand-typed override is left alone), each with a note saying so; any
+  // already invoiced are listed in the log for a person to look at (void and
+  // re-raise that month end).
+  getSetting('markup_on_net_0929')
+    .then(async (done) => {
+      if (done) return;
+      const { commissionFor, dealFor } = await import('./services/commission.js');
+      const money = (v) => `£${Number(v).toFixed(2)}`;
+      const rows = (await query(
+        `SELECT * FROM contractor_invoices WHERE commission_basis = 'markup' AND commission_on = 'gross'`,
+      )).rows;
+      const corrected = [];
+      const invoiced = [];
+      for (const r of rows) {
+        if (r.commission_invoice_id) { invoiced.push(r.ref); continue; }
+        const deal = dealFor(r);
+        const after = commissionFor(deal, r);
+        const was = Number(r.commission_amount);
+        if (!r.commission_override && Math.abs(Number(after) - was) >= 0.005) {
+          await query(
+            `UPDATE contractor_invoices SET commission_amount = $2, commission_on = 'net',
+                    notes = concat_ws(E'\n', NULLIF(notes, ''), $3::text)
+              WHERE id = $1 AND commission_invoice_id IS NULL`,
+            [r.id, after, `Commission corrected from ${money(was)} to ${money(after)} on 29 Sep 2026: a markup is added to the contractor's own price, before VAT, so it is taken on the net (it had been taken on the gross, including VAT).`],
+          );
+          corrected.push(`${r.ref} ${money(was)} -> ${money(after)}`);
+        } else {
+          await query(`UPDATE contractor_invoices SET commission_on = 'net' WHERE id = $1 AND commission_invoice_id IS NULL`, [r.id]);
+        }
+      }
+      await query(`UPDATE contractors SET commission_on = 'net' WHERE commission_basis = 'markup' AND commission_on = 'gross'`);
+      await setSetting('markup_on_net_0929', { at: new Date().toISOString(), corrected, invoiced }, 'start-up');
+      if (corrected.length) console.log(`  Markup commission re-costed on the net: ${corrected.join('; ')}`);
+      if (invoiced.length) console.log(`  Markup-on-gross commission ALREADY INVOICED (check, void and re-raise): ${invoiced.join(', ')}`);
+    })
+    .catch((err) => console.error('  Markup on the net:', err.message));
   // The deadline rules corrected on 29 Sep 2026 (housing associations count
   // each stage from their acknowledgement; a Stage 2 with no request date
   // has no due date rather than one from the day the complaint was made):

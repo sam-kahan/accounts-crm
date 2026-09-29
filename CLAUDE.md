@@ -746,6 +746,32 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of commission costing and reading
+- **A markup is always on the net** (`commission.js#dealFor`, and
+  `client/src/commission.js#onGross`): a markup deal set to "gross" took the
+  rate on the VAT-inclusive total, so a VAT-registered contractor's £9 was
+  claimed as £10.80 net and invoiced at £12.96 (VAT on VAT). The contractor
+  form hides "Calculated on" for a markup. Start-up re-costed, once, any
+  logged invoice not yet on a commission invoice (not a hand-typed override)
+  with a note on it, and logged any already invoiced
+  (`app_settings.markup_on_net_0929`: `corrected`, `invoiced`).
+- **Contractor name matching** (`matchContractorByName`): whole words only
+  ("J Smith Electrical" is not in "AJ Smith Electrical"), a different
+  initial or first name in front of the same words is never confident, the
+  shared-words score alone never reaches 0.8, and a tie selects nobody.
+- **A floor is not a postcode** (`regions.js` `OUTWARD`: "Unit M4 1ST
+  FLOOR" is not M4). **CH64-66** (Neston, Ellesmere Port: Cheshire West and
+  Chester) are no longer placed in Liverpool: the form asks, or the
+  contractor's usual office applies.
+- **`stripPersonName`** takes initials only as a letter followed by a full
+  stop or a space: "The Albany", "Kingsway" and "Birkenhead" were being
+  removed as names.
+- The duplicate check selects the same number (exact or written
+  differently) in SQL, so a repeat of an invoice older than the newest 500
+  is still caught; the amend preview uses the stored figure for a money
+  field cleared (as the save does); an amount written "1.234,56" is not read
+  (it came out as £1.23).
+
 ### 2026-09-29 — refer to the ombudsman by email, from the complaint
 - **The page said referrals are "done on their website, not by email": wrong
   for several schemes.** Research of each scheme's official site (search

@@ -138,7 +138,8 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
               />
             </label>
           )}
-          {!isFixed && (
+          {/* A markup is added to their own price, before VAT: always the net. */}
+          {!isFixed && form.commission_basis !== 'markup' && (
             <label className="field">
               <span className="lbl">Calculated on</span>
               <select value={form.commission_on} onChange={(e) => set('commission_on', e.target.value)}>
