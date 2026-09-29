@@ -125,3 +125,69 @@ test('once Stage 2 has been asked for, the same request is never offered again',
   // Still at Stage 1: left alone.
   assert.equal(guardReview(review, { today: '2026-09-29', stage2Asked: false }).email.subject, review.email.subject);
 });
+
+import { contactByTrack } from '../src/services/trackContact.js';
+import { normaliseByOrg, guardByOrg, composeByOrg } from '../src/services/reviewGuard.js';
+
+// CDER collecting for Liverpool City Council: the complaint to the Council,
+// sent yesterday, must not hold back chasing CDER, weeks overdue.
+const cder = { id: 'c1', organisation_id: 'o-cder', org_name: 'CDER Group', stage: 'stage_1', state: 'open', raised_on: '2026-07-28' };
+const council = { id: 'p1', complaint_id: 'c1', organisation_id: 'o-lcc', org_name: 'Liverpool City Council', stage: 'stage_1', state: 'open', raised_on: '2026-09-29' };
+const orgs = [
+  { id: 'o-cder', name: 'CDER Group', complaints_email: null },
+  { id: 'o-lcc', name: 'Liverpool City Council', complaints_email: null },
+];
+const emails = [
+  { direction: 'inbound', sender_email: 'customercare@contactcder.co.uk', received_on: '2026-09-02' },
+  { direction: 'inbound', sender_email: 'imogen.moore@greenco.co.uk', to_addresses: ['customercare@contactcder.co.uk'], kind: 'our_email', received_on: '2026-09-10' },
+  // Sent from here, recorded against the Council: teaches its address.
+  { direction: 'outbound', sender_email: 'accounts@greenco.co.uk', to_addresses: ['revenue.service@liverpool.gov.uk', 'utilities@greenco.co.uk'], party_id: 'p1', received_on: '2026-09-29' },
+];
+
+test('each organisation’s correspondence is its own', () => {
+  const m = contactByTrack({ complaint: cder, parties: [council], orgs, emails, events: [], ourDomain: 'greenco.co.uk' });
+  assert.deepEqual(m.get('main'), { lastSentOn: '2026-09-10', lastTheirsOn: '2026-09-02' });
+  assert.deepEqual(m.get('p1'), { lastSentOn: '2026-09-29', lastTheirsOn: null });
+});
+
+test('a chaser recorded with no organisation is placed by the address it names, or else before the second organisation joined', () => {
+  const events = [
+    { event_date: '2026-09-29', party_id: null, note: 'Email sent: Formal complaint, to revenue.service@liverpool.gov.uk, utilities@greenco.co.uk' },
+    { event_date: '2026-09-28', party_id: null, note: 'Sent the email "x" from Outlook to rates@liverpool.gov.uk.' },
+    { event_date: '2026-09-16', party_id: null, note: 'Imogen chased again.' },
+    { event_date: '2026-09-30', party_id: null, note: 'Chased by phone.' }, // after the Council joined: nobody's
+  ];
+  const m = contactByTrack({ complaint: cder, parties: [council], orgs, emails: emails.slice(0, 2), events, ourDomain: 'greenco.co.uk' });
+  // The "Email sent" entry is its email's (counted from the email); an
+  // Outlook note naming an address that is no further organisation's is the
+  // main one's (28 Sep) — the Council's address isn't known here.
+  assert.equal(m.get('main').lastSentOn, '2026-09-28');
+  assert.equal(m.get('p1').lastSentOn, null);
+  const known = contactByTrack({ complaint: cder, parties: [council], orgs, emails, events, ourDomain: 'greenco.co.uk' });
+  assert.equal(known.get('main').lastSentOn, '2026-09-16'); // liverpool.gov.uk learnt from the Council's email
+  assert.equal(known.get('p1').lastSentOn, '2026-09-29');
+});
+
+test('each organisation gets its own step, guarded by its own dates', () => {
+  const tracks = [
+    { ...cder, key: 'main', status: 'response_overdue', needs_chasing: true, nextAction: 'Chase.' },
+    { ...council, key: 'p1', status: 'awaiting_ack', ack_due: '2026-10-02', needs_chasing: false, nextAction: 'Wait.' },
+  ];
+  const byOrg = normaliseByOrg([
+    { org: 'Liverpool City Council', headline: 'Chase the Council for an acknowledgement now.', email: { subject: 'Chasing', body: 'Please acknowledge.' }, email_now: true, next_action: { type: 'send_email' } },
+    { org: 'CDER Group Ltd', headline: 'Ask CDER for Stage 2 now.', email: { subject: 'Stage 2 request', body: 'Please escalate our complaint to Stage 2.' }, email_now: true, next_action: { type: 'escalate_stage2' } },
+  ], tracks);
+  assert.equal(byOrg[0].org_name, 'CDER Group');
+  assert.equal(byOrg[1].org_name, 'Liverpool City Council');
+  const contact = new Map([['main', { lastSentOn: '2026-09-10', lastTheirsOn: '2026-09-02' }], ['p1', { lastSentOn: '2026-09-29', lastTheirsOn: null }]]);
+  const g = guardByOrg(byOrg, tracks, (k) => contact.get(k), '2026-09-29');
+  // CDER: overdue and last written to on 10 Sep, so asking for Stage 2 stands.
+  assert.equal(g[0].headline, 'Ask CDER for Stage 2 now.');
+  assert.equal(g[0].email_now, true);
+  // The Council: complained to today, acknowledgement not due until 2 Oct.
+  assert.equal(g[1].email_now, false);
+  assert.match(g[1].headline, /Wait for their reply until/);
+  const top = composeByOrg({ headline: 'x', by_org: g, email: { body: 'y' } }, tracks);
+  assert.match(top.headline, /^CDER Group: Ask CDER for Stage 2 now\. Liverpool City Council: /);
+  assert.equal(top.email, null);
+});

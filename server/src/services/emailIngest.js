@@ -119,33 +119,37 @@ export function listComplaintEmails(complaintId) {
 // `messageId` is the Message-ID the email went out with: the copies that come
 // back (to the complaint's own address, to utilities@) carry the same one, so
 // they are recognised as this email rather than stored as a new one.
-export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null }) {
+// `partyId`: the further organisation it was sent to (migration 029), so
+// "when did we last write to them" is answered per organisation.
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null, partyId = null }) {
   const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
   const graphId = `out-${globalThis.crypto.randomUUID()}`;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(
+    const row = (await client.query(
       `INSERT INTO complaint_emails
          (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
           to_addresses, body_preview, received_at, direction, match_method,
-          reviewed_at, reviewed_as, reviewed_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent',now(),'sent',$9)`,
+          reviewed_at, reviewed_as, reviewed_by, party_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent',now(),'sent',$9,$10)
+       RETURNING id`,
       [
         complaintId, graphId, messageId || graphId, subject, 'You (sent from CRM)', fromEmail,
-        recipients, (body || '').slice(0, 2000), sentBy || null,
+        recipients, (body || '').slice(0, 2000), sentBy || null, partyId,
       ],
-    );
+    )).rows[0];
     await client.query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-       VALUES ($1, $2, 'chased', $3, $4)`,
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+       VALUES ($1, $5, $2, 'chased', $3, $4)`,
       [
         complaintId, todayISO(),
         `Email sent: ${subject || '(no subject)'}, to ${recipients.join(', ')}`,
-        sentBy || null,
+        sentBy || null, partyId,
       ],
     );
     await client.query('COMMIT');
+    return row.id;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

@@ -444,12 +444,21 @@ export function deriveStatus(complaint, rule) {
       ...base,
       status: 'awaiting_ack',
       label: `Awaiting acknowledgement, due in ${plural(ackWd)}`,
-      nextAction: null,
+      // Always a step, even when it is only to wait: a blank tells nobody
+      // whether anything is needed.
+      nextAction: `Nothing to send yet: wait for their acknowledgement, due ${ukDate(ackDue)}.`,
     };
   }
   const label =
     wd !== null ? `Awaiting response, due in ${plural(wd)}` : 'Awaiting response';
-  return { ...base, status: 'awaiting_response', label, nextAction: referNote.trim() || null };
+  const waitFor = `their ${complaint.stage === 'stage_2' ? 'final (Stage 2)' : 'Stage 1'} response`;
+  return {
+    ...base,
+    status: 'awaiting_response',
+    label,
+    nextAction: referNote.trim() ||
+      (due ? `Nothing to send yet: wait for ${waitFor}, due ${ukDate(due)}.` : `Wait for ${waitFor}.`),
+  };
 }
 
 // The complaint's procedure as a checklist: every step their procedure sets,

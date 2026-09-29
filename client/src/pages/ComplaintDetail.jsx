@@ -101,10 +101,25 @@ function emailIsForNow(r) {
 
 // The email to reply to so a follow-up stays in the same thread: their most
 // recent one (not ours, not sent from here).
-function replyTarget(c) {
+// With more than one organisation, `t` is the one it is for: only an email
+// from THAT organisation (by its complaints address's domain) is replied to,
+// so a follow-up to CDER never lands in the Council's thread.
+const domainOfAddr = (a) => String(a || '').toLowerCase().split('@')[1] || null;
+function replyTarget(c, t = null) {
   const ours = String(c.email_address || '').split('@')[1]?.toLowerCase();
-  const theirs = (c.emails || []).filter((e) => e.direction !== 'outbound' &&
+  let theirs = (c.emails || []).filter((e) => e.direction !== 'outbound' &&
     e.sender_email && !(ours && e.sender_email.toLowerCase().endsWith(`@${ours}`)));
+  if (t && (c.parties || []).length) {
+    const dom = domainOfAddr(t.org_email);
+    const own = theirs.filter((e) => dom && domainOfAddr(e.sender_email) === dom);
+    if (partyIdOf(t)) theirs = own;
+    else {
+      // The main organisation: its own address first, else anything that
+      // isn't from one of the further organisations.
+      const partyDoms = new Set((c.parties || []).map((p) => domainOfAddr(p.org_email)).filter(Boolean));
+      theirs = own.length ? own : theirs.filter((e) => !partyDoms.has(domainOfAddr(e.sender_email)));
+    }
+  }
   return theirs.sort((a, b) => new Date(b.received_at) - new Date(a.received_at))[0] || null;
 }
 
@@ -230,7 +245,7 @@ export default function ComplaintDetail() {
   // in): record it on the timeline as sent today, then have the next step
   // worked out again, so it moves on instead of repeating itself.
   const [markingSent, setMarkingSent] = useState(false);
-  async function markSent(em, escalate = false) {
+  async function markSent(em, escalate = false, t = null) {
     const on = prompt(escalate
       ? 'The date you sent the Stage 2 request (YYYY-MM-DD). Their Stage 2 deadline counts from it:'
       : 'The date you sent it (YYYY-MM-DD):', todayISO());
@@ -240,10 +255,10 @@ export default function ComplaintDetail() {
     setMsg(null);
     try {
       await api.complaints.addEvent(id, {
-        event_date: on, type: 'chased',
-        note: `Sent the email "${em.subject || 'the drafted email'}" from Outlook.`,
+        event_date: on, type: 'chased', party_id: partyIdOf(t),
+        note: `Sent the email "${em.subject || 'the drafted email'}" from Outlook${t && multi ? ` to ${t.org_name}` : ''}.`,
       });
-      if (escalate) await api.complaints.escalate(id, on);
+      if (escalate) await api.complaints.escalate(id, on, partyIdOf(t));
       setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
       setMsg('Recorded as sent. The next step has been worked out again.');
     } catch (e) {
@@ -271,9 +286,11 @@ export default function ComplaintDetail() {
   // Open the compose modal, optionally pre-filled from an AI draft.
   // `then: 'escalate'`: the email is the Stage 2 request, so sending it also
   // moves the complaint to Stage 2 (one press, not two).
-  function openSend(draft, then = null) {
+  function openSend(draft, then = null, t = null) {
     setSend({
-      to: c.org_email || '',
+      to: (t || c).org_email || '',
+      party_id: partyIdOf(t),
+      org_name: t && multi ? t.org_name : null,
       cc: '',
       subject: draft?.subject || `Re: ${c.subject} [${c.ref_code}]`,
       body: draft?.body || '',
@@ -537,6 +554,82 @@ export default function ComplaintDetail() {
   const parties = c.parties || [];
   const multi = parties.length > 0;
   const tracks = [c, ...parties];
+  // The email a review step comes with: where to send it, the text, and
+  // the buttons. `t`: the organisation it is for, with more than one.
+  const emailBlock = (r, t = null) => {
+    if (!r?.email?.body) return null;
+    const em = r.email;
+    const later = !emailIsForNow(r);
+    const reply = replyTarget(c, t);
+    const by = r.next_action?.by;
+    const inner = (
+      <div id={t ? undefined : 'ai-email'} style={{ marginTop: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, padding: 14 }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>
+          {later ? 'Nothing to send now. This is the follow-up for if they miss their date' : 'The email to send'}
+        </div>
+        <ol style={{ margin: '0 0 10px', paddingLeft: 20, fontSize: 14 }}>
+          {reply ? (
+            <li>
+              In Outlook, open their email <strong>“{reply.subject || '(no subject)'}”</strong> from{' '}
+              {reply.sender_name || reply.sender_email} ({formatDate(londonDay(reply.received_at))}) and press{' '}
+              <strong>Reply all</strong>, so it stays in the same thread.
+            </li>
+          ) : (
+            <li>
+              Start a new email to <strong>{(t || c).org_email || 'their complaints address'}</strong>
+              {(t || c).org_email && <> <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText((t || c).org_email)}>Copy address</button></>}.
+            </li>
+          )}
+          <li>
+            Copy this in{!reply && <>, with the subject</>}.{' '}
+            <span className="muted">
+              Copy in <code>{c.email_address}</code> (so their reply files itself here)
+              {c.external_cc?.length ? <> and <code>{c.external_cc.join(', ')}</code></> : null} too.
+            </span>
+          </li>
+        </ol>
+        {!reply && (
+          <div style={{ fontSize: 14, marginBottom: 6 }}>
+            <span className="muted">Subject:</span> <strong>{em.subject}</strong>{' '}
+            <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => { copyText(em.subject); flashCopied('subject'); }}>
+              {copied === 'subject' ? '✓ Copied' : 'Copy'}
+            </button>
+          </div>
+        )}
+        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
+          {em.body}
+        </pre>
+        {(() => {
+          const esc = !later && (t || c).stage === 'stage_1' && (!multi || t) &&
+            (r.next_action?.type === 'escalate_stage2' || r.email_step === 'stage2_request');
+          return (
+            <div className="btn-row">
+              <button className="btn-primary btn-sm" onClick={() => openSend(em, esc ? 'escalate' : null, t)}>
+                {esc ? 'Send it and escalate to Stage 2…' : 'Send it from here…'}
+              </button>
+              <button className="btn btn-sm" onClick={() => copyEmail(em)}>
+                {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+              </button>
+              <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(em, esc, t)}
+                title="You sent it from Outlook: it's recorded on the timeline and the next step is worked out again">
+                {markingSent ? 'Updating the next step…' : esc ? 'Sent it from Outlook: escalate…' : '✓ I sent it from Outlook'}
+              </button>
+            </div>
+          );
+        })()}
+      </div>
+    );
+    // Waiting: the follow-up is kept ready but folded away, so
+    // nothing on the page suggests sending it today.
+    return later ? (
+      <details style={{ marginTop: 14 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+          Kept ready: the follow-up to send only if they miss {by ? formatDate(by) : 'their date'}
+        </summary>
+        {inner}
+      </details>
+    ) : inner;
+  };
   const partyName = (pid) => parties.find((p) => p.id === pid)?.org_name || null;
   // Which organisation an email is from, as the AI read it (author_org), when
   // that names exactly one of them. Otherwise nobody guesses: it is asked.
@@ -644,16 +737,8 @@ export default function ComplaintDetail() {
         </div>
         <div className="card-body">
           {multi ? (
-            <div style={{ marginBottom: 12 }}>
-              {tracks.map((t) => (
-                <div key={t.id} className="btn-row" style={{ marginBottom: 4 }}>
-                  <strong style={{ minWidth: 140 }}>{t.org_name}</strong>
-                  <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
-                  <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
-                </div>
-              ))}
-              {c.imported && <span className="badge grey">Imported</span>}
-            </div>
+            // Each organisation's stage is shown with its next step below.
+            c.imported ? <div style={{ marginBottom: 12 }}><span className="badge grey">Imported</span></div> : null
           ) : (
             <div className="btn-row" style={{ marginBottom: 12 }}>
               <span className="badge navy">{STAGE_LABEL[c.stage]}</span>
@@ -662,9 +747,60 @@ export default function ComplaintDetail() {
             </div>
           )}
 
+          {/* More than one organisation: one next step EACH, never mixed.
+              The AI's step for that organisation when its review is up to
+              date (checked against that organisation's own dates and emails),
+              otherwise the one its dates give. */}
+          {multi && (
+            // Not coloured as a whole: each organisation's badge says whether
+            // its part is overdue, so a "wait" line never reads as a warning.
+            <div className="inline-note" style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 16, marginBottom: 6 }}><strong>Next steps</strong> (one for each organisation)</div>
+              {tracks.map((t, i) => {
+                if (!trackOpen(t)) {
+                  return (
+                    <div key={t.id} className="btn-row" style={{ padding: '8px 0', borderTop: i ? '1px solid var(--border, #e5e7eb)' : 'none' }}>
+                      <strong>{t.org_name}</strong>
+                      <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
+                      <span className="muted">Their part has ended.</span>
+                    </div>
+                  );
+                }
+                const own = c.ai_review_current ? c.ai_review?.by_org?.[i] : null;
+                const text = own?.headline || t.nextAction;
+                const draft = own && c.state === 'open' && emailIsForNow(own) ? own.email : null;
+                const esc = Boolean(draft) && t.stage === 'stage_1' &&
+                  (own.next_action?.type === 'escalate_stage2' || own.email_step === 'stage2_request');
+                return (
+                  <div key={t.id} style={{ padding: '8px 0', borderTop: i ? '1px solid var(--border, #e5e7eb)' : 'none' }}>
+                    <div className="btn-row" style={{ marginBottom: 2 }}>
+                      <strong>{t.org_name}</strong>
+                      <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
+                      <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
+                    </div>
+                    <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
+                    {draft && (
+                      <div className="btn-row" style={{ marginTop: 6 }}>
+                        <button className="btn-primary btn-sm" onClick={() => openSend(draft, esc ? 'escalate' : null, t)}>
+                          {esc ? `Send it and escalate ${t.org_name} to Stage 2…` : `Send it to ${t.org_name}…`}
+                        </button>
+                        <button className="btn btn-sm" onClick={() => copyEmail(draft)}>
+                          {copied === 'email' ? '✓ Copied' : 'Copy the email'}
+                        </button>
+                        <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(draft, esc, t)}>
+                          {markingSent ? 'Updating…' : esc ? 'Sent it from Outlook: escalate…' : '✓ I sent it from Outlook'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* One next step: the AI's when its review is up to date, otherwise
               the one worked out from the deadlines. */}
-          {(() => {
+          {!multi && (() => {
             const aiStep = c.ai_review_current && headlineOf(c.ai_review);
             // Without the AI's view, each organisation's own next step, named.
             const text = aiStep || (multi
@@ -884,86 +1020,32 @@ export default function ComplaintDetail() {
               </div>
             ) : (
               <>
-                <div style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.4 }}>{headlineOf(c.ai_review)}</div>
+                {multi ? (
+                  <div style={{ fontSize: 15 }} className="muted">
+                    {tracks.length} organisations, each with its own complaint and its own next step:
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.4 }}>{headlineOf(c.ai_review)}</div>
+                )}
                 {!c.ai_review_current && (
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                     Something has changed since this was written, so it’s being updated…
                   </div>
                 )}
 
-                {c.ai_review.email?.body && (() => {
-                  const em = c.ai_review.email;
-                  const later = !emailIsForNow(c.ai_review);
-                  const reply = replyTarget(c);
-                  const by = c.ai_review.next_action?.by;
-                  const inner = (
-                    <div id="ai-email" style={{ marginTop: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, padding: 14 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                        {later ? 'Nothing to send now. This is the follow-up for if they miss their date' : 'The email to send'}
+                {multi ? (
+                  c.ai_review_current && Array.isArray(c.ai_review.by_org) && tracks.map((t, i) => {
+                    const own = c.ai_review.by_org[i];
+                    if (!own || !trackOpen(t)) return null;
+                    return (
+                      <div key={t.id} style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border, #e5e7eb)' }}>
+                        <div style={{ fontWeight: 700 }}>{t.org_name}</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.4 }}>{own.headline}</div>
+                        {emailBlock(own, t)}
                       </div>
-                      <ol style={{ margin: '0 0 10px', paddingLeft: 20, fontSize: 14 }}>
-                        {reply ? (
-                          <li>
-                            In Outlook, open their email <strong>“{reply.subject || '(no subject)'}”</strong> from{' '}
-                            {reply.sender_name || reply.sender_email} ({formatDate(londonDay(reply.received_at))}) and press{' '}
-                            <strong>Reply all</strong>, so it stays in the same thread.
-                          </li>
-                        ) : (
-                          <li>
-                            Start a new email to <strong>{c.org_email || 'their complaints address'}</strong>
-                            {c.org_email && <> <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => copyText(c.org_email)}>Copy address</button></>}.
-                          </li>
-                        )}
-                        <li>
-                          Copy this in{!reply && <>, with the subject</>}.{' '}
-                          <span className="muted">
-                            Copy in <code>{c.email_address}</code> (so their reply files itself here)
-                            {c.external_cc?.length ? <> and <code>{c.external_cc.join(', ')}</code></> : null} too.
-                          </span>
-                        </li>
-                      </ol>
-                      {!reply && (
-                        <div style={{ fontSize: 14, marginBottom: 6 }}>
-                          <span className="muted">Subject:</span> <strong>{em.subject}</strong>{' '}
-                          <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => { copyText(em.subject); flashCopied('subject'); }}>
-                            {copied === 'subject' ? '✓ Copied' : 'Copy'}
-                          </button>
-                        </div>
-                      )}
-                      <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
-                        {em.body}
-                      </pre>
-                      {(() => {
-                        const esc = !later && !multi && c.stage === 'stage_1' &&
-                          (c.ai_review.next_action?.type === 'escalate_stage2' || c.ai_review.email_step === 'stage2_request');
-                        return (
-                          <div className="btn-row">
-                            <button className="btn-primary btn-sm" onClick={() => openSend(em, esc ? 'escalate' : null)}>
-                              {esc ? 'Send it and escalate to Stage 2…' : 'Send it from here…'}
-                            </button>
-                            <button className="btn btn-sm" onClick={() => copyEmail(em)}>
-                              {copied === 'email' ? '✓ Copied' : 'Copy the email'}
-                            </button>
-                            <button className="btn btn-sm" disabled={markingSent} onClick={() => markSent(em, esc)}
-                              title="You sent it from Outlook: it's recorded on the timeline and the next step is worked out again">
-                              {markingSent ? 'Updating the next step…' : esc ? 'Sent it from Outlook: escalate…' : '✓ I sent it from Outlook'}
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  );
-                  // Waiting: the follow-up is kept ready but folded away, so
-                  // nothing on the page suggests sending it today.
-                  return later ? (
-                    <details style={{ marginTop: 14 }}>
-                      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                        Kept ready: the follow-up to send only if they miss {by ? formatDate(by) : 'their date'}
-                      </summary>
-                      {inner}
-                    </details>
-                  ) : inner;
-                })()}
+                    );
+                  })
+                ) : emailBlock(c.ai_review)}
 
                 <details style={{ marginTop: 14 }}>
                   <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Why, and the full picture</summary>
@@ -1503,7 +1585,7 @@ export default function ComplaintDetail() {
       {/* Compose / send modal */}
       {send && (
         <Modal
-          title={send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}
+          title={`${send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}${send.org_name ? ` to ${send.org_name}` : ''}`}
           onClose={() => setSend(null)}
           footer={
             <div className="btn-row" style={{ justifyContent: 'flex-end' }}>

@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { HttpError } from './lib/http.js';
-import { pool } from './db/pool.js';
+import { pool, query } from './db/pool.js';
 import { requireAuth, requirePermission } from './middleware/auth.js';
 import auth from './routes/auth.js';
 import companies from './routes/companies.js';
@@ -199,6 +199,23 @@ app.listen(config.port, () => {
       if (k) console.log(`  Copies of emails sent from here filed as ours: ${k}`);
     })
     .catch((err) => console.error('  Earlier emails:', err.message));
+  // Complaints against more than one organisation: the email that raised it
+  // with the second one is theirs, and each organisation gets its own next
+  // step, so a review written before that is written again (once each).
+  import('./services/trackContact.js')
+    .then(({ linkSupplierEmails }) => linkSupplierEmails())
+    .then((n) => n && console.log(`  Emails linked to the organisation they were sent to: ${n}`))
+    .then(() => query(
+      `SELECT c.id FROM complaints c
+        WHERE c.state = 'open' AND EXISTS (SELECT 1 FROM complaint_parties p WHERE p.complaint_id = c.id)
+          AND NOT (COALESCE(c.ai_review, '{}'::jsonb) ? 'by_org')`,
+    ))
+    .then(async ({ rows }) => {
+      const { scheduleReview } = await import('./services/complaintReview.js');
+      rows.forEach((r, i) => scheduleReview(r.id, 60000 + i * 20000));
+      if (rows.length) console.log(`  Reviews to give each organisation its own step: ${rows.length}`);
+    })
+    .catch((err) => console.error('  Per-organisation steps:', err.message));
   import('./services/accountNumbers.js')
     .then(({ removeDigitSlips }) => removeDigitSlips())
     .then((n) => n && console.log(`  Mistyped account numbers removed on ${n} complaint(s)`))

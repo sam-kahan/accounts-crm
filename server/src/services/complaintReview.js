@@ -1,9 +1,10 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { gatherContext, lastTheirsByComplaint, stage2Asked } from './complaintContext.js';
+import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview } from './complaintContext.js';
+import { contactForOne } from './trackContact.js';
 import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction } from './complaintRules.js';
-import { guardReview, nextDueFromThem } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 
 export { reviewSignature };
 
@@ -51,13 +52,28 @@ const REVIEW_INSTRUCTION =
   'already been asked for: never draft the Stage 2 request again; any follow-up asks for their Stage 2 ' +
   'response by its due date.';
 
+// A complaint against more than one organisation (a debt collector and the
+// council or supplier whose account it is): separate complaints, each with
+// its own procedure, deadlines and correspondence, so separate next steps.
+const BY_ORG_INSTRUCTION =
+  ' THIS COMPLAINT IS AGAINST MORE THAN ONE ORGANISATION (the main one and the further ones in the ' +
+  'context). Each is a SEPARATE complaint with its own procedure, deadlines and emails: an email sent to ' +
+  'one is not a step with another, and one organisation\'s deadline never applies to another. ALSO add ' +
+  '"by_org": an array with ONE entry per organisation, the main organisation first, each {"org": its name ' +
+  'exactly as in the context, "headline", "email", "email_now", "next_action"} following all the rules ' +
+  'above but about THAT organisation only: its own stage and deadlines and the emails to and from it. ' +
+  'Each "email" is addressed to that organisation only and is about its part only. The top-level ' +
+  '"headline" then says in a few words what to do with each (e.g. "CDER: ask for Stage 2 now. Council: ' +
+  'wait for their acknowledgement, due 2 Oct.").';
+
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
   // The two newest files only: the rest were read by earlier reviews, and
   // re-sending every PDF on every refresh is where the AI cost went.
   const ctx = await gatherContext(id, undefined, { files: 2 });
   try {
-    const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION });
+    const multi = (ctx.complaint.parties || []).length > 0;
+    const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') });
     const headline = typeof raw.headline === 'string' && raw.headline.trim()
       ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
       : null;
@@ -73,7 +89,7 @@ export async function refreshReview(id) {
     const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()
       ? { name: raw.supplier.name.trim().slice(0, 200), why: typeof raw.supplier.why === 'string' ? raw.supplier.why.trim().slice(0, 400) : null }
       : null;
-    const review = guardReview(
+    let review = guardReview(
       { ...raw, headline, supplier, next_action: normaliseNextAction(raw.next_action) },
       {
         anyOverdue: Boolean(c.any_needs_chasing),
@@ -83,6 +99,13 @@ export async function refreshReview(id) {
         stage2Asked: stage2Asked([c, ...(c.parties || [])]),
       },
     );
+    // Each organisation's own step, checked against its own dates and emails.
+    if (multi) {
+      const tracks = tracksForReview(c);
+      const contact = await contactForOne(id, config.complaintEmail.domain);
+      review.by_org = guardByOrg(normaliseByOrg(raw.by_org, tracks), tracks, (k) => contact.get(k) || {});
+      review = composeByOrg(review, tracks);
+    }
     await query(
       `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
               ai_review_error = NULL WHERE id = $1`,
@@ -131,7 +154,9 @@ export async function refreshStaleReviews({ limit = 25 } = {}) {
   for (const row of rows) {
     if (refreshed + failed >= limit) break;
     const c = await decorate(row);
-    if (row.ai_review && row.ai_review_status === reviewSignature(c)) continue;
+    // Current, and (with more than one organisation) giving each its own step.
+    if (row.ai_review && row.ai_review_status === reviewSignature(c) &&
+      (!(c.parties || []).length || Array.isArray(row.ai_review.by_org))) continue;
     try {
       await refreshReview(row.id);
       refreshed += 1;

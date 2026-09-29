@@ -12,7 +12,8 @@ import {
   isStage2Request,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
-import { guardReview, nextDueFromThem } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, composeByOrg } from './reviewGuard.js';
+import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,11 @@ export async function decorateMany(rows) {
   // When they last wrote to us: the date on their email (as read), or the
   // day it arrived — never ours, a forward of ours included.
   const lastTheirs = await lastTheirsByComplaint(rows.map((r) => r.id));
+  // With more than one organisation, each one's own correspondence.
+  const partiesOf = (id) => parties.filter((p) => p.complaint_id === id);
+  const contact = await contactFor(
+    rows.filter((r) => partiesOf(r.id).length), partiesOf, [...orgs.values()], config.complaintEmail.domain,
+  );
   return rows.map((r) => {
     const c = withParties(
       decorateWithOrg(r, orgOf(r)),
@@ -94,6 +100,15 @@ export async function decorateMany(rows) {
       // the page offers "Send it and escalate" whatever the review called
       // its next step.
       if (c.ai_review?.email) c.ai_review.email_step = isStage2Request(c.ai_review.email) ? 'stage2_request' : null;
+      // Each organisation's own step, checked against its own dates and
+      // correspondence (reviewGuard.js#guardByOrg).
+      if (c.parties.length && Array.isArray(c.ai_review.by_org)) {
+        const tracks = tracksForReview(c);
+        const mine = contact.get(r.id) || new Map();
+        c.ai_review.by_org = guardByOrg(c.ai_review.by_org, tracks, (k) => mine.get(k) || {}).map((e) => (
+          e?.email ? { ...e, email_step: isStage2Request(e.email) ? 'stage2_request' : null } : e));
+        c.ai_review = composeByOrg(c.ai_review, tracks);
+      }
     }
     return c;
   });
@@ -117,8 +132,16 @@ function withParties(c, parties) {
     any_needs_chasing: Boolean(c.needs_chasing || parties.some((p) => p.needs_chasing)),
     // The review is current when nothing it was written against has moved —
     // on any organisation's track.
-    ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all),
+    // With more than one organisation it must give each its own step
+    // (by_org); one written before that is out of date.
+    ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all) &&
+      (!parties.length || Array.isArray(c.ai_review.by_org)),
   };
+}
+
+// The organisations a review speaks for, main first, each with its key.
+export function tracksForReview(c) {
+  return [{ ...c, key: 'main' }, ...(c.parties || []).map((p) => ({ ...p, key: p.id }))];
 }
 
 // One organisation's track worked out: status, rule, checklist and its

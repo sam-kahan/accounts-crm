@@ -99,9 +99,12 @@ async function collectComplaintDueItems(days = 30) {
         link,
       });
     }
-    for (const t of [c, ...(c.parties || [])]) {
-      const main = t === c;
-      const detail = (main ? aiStep : null) || t.nextAction || null;
+    const multi = (c.parties || []).length > 0;
+    for (const [i, t] of [c, ...(c.parties || [])].entries()) {
+      // Each organisation's own step (the review gives one per organisation
+      // when there is more than one), never another organisation's.
+      const aiOwn = c.ai_review_current ? (multi ? c.ai_review?.by_org?.[i]?.headline : aiStep) : null;
+      const detail = aiOwn || t.nextAction || null;
       const whose = c.parties?.length ? ` (${t.org_name})` : '';
       // Nothing due from them: responded, with the ombudsman, or finished.
       if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;

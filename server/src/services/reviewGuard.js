@@ -1,5 +1,5 @@
 import { todayISO } from '../lib/dates.js';
-import { addWorkingDays, ukDate, trackOpen, isStage2Request } from './complaintRules.js';
+import { addWorkingDays, ukDate, trackOpen, isStage2Request, normaliseNextAction } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // The AI review must never tell anyone to chase what isn't due, or to chase
@@ -176,4 +176,88 @@ function workingDaysSince(from, to) {
     if (d <= to) n += 1;
   }
   return n;
+}
+
+// ---------------------------------------------------------------------------
+// More than one organisation on a complaint: the review gives each its own
+// next step ("by_org"), and each is checked against THAT organisation's own
+// dates and correspondence, so a complaint sent to the Council yesterday
+// never holds back chasing CDER, overdue for weeks.
+// ---------------------------------------------------------------------------
+const orgKey = (s) => String(s || '').toLowerCase()
+  .replace(/\b(limited|ltd|plc|llp|group|the|uk)\b/g, ' ').replace(/[^a-z0-9]/g, '');
+
+// The review's entries, one per organisation in the tracks' order (the main
+// organisation first), matched by name; an organisation it didn't cover is
+// null (the page then shows the step the dates give). `tracks`: [{ key,
+// org_name }].
+export function normaliseByOrg(list, tracks) {
+  const entries = Array.isArray(list) ? list.filter((x) => x && typeof x === 'object') : [];
+  const used = new Set();
+  const find = (t) => {
+    const k = orgKey(t.org_name);
+    let i = entries.findIndex((e, j) => !used.has(j) && orgKey(e.org) === k);
+    if (i < 0 && k.length >= 4) {
+      const loose = entries.map((e, j) => j).filter((j) => {
+        const ek = orgKey(entries[j].org);
+        return !used.has(j) && ek.length >= 4 && (ek.includes(k) || k.includes(ek));
+      });
+      if (loose.length === 1) [i] = loose;
+    }
+    return i;
+  };
+  return tracks.map((t) => {
+    const i = find(t);
+    if (i < 0) return null;
+    used.add(i);
+    const e = entries[i];
+    const headline = typeof e.headline === 'string' && e.headline.trim()
+      ? e.headline.trim().replace(/\s+/g, ' ').slice(0, 200) : null;
+    if (!headline) return null;
+    const email = e.email && typeof e.email.body === 'string' && e.email.body.trim()
+      ? { subject: String(e.email.subject || '').slice(0, 300), body: e.email.body.slice(0, 8000) } : null;
+    return {
+      key: t.key, org_name: t.org_name, headline, recommended_action: headline, email,
+      email_now: email ? e.email_now !== false : false,
+      next_action: normaliseNextAction(e.next_action),
+    };
+  });
+}
+
+// What one organisation's step is checked against: its own overdue state,
+// deadline and correspondence. `contact`: { lastSentOn, lastTheirsOn }.
+export function factsForTrack(t, contact = {}, today = undefined) {
+  return {
+    today,
+    anyOverdue: Boolean(t.needs_chasing),
+    nextDue: nextDueFromThem([t]),
+    lastSentOn: contact.lastSentOn || null,
+    lastTheirsOn: contact.lastTheirsOn || null,
+    stage2Asked: trackOpen(t) && t.stage && t.stage !== 'stage_1',
+  };
+}
+
+// Each organisation's step, guarded against its own facts.
+export function guardByOrg(byOrg, tracks, contactOf, today = undefined) {
+  if (!Array.isArray(byOrg)) return byOrg;
+  return byOrg.map((e, i) => {
+    const t = tracks.find((x) => x.key === e?.key) || tracks[i];
+    if (!e || !t) return e || null;
+    if (!trackOpen(t)) return { ...e, headline: 'Their part of the complaint has ended. Nothing to do.', email: null, email_now: false, next_action: null };
+    return { ...guardReview(e, factsForTrack(t, contactOf(t.key), today)), key: e.key, org_name: e.org_name };
+  });
+}
+
+// The one line the list, the digest and the top of the page lead with, built
+// from each organisation's own step (the dates' step for one the review
+// didn't cover). The whole-complaint email goes: each organisation has its
+// own.
+export function composeByOrg(review, tracks) {
+  const byOrg = review.by_org || [];
+  const parts = tracks.map((t, i) => {
+    const h = byOrg[i]?.headline || t.nextAction;
+    return h ? `${t.org_name}: ${h.replace(/[.\s]*$/, '.')}` : null;
+  }).filter(Boolean);
+  const headline = parts.join(' ') || review.headline;
+  return { ...review, headline, recommended_action: headline, email: null, email_now: false };
 }

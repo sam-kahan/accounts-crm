@@ -694,6 +694,35 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — two organisations on one complaint: a next step for EACH, never mixed
+- **The problem**: the next step was worked out for the complaint as a whole,
+  so the complaint just sent to Liverpool City Council ("you wrote to them on
+  29 Sep, wait until 6 Oct") held back CDER, weeks overdue, and the two
+  organisations' steps ran together in one line.
+- **Each organisation's correspondence is its own** (`services/trackContact.js`,
+  `contactByTrack`, pure and tested): last sent / last heard is read per
+  organisation from the emails' addresses (an organisation is known by its
+  complaints address's domain, and by any email recorded against it; the main
+  organisation takes other outside addresses, never a further one's). "Email
+  sent" timeline entries are counted from their email, not twice. Emails sent
+  from here now record `party_id` (the per-organisation send buttons, and
+  "Raise it with the supplier"); `linkSupplierEmails()` links the ones sent
+  before this at start-up.
+- **The review gives one step per organisation** (`by_org`, asked for only
+  when there is more than one), each normalised by name (`normaliseByOrg`),
+  guarded against THAT organisation's dates and correspondence
+  (`guardByOrg` / `factsForTrack`) when written and when shown, and the top
+  line is composed from them (`composeByOrg`: "CDER Group: … Liverpool City
+  Council: …"). A multi-organisation review without `by_org` counts as out of
+  date; start-up schedules one refresh each.
+- **The page**: "Next steps (one for each organisation)" at the top, each with
+  its stage, status, step and its own Send / Copy / Sent-from-Outlook buttons
+  (the Stage 2 request escalates THAT organisation: `send-email` takes
+  `party_id`); the AI card has a section per organisation; replies go to that
+  organisation's own thread. The digest line per organisation uses its own
+  step. A waiting stage now always states its step ("Nothing to send yet:
+  wait for their acknowledgement, due …") instead of a blank.
+
 ### 2026-09-29 — a Stage 2 request sent from here always escalates; our own copies file themselves
 - **Sending the Stage 2 request moves the complaint to Stage 2 whichever
   button sent it.** "Send it and escalate" only appeared when the review's

@@ -251,6 +251,9 @@ const sendInput = z.object({
   // The email IS the Stage 2 request: sending it escalates the complaint, in
   // the same press (dated today).
   then: z.enum(['escalate']).optional().nullable(),
+  // The organisation it is to, with more than one on the complaint: its
+  // part is the one escalated, and the email is recorded as sent to them.
+  party_id: z.string().uuid().optional().nullable(),
 });
 
 // A permissive-but-real email check. Rejects addresses with CR/LF (header
@@ -274,8 +277,10 @@ router.post(
     const complaint = await decorate(rows[0]);
     // Checked before anything is sent, so an email never goes out for a step
     // that then can't be recorded.
-    if (d.then === 'escalate' && complaint.stage !== 'stage_1') {
-      throw new HttpError(400, 'Only a complaint at Stage 1 can be escalated to Stage 2 this way.');
+    const party = d.party_id ? (complaint.parties || []).find((p) => p.id === d.party_id) : null;
+    if (d.party_id && !party) throw new HttpError(400, 'That organisation isn’t on this complaint.');
+    if (d.then === 'escalate' && (party || complaint).stage !== 'stage_1') {
+      throw new HttpError(400, `Only ${party ? `${party.org_name}'s part` : 'a complaint'} at Stage 1 can be escalated to Stage 2 this way.`);
     }
 
     const to = parseRecipients(d.to);
@@ -299,14 +304,17 @@ router.post(
       body: d.body,
       sentBy: who(req),
       messageId: sent?.messageId || null,
+      partyId: party?.id || null,
     });
     // The Stage 2 request moves the complaint on whichever button sent it:
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
     // with the review offering the same request again.
     const track = d.then === 'escalate'
-      ? { party: null }
-      : isStage2Request({ subject: d.subject, body: d.body }) ? await stage2TrackFor(complaint.id, to) : null;
+      ? { party }
+      : isStage2Request({ subject: d.subject, body: d.body })
+        ? (d.party_id ? (party.stage === 'stage_1' ? { party } : null) : await stage2TrackFor(complaint.id, to))
+        : null;
     if (track) await escalateTrack(complaint.id, track.party?.id || null, todayISO(), who(req));
     const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
     scheduleReview(complaint.id);
@@ -1475,6 +1483,7 @@ router.post(
     const c = await decoratedById(req.params.id);
     const raisedOn = d.send ? todayISO() : d.sent_on;
     if (raisedOn > todayISO()) throw new HttpError(400, 'That date is in the future');
+    let sentEmailId = null;
     if (d.send) {
       const to = parseRecipients(d.send.to);
       const cc = parseRecipients(d.send.cc);
@@ -1482,12 +1491,12 @@ router.post(
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
       const sent = await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
-      await recordOutboundEmail({
+      sentEmailId = await recordOutboundEmail({
         complaintId: c.id, fromEmail: fromAddress(), to, cc,
         subject: d.send.subject, body: d.send.body, sentBy: who(req), messageId: sent?.messageId || null,
       });
     }
-    await createParty(c.id, {
+    const party = await createParty(c.id, {
       organisation_id: d.organisation_id || null,
       org_name: d.org_name,
       org_type: d.org_type || 'supplier',
@@ -1497,6 +1506,18 @@ router.post(
       raisedNote: `Complaint raised with ${d.org_name} too (the account ${c.org_name} is collecting is theirs)` +
         `${d.send ? ', sent from here' : ', sent from Outlook'}.`,
     }, who(req));
+    // The email (and its "sent" entry) is theirs: sending it to the supplier
+    // is not a step with the organisation already on the complaint.
+    if (sentEmailId) {
+      await query('UPDATE complaint_emails SET party_id = $2 WHERE id = $1', [sentEmailId, party.id]);
+      const head = `Email sent: ${d.send.subject}, to `;
+      await query(
+        `UPDATE complaint_events SET party_id = $2
+          WHERE complaint_id = $1 AND type = 'chased' AND party_id IS NULL AND event_date = $3
+            AND left(note, length($4)) = $4`,
+        [c.id, party.id, raisedOn, head],
+      );
+    }
     res.status(201).json(await decoratedById(c.id));
   }),
 );
