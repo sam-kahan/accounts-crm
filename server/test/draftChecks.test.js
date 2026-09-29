@@ -12,10 +12,9 @@ test('the AI’s named files are attached, matched by name', () => {
   assert.deepEqual(pickAttachments({ body: 'Please find attached the summons and bill.', attach: ['GreencoScan_202609251443.pdf', ' bill_42291835 (1).pdf'] }, docs), ['a', 'b']);
 });
 
-test('an email saying "attached" never goes with nothing: every document if the AI named none that exist', () => {
-  assert.deepEqual(pickAttachments({ body: 'The summons is attached.', attach: ['summons.pdf'] }, docs), ['a', 'b', 'c']);
-  assert.deepEqual(pickAttachments({ body: 'The summons is attached.' }, docs), ['a', 'b', 'c']);
-  // Nothing said about attachments, nothing named: nothing attached.
+test('only what the AI named is picked, never every document (the chooser decides the rest)', () => {
+  assert.deepEqual(pickAttachments({ body: 'The summons is attached.', attach: ['summons.pdf'] }, docs), []);
+  assert.deepEqual(pickAttachments({ body: 'The summons is attached.' }, docs), []);
   assert.deepEqual(pickAttachments({ body: 'Please confirm the refund.' }, docs), []);
   assert.deepEqual(pickAttachments({ body: 'attached' }, []), []);
 });

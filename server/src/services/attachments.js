@@ -105,7 +105,7 @@ export function onePerDocument(rows) {
 
 export function listAttachments(complaintId) {
   return query(
-    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, source_email_id, sha256,
+    `SELECT id, complaint_id, filename, mimetype, size_bytes, uploaded_at, source_email_id, sha256, description,
             (extracted_text IS NOT NULL) AS has_text
        FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at DESC`,
     [complaintId],

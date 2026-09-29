@@ -10,17 +10,14 @@ export function saysAttached(body) {
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-// Which of the complaint's documents go with a drafted email: the ones the AI
-// named from the list it was given (matched by file name), and, if it says
-// something is attached but named none that exist, every document on file
-// rather than none (an email saying "attached" with nothing on it is the
-// mistake this exists to stop). `docs`: [{ id, filename }].
+// The complaint's documents the AI named for a drafted email, matched by
+// file name. Only those: when it says something is attached but named none,
+// the caller has the AI choose from the documents' descriptions
+// (docChoice.js), never "all of them". `docs`: [{ id, filename }].
 export function pickAttachments(email, docs = []) {
   if (!email || !docs.length) return [];
   const named = Array.isArray(email.attach) ? email.attach.map(norm).filter(Boolean) : [];
-  const ids = docs.filter((d) => named.includes(norm(d.filename))).map((d) => d.id);
-  if (ids.length) return [...new Set(ids)];
-  return saysAttached(email.body) ? docs.map((d) => d.id) : [];
+  return [...new Set(docs.filter((d) => named.includes(norm(d.filename))).map((d) => d.id))];
 }
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];

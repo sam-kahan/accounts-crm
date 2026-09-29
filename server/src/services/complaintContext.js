@@ -275,7 +275,13 @@ export async function gatherContext(id, extraContext, { files } = {}) {
   const blocks = await attachmentBlocks(id, files === undefined ? {} : { maxFiles: files, newest: true });
   // The complaint's documents by name, so a drafted email can say which go
   // with it (they are attached by the system, not only read by the AI).
-  const docList = (await listAttachments(id)).map((d) => ({ id: d.id, filename: d.filename, uploaded_at: d.uploaded_at }));
+  // Each described once, in a line, so the AI knows what "GreencoScan….pdf" is.
+  try {
+    await (await import('./docChoice.js')).ensureDescriptions(id);
+  } catch (err) {
+    console.error('[documents] describing:', err.message);
+  }
+  const docList = (await listAttachments(id)).map((d) => ({ id: d.id, filename: d.filename, uploaded_at: d.uploaded_at, description: d.description || null }));
   return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks, docList };
 }
 

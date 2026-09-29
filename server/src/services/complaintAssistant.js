@@ -4,7 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
 import { track } from './aiUsage.js';
 import { referLimitText, holdToComplaintWord } from './complaintRules.js';
-import { pickAttachments, staleNoReply } from './draftChecks.js';
+import { pickAttachments, staleNoReply, saysAttached } from './draftChecks.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -124,7 +124,7 @@ function contextBlock(input) {
   lines.push(`TODAY is ${today} (UK). The status and the due dates below are worked out by the system from their procedure and are authoritative: never call a deadline missed or overdue unless it says OVERDUE, and never recommend chasing anything that is not yet due.`);
   if ((input.docList || []).length) {
     lines.push('DOCUMENTS ON FILE (the system attaches the ones you list in "email.attach"):');
-    for (const d of input.docList) lines.push(`- ${d.filename} (on file since ${londonDateOf(new Date(d.uploaded_at))})`);
+    for (const d of input.docList) lines.push(`- ${d.filename} (on file since ${londonDateOf(new Date(d.uploaded_at))})${d.description ? `: ${d.description}` : ''}`);
   } else {
     lines.push('DOCUMENTS ON FILE: none, so nothing can be attached.');
   }
@@ -354,12 +354,26 @@ export async function assistComplaint(input) {
   }
   // The documents it goes with, chosen by the AI from those on file (by file
   // name), so an email that says "attached" never goes without them.
+  // If it says something is attached but named nothing on file, the
+  // chooser decides from the documents' descriptions (never "all of them").
   const docs = input.docList || [];
-  const withDocs = (e) => (e && typeof e === 'object'
-    ? { ...e, attachment_ids: pickAttachments(e, docs) }
-    : e);
-  result.email = withDocs(result.email);
-  if (Array.isArray(result.by_org)) result.by_org = result.by_org.map((x) => (x?.email ? { ...x, email: withDocs(x.email) } : x));
+  const complaintId = input.complaint?.id;
+  const withDocs = async (e) => {
+    if (!e || typeof e !== 'object') return e;
+    let ids = pickAttachments(e, docs);
+    if (!ids.length && docs.length && complaintId && saysAttached(e.body)) {
+      try {
+        ids = (await (await import('./docChoice.js')).chooseAttachments(complaintId, { subject: e.subject, body: e.body })).ids;
+      } catch (err) {
+        console.error('[documents] choosing:', err.message);
+      }
+    }
+    return { ...e, attachment_ids: ids };
+  };
+  result.email = await withDocs(result.email);
+  if (Array.isArray(result.by_org)) {
+    result.by_org = await Promise.all(result.by_org.map(async (x) => (x?.email ? { ...x, email: await withDocs(x.email) } : x)));
+  }
   return result;
 }
 

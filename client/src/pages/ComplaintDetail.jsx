@@ -70,9 +70,12 @@ function AttachPicker({ docs = [], value = [], onChange }) {
         <button type="button" className="btn-ghost btn-sm" onClick={() => onChange([])}>None</button>
       </div>
       {docs.map((d) => (
-        <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 4px', fontSize: 14 }}>
+        <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '0 0 6px', fontSize: 14 }}>
           <input type="checkbox" checked={chosen.has(d.id)} onChange={() => toggle(d.id)} />
-          <span style={{ overflowWrap: 'anywhere' }}>{d.filename}</span>
+          <span style={{ overflowWrap: 'anywhere' }}>
+            {d.filename}
+            {d.description && <span className="muted" style={{ display: 'block', fontSize: 12 }}>{d.description}</span>}
+          </span>
           <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{d.size_bytes ? mb(d.size_bytes) : ''}</span>
         </label>
       ))}
@@ -514,7 +517,7 @@ export default function ComplaintDetail() {
       setSend({
         to: d.to, party_id: d.party_id || null, org_name: null, cc: '',
         subject: d.subject, body: signEmail(d.body, me),
-        attachment_ids: d.attachment_ids || [], caution: d.caution || null, then: null,
+        attachment_ids: d.attachment_ids || [], attach_why: d.attach_why || null, caution: d.caution || null, then: null,
       });
     } catch (e) {
       setMsg(e.message);
@@ -2326,6 +2329,9 @@ export default function ComplaintDetail() {
           </label>
           {send.then !== 'refer' && (
             <>
+              {send.attach_why && (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}><strong>Documents chosen by the AI:</strong> {send.attach_why}</div>
+              )}
               <NothingAttachedWarning body={send.body} ids={send.attachment_ids} docs={c.attachments} />
               <AttachPicker docs={c.attachments || []} value={send.attachment_ids || []}
                 onChange={(ids) => setSend({ ...send, attachment_ids: ids })} />

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
-import { saysAttached, pickAttachments, staleNoReply } from '../services/draftChecks.js';
+import { saysAttached, staleNoReply } from '../services/draftChecks.js';
+import { chooseAttachments } from '../services/docChoice.js';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
@@ -487,8 +488,14 @@ router.get(
         ? `our email of ${new Date(`${sentOn}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`
         : 'our earlier email';
     const original = String(em.body_text || em.body_preview || '').replace(/\n*Attached: [^\n]*(\n|$)/, '\n');
-    const docs = (await listAttachments(req.params.id)).map((d) => ({ id: d.id, filename: d.filename }));
-    const attachmentIds = pickAttachments({ body: original }, docs);
+    // The AI chooses which documents go, from what each one is.
+    let choice = { ids: [], why: null };
+    try {
+      choice = await chooseAttachments(req.params.id, { subject: em.subject || '', body: original });
+    } catch (err) {
+      console.error('[documents] choosing:', err.message);
+    }
+    const attachmentIds = choice.ids;
     const why = attachmentIds.length
       ? `We are sending ${which} again below, as the documents did not come through with it.`
       : `We are sending ${which} again below.`;
@@ -503,6 +510,7 @@ router.get(
       body,
       party_id: em.party_id || null,
       attachment_ids: attachmentIds,
+      attach_why: choice.why,
       caution: stale
         ? `This says they haven't replied to something sent on ${ukDate(stale.date)}, only days ago: take that out before sending ("${stale.sentence}").`
         : null,

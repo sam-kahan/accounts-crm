@@ -746,6 +746,20 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the AI decides which documents go, from what each one is
+- **Never "attach everything".** Each document on a complaint is described
+  once, in one line, by a low-effort read of just the undescribed ones
+  (`services/docChoice.js#ensureDescriptions`, migration `056`:
+  `complaint_attachments.description` / `described_at`, so an unreadable file
+  isn't tried again), when a complaint's context is gathered. The
+  descriptions go into every draft's DOCUMENTS ON FILE list, so the drafting
+  AI chooses by what "GreencoScan….pdf" IS, not its name.
+- `chooseAttachments()` (a small text-only, low-effort call on the email and
+  the descriptions) decides when the draft said "attached" but named nothing
+  on file (it used to tick every document), and for **Send again…**
+  (`attach_why` says why). `pickAttachments` now returns only what the AI
+  named. The pickers show each document's description.
+
 ### 2026-09-29 — Send again
 - **Every email sent from a complaint has Send again…** (open complaints):
   `GET /:id/emails/:emailId/resend` builds it without sending (no AI): the
