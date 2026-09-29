@@ -70,6 +70,16 @@ From the Greenco logo — use these, don't invent colours:
   - Date-input defaults use `todayISO()` from `api.js` (UK-local, same reason as
     the server helper). List/detail pages show explicit loading/error/empty
     states with a Retry — a failed fetch must never spin forever.
+  - **Phones** (`@media (max-width: 640px)` in `index.css`): every table with
+    headings becomes one card per row, each value labelled with its column —
+    `components/useStackedTables.js` (run once in `App.jsx`) copies the
+    headings onto the cells as `data-label` and marks the table `.stacked`, so
+    a new table needs nothing to work on a phone. Mark a table `.no-stack` to
+    keep its columns (it then scrolls inside its card). The first cell is the
+    card's title, so put the thing a row is ABOUT first. Form fields are 16px
+    there (smaller and an iPhone zooms in on every tap). Long, rarely-needed
+    lists fold away behind a one-line summary (Tidy up) so the main list is
+    on the first screen.
   - **PWA**: `manifest.webmanifest` + `sw.js` (network-first with an offline
     shell). Icons: `favicon-green-*` (`any`), `icon-maskable-{192,512}` (safe-zone
     padded on navy), `apple-touch-icon.png` (180×180 opaque). A new build's
@@ -693,6 +703,17 @@ the page says how far each date can be trusted.
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-09-29 — the site works on a phone
+- **Tables read as cards on a phone**, every figure labelled, instead of the
+  money columns sitting off the right-hand edge (commission, invoice totals,
+  due dates). One rule for every table — see "Phones" under Client above.
+- **The complaints list is on the first screen**: Tidy up is folded to one
+  line ("Possible duplicates to look at: 19 pairs of complaints", Show) — it
+  was 4,000px of pairs above the list on a phone; long "Next:" advice is
+  clamped to three lines there.
+- The closed menu no longer casts a dark strip down the left of every page;
+  16px form fields stop iPhones zooming in.
 
 ### 2026-09-29 — fixes from a review of the Stage 2 / per-organisation changes
 - **`isStage2Request` asks for Stage 2 itself**: the request must be for the

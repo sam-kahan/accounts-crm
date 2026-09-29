@@ -711,7 +711,7 @@ export default function Complaints() {
                     {c.state === 'open' && c.resolution_suggested && <span className="badge ok" style={{ marginLeft: 6 }}>Looks resolved: confirm</span>}
                     {c.new_emails > 0 && <span className="badge amber" style={{ marginLeft: 6 }}>{c.new_emails} new email{c.new_emails === 1 ? '' : 's'} to check</span>}
                     {c.state === 'open' && nextStepOf(c) && (
-                      <div style={{ fontSize: 12, marginTop: 2 }}>
+                      <div className="clamp-3" style={{ fontSize: 12, marginTop: 2 }}>
                         <span style={{ fontWeight: 600 }}>Next:</span> {nextStepOf(c)}
                       </div>
                     )}

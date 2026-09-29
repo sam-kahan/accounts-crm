@@ -428,6 +428,9 @@ textarea { resize: vertical; min-height: 70px; }
     z-index: 40;
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
   }
+  /* The shadow only when it is open: closed, it showed as a dark strip down
+     the left edge of every page. */
+  .sidebar:not(.open) { box-shadow: none; }
   .sidebar.open { transform: none; }
   .sidebar .brand img { height: 44px; }
   .sidebar nav a { padding: 12px 14px; } /* bigger touch targets */
@@ -463,6 +466,50 @@ textarea { resize: vertical; min-height: 70px; }
 
   /* Login card fits small screens */
   .login-card { padding: 28px 20px; }
+}
+
+/* Phones: each table row becomes a card, every value labelled with its
+   column (components/useStackedTables.js copies the headings onto the cells),
+   so nothing sits off the right-hand edge where the money columns used to
+   hide. The first cell is the row's title. A table marked .no-stack keeps its
+   columns and scrolls instead. */
+@media (max-width: 640px) {
+  table.stacked:not(.no-stack) { min-width: 0; }
+  table.stacked:not(.no-stack) > thead { display: none; }
+  table.stacked:not(.no-stack),
+  table.stacked:not(.no-stack) > tbody,
+  table.stacked:not(.no-stack) > tfoot,
+  table.stacked:not(.no-stack) > tbody > tr,
+  table.stacked:not(.no-stack) > tfoot > tr { display: block; width: 100%; }
+  table.stacked:not(.no-stack) > tbody > tr,
+  table.stacked:not(.no-stack) > tfoot > tr { border-bottom: 1px solid var(--border); padding: 8px 0; }
+  table.stacked:not(.no-stack) > tbody > tr:last-child { border-bottom: none; }
+  /* The label floats left and the value keeps its own layout on the right
+     (a figure and its "+ VAT" stay together). */
+  table.stacked:not(.no-stack) > tbody > tr > td,
+  table.stacked:not(.no-stack) > tfoot > tr > td {
+    display: block; border: none; padding: 3px 14px; text-align: right; min-height: 0; overflow: hidden;
+  }
+  table.stacked:not(.no-stack) td::before {
+    content: attr(data-label); float: left; width: 38%; margin-right: 8px; text-align: left;
+    font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--text-muted); padding-top: 2px;
+  }
+  table.stacked:not(.no-stack) td[data-label='']::before { display: none; }
+  table.stacked:not(.no-stack) td[data-label=''] { display: block; text-align: left; }
+  /* The first cell leads the card, full width, like a heading. */
+  table.stacked:not(.no-stack) > tbody > tr > td:first-child { display: block; text-align: left; font-size: 15px; padding-top: 6px; }
+  table.stacked:not(.no-stack) > tbody > tr > td:first-child::before { display: none; }
+  table.stacked:not(.no-stack) .num { text-align: right; }
+  .total-row td { border-top: none !important; }
+  table.stacked:not(.no-stack) > tbody > tr.total-row,
+  table.stacked:not(.no-stack) > tfoot > tr { border-top: 2px solid var(--navy); }
+  /* Long "Next:" advice on the complaints list: three lines, the rest on
+     the complaint. */
+  /* 16px form text: anything smaller and an iPhone zooms the page in on every
+     field tapped. */
+  input, select, textarea { font-size: 16px; }
+  .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 }
 
 /* Larger tap targets on touch devices */

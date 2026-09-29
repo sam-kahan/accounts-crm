@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useStackedTables } from './components/useStackedTables';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
@@ -49,6 +50,8 @@ const TITLES = {
 };
 
 export default function App() {
+  // Wide tables read as cards on a phone (index.css): every cell labelled.
+  useStackedTables();
   const { pathname } = useLocation();
   const { user, logout, canView } = useAuth();
   // Only the areas this user can actually reach, and only headings that still

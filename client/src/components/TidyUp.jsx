@@ -10,6 +10,9 @@ export default function TidyUp({ refreshKey, onChanged }) {
   const [t, setT] = useState(null);
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState(null);
+  // Folded away until asked for: a long list of possible duplicates pushed
+  // the complaints themselves off the first screen (a phone's in particular).
+  const [open, setOpen] = useState(false);
   const load = () => api.complaints.tidy().then(setT).catch(() => setT(null));
   useEffect(() => { load(); }, [refreshKey]);
 
@@ -40,7 +43,19 @@ export default function TidyUp({ refreshKey, onChanged }) {
     <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--green, #a2c533)' }}>
       <div className="card-head">
         <h2>Tidy up <span className="badge green">{t.complaints.length + t.organisations.length}</span></h2>
+        <button className="btn btn-sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          {open ? 'Hide' : 'Show'}
+        </button>
       </div>
+      {!open ? (
+        <div className="card-body muted" style={{ fontSize: 13 }}>
+          Possible duplicates to look at:{' '}
+          {[
+            t.complaints.length && `${t.complaints.length} pair${t.complaints.length === 1 ? '' : 's'} of complaints`,
+            t.organisations.length && `${t.organisations.length} pair${t.organisations.length === 1 ? '' : 's'} of organisations`,
+          ].filter(Boolean).join(' and ')}.
+        </div>
+      ) : (
       <div className="card-body">
         <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
           These look like the same thing on file twice. Merging keeps everything and notes it on the timeline.
@@ -85,6 +100,7 @@ export default function TidyUp({ refreshKey, onChanged }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }
