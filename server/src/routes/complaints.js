@@ -792,7 +792,23 @@ router.get(
   asyncHandler(async (_req, res) => {
     const open = (await query(`SELECT count(*)::int AS n,
         count(*) FILTER (WHERE rechecked_at IS NULL)::int AS never FROM complaints WHERE state = 'open'`)).rows[0];
-    res.json({ run: await recheckStatus(), open: open.n, never_rechecked: open.never, ai: config.anthropic.enabled, mailbox: emailConfigured() });
+    const run = await recheckStatus();
+    // Which ones, and why: added since the last run, or their re-check failed
+    // (a failure leaves no date, so without saying which, the count can't be
+    // acted on).
+    const never = (await query(
+      `SELECT id, ref_code, org_name, subject, created_at, recheck_progress FROM complaints
+        WHERE state = 'open' AND rechecked_at IS NULL ORDER BY created_at DESC LIMIT 20`,
+    )).rows.map((c) => {
+      const failed = (run?.results || []).filter((r) => r.id === c.id && r.result === 'failed').pop();
+      const own = c.recheck_progress?.status === 'failed' ? c.recheck_progress : null;
+      const why = failed ? `Its re-check failed: ${failed.text}`
+        : own ? `Its re-check failed${own.error ? `: ${own.error}` : ''}`
+          : run?.started_at && new Date(c.created_at) > new Date(run.started_at) ? 'Added since the last re-check'
+            : 'Not re-checked yet';
+      return { id: c.id, ref_code: c.ref_code, org_name: c.org_name, subject: c.subject, why };
+    });
+    res.json({ run, open: open.n, never_rechecked: open.never, never, ai: config.anthropic.enabled, mailbox: emailConfigured() });
   }),
 );
 router.post(

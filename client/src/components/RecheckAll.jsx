@@ -79,6 +79,24 @@ export default function RecheckAll({ onChanged }) {
             The mailbox connection isn’t set up, so only the emails already on file will be read.
           </div>
         )}
+        {!running && info.never?.length > 0 && (
+          <div className="inline-note warn" style={{ marginBottom: 10 }}>
+            <strong>Never re-checked:</strong>
+            <ul style={{ margin: '4px 0 4px 18px', padding: 0 }}>
+              {info.never.map((c) => (
+                <li key={c.id}>
+                  <Link to={`/complaints/${c.id}`}>{c.ref_code}</Link> {c.org_name}{c.subject ? `: ${c.subject}` : ''}
+                  <span className="muted"> ({c.why})</span>
+                </li>
+              ))}
+            </ul>
+            <span style={{ fontSize: 12 }}>
+              To re-check {info.never.length === 1 ? 'it' : 'them'}, press Re-check all below: only complaints
+              with something new are read (one AI read each), so the ones already done cost nothing. Or open
+              {info.never.length === 1 ? ' it' : ' one'} and press “Re-check &amp; update next steps”.
+            </span>
+          </div>
+        )}
         {err && <div className="inline-note warn" style={{ marginBottom: 8 }}>{err}</div>}
         <div className="btn-row" style={{ marginBottom: 10 }}>
           <button className="btn-primary btn-sm" disabled={busy || running || !info.ai || !info.open} onClick={() => start(false)}>

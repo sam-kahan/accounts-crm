@@ -746,6 +746,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — "never re-checked" says which, and why
+- `GET /complaints/recheck` returns `never` (up to 20: ref, organisation,
+  subject, and why: its re-check failed, with the reason, or it was added
+  since the last run), listed in the Re-check card with links. A failed
+  re-check sets no `rechecked_at`, so the count alone couldn't be acted on.
+- Checklist wording: "the standard for a debt collector, set by the FCA;
+  their own procedure hasn't been researched yet" (no brackets in
+  brackets), and a referral date that has passed but is held shows
+  "On hold" (`held`) with the reason, not "Later".
+
 ### 2026-09-29 — an email marked by hand can be undone
 - `POST /:id/emails/:emailId/review` (a person's choice, and "Accept the AI's
   reading for all") now stores what it changed in `complaint_emails.applied`
