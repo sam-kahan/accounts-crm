@@ -33,8 +33,45 @@ const compact = (name) => orgKey(name).replace(/\s+/g, '');
 // Council"), since the place name turns up in every address.
 const GENERIC = /^(?:ltd|plc|llp|uk|group|holdings|asset|management|services|service|property|properties|estates|the|and|company|co|limited)*$/;
 
-// Are two names the same organisation? Exact after cleaning, or one is the
-// other with only generic words added (at least 5 letters in common).
+// What a supplier or collector adds to its brand without being a different
+// body: "Octopus" is "Octopus Energy", "CDER" is "CDER Group". Only ever as
+// trailing words after the whole brand, and only when exactly one saved
+// organisation fits (matchOrgName), so "Scottish" can't pick between
+// "Scottish Power" and "Scottish Water". Housing words are left out: a place
+// ("Liverpool") must never become a landlord ("Liverpool Homes").
+const SECTOR = new Set(['energy', 'gas', 'electric', 'electricity', 'power', 'water', 'utilities', 'utility',
+  'supply', 'supplies', 'retail', 'debt', 'recovery', 'recoveries', 'collection', 'collections', 'financial', 'finance', 'solutions']);
+const GENERIC_WORD = new Set(['ltd', 'plc', 'llp', 'uk', 'group', 'holdings', 'services', 'service', 'company', 'co', 'limited', 'and']);
+const COUNCIL_WORDS = new Set(['city', 'metropolitan', 'borough', 'district', 'county', 'council', 'of']);
+
+// Letters apart (insertions, deletions, substitutions), stopping past `max`.
+function editDistance(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      best = Math.min(best, cur[j]);
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Are two names the same organisation? Any of:
+//   - exact after cleaning (Ltd/Limited, &/and, "the", punctuation);
+//   - one is the other with only generic words added, at least 5 letters in
+//     common ("LivingCity" is "Livingcity Asset Management Ltd");
+//   - the same once company words are dropped ("CDER" is "CDER Group",
+//     "UK Power Networks" is "UK Power Networks Ltd");
+//   - one is the other's whole brand plus sector words ("Octopus" is
+//     "Octopus Energy", "OVO" is "OVO Energy");
+//   - two councils for the same place ("Liverpool Council" is "Liverpool
+//     City Council") — never a bare place and its council;
+//   - a long name one letter out ("Brittish Gas"): a typo, not another body.
 export function sameOrgName(a, b) {
   const ka = orgKey(a);
   const kb = orgKey(b);
@@ -43,7 +80,28 @@ export function sameOrgName(a, b) {
   const ca = compact(a);
   const cb = compact(b);
   const [short, long] = ca.length <= cb.length ? [ca, cb] : [cb, ca];
-  return short.length >= 5 && long.startsWith(short) && GENERIC.test(long.slice(short.length));
+  if (short.length >= 5 && long.startsWith(short) && GENERIC.test(long.slice(short.length))) return true;
+
+  const wa = ka.split(' ');
+  const wb = kb.split(' ');
+  const core = (w) => w.filter((x) => !GENERIC_WORD.has(x)).join('');
+  const coreA = core(wa);
+  const coreB = core(wb);
+  if (coreA.length >= 3 && coreA === coreB) return true;
+
+  const [ws, wl] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  const brand = ws.filter((x) => !GENERIC_WORD.has(x));
+  const rest = wl.filter((x) => !GENERIC_WORD.has(x));
+  if (brand.join('').length >= 3 && brand.length < rest.length &&
+      brand.every((x, i) => rest[i] === x) && rest.slice(brand.length).every((x) => SECTOR.has(x))) return true;
+
+  const isCouncil = (w) => w.includes('council');
+  if (isCouncil(wa) && isCouncil(wb)) {
+    const place = (w) => w.filter((x) => !COUNCIL_WORDS.has(x) && !GENERIC_WORD.has(x)).join(' ');
+    if (place(wa) && place(wa) === place(wb)) return true;
+  }
+
+  return short.length >= 10 && editDistance(ca, cb, 1) <= 1;
 }
 
 // The one saved organisation a name refers to: an exact match, or else the
@@ -57,9 +115,27 @@ export function matchOrgName(orgs, name) {
   return hits.length === 1 ? hits[0] : null;
 }
 
-export async function findOrgByName(name) {
+// Webmail and the like: an address there says nothing about which body sent it.
+const SHARED_DOMAINS = /^(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|aol|btinternet|sky|virginmedia|talktalk|protonmail|mail)\./i;
+export const domainOf = (addr) => String(addr || '').toLowerCase().split('@')[1]?.trim() || null;
+
+// The saved organisation a name — or failing that, the email domains it
+// wrote from or is written to at — refers to. A domain counts only when
+// exactly one organisation's complaints address is at it, and never our own
+// or a webmail one.
+export function matchOrg(orgs, { name, domains = [], ourDomain = '' } = {}) {
+  const byName = name ? matchOrgName(orgs, name) : null;
+  if (byName) return byName;
+  const ours = String(ourDomain || '').toLowerCase();
+  const want = new Set(domains.map((d) => String(d || '').toLowerCase()).filter((d) => d && d !== ours && !SHARED_DOMAINS.test(d)));
+  if (!want.size) return null;
+  const hits = orgs.filter((o) => want.has(domainOf(o.complaints_email)));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export async function findOrgByName(name, { domains = [], ourDomain = '' } = {}) {
   const { rows } = await query('SELECT * FROM organisations');
-  return matchOrgName(rows, name);
+  return matchOrg(rows, { name, domains, ourDomain });
 }
 
 // A UK postcode in an address, normalised ("l87ad" → "L8 7AD"), or null.

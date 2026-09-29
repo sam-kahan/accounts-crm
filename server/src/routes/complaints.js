@@ -17,7 +17,7 @@ import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
-import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, PARTY_COLS } from '../services/orgMatch.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
@@ -557,7 +557,10 @@ router.post(
     }
     if (!text && !blocks.length) throw new HttpError(400, 'Paste the complaint, or attach the email or letter.');
     const parsed = await parseImportedComplaint({ text, hint: d.hint, blocks });
-    res.json(parsed);
+    // The saved organisation it is about, by the same rule imports use, so the
+    // form doesn't offer to set up a second one for a name written differently.
+    const org = parsed?.org_name ? await findOrgByName(parsed.org_name) : null;
+    res.json({ ...parsed, matched_organisation_id: org?.id || null });
   }),
 );
 

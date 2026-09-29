@@ -506,7 +506,13 @@ async function createFromEmail(em, analysis) {
   }
   if (match) return null;
 
-  let org = await findOrgByName(p.org_name);
+  // By name, or failing that by the address it went to (their complaints
+  // address on file), so a name written slightly differently doesn't set up a
+  // second organisation. Only when it went to one outside domain: copied to
+  // two bodies, the address can't say which the complaint is against.
+  const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
+  const outside = [...new Set((em.to_addresses || []).map((a) => String(a).toLowerCase().split('@')[1]).filter((d) => d && d !== ourDomain))];
+  let org = await findOrgByName(p.org_name, { domains: outside.length === 1 ? outside : [], ourDomain });
   if (!org) {
     const type = p.org_type || 'other';
     let prof = {};

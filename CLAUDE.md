@@ -739,6 +739,23 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — imports stop setting up a second organisation for a name written differently
+- **`orgMatch.js#sameOrgName` matches more ways a name is written**: company
+  words dropped ("CDER" / "CDER Group"), a brand plus sector words ("Octopus"
+  / "Octopus Energy", "OVO" / "OVO Energy"; `SECTOR`), two councils for one
+  place ("Liverpool Council" / "Liverpool City Council"), and a one-letter
+  typo in a long name. Still never a bare place and its council or a
+  landlord, never "EON" for "E.ON Next", and only when ONE saved
+  organisation fits.
+- **Then by their complaints address** (`matchOrg`): an import uses the
+  domain of the complaints address the AI read (not every domain in the
+  thread: a collector writes about a supplier's bill); a complaint created
+  from our own email uses its recipient's domain when it went to one outside
+  domain. Webmail and our own domain never count.
+- The Log form's "fill from the email/letter" is matched on the server by the
+  same rule (`matched_organisation_id`). Duplicates already made show in
+  Tidy up (it uses the same rule) to merge.
+
 ### 2026-09-29 — a Stage 2 request sent is never left at Stage 1
 - **`isStage2Request` rewritten** (`complaintRules.js#asksForStage2`): per
   clause, an ask made now ("we would like", "please", "kindly", "could you",

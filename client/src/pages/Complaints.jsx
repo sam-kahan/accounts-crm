@@ -99,7 +99,9 @@ function NewComplaintModal({
     setError(null);
     try {
       const p = await api.complaints.parseImport(src);
-      const org = matchOrg(orgs, p.org_name);
+      // The server matches it as imports do (a name written slightly differently
+      // is still the saved one); the exact match here is the fallback.
+      const org = orgs.find((o) => o.id === p.matched_organisation_id) || matchOrg(orgs, p.org_name);
       setForm((f) => ({
         ...f,
         ...Object.fromEntries(Object.entries(toInitial(p)).filter(([k, v]) => k !== '_notes' && v !== '')),

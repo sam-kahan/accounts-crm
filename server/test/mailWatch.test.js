@@ -273,3 +273,42 @@ test('a reply in a thread of a deleted complaint is left alone', () => {
     { ...ctx, numbers: nIndex, ignoredThreads: new Set(['gone-thread']) });
   assert.equal(r, null);
 });
+
+test('an organisation written slightly differently is the one on file, never a new one', async () => {
+  const { matchOrg } = await import('../src/services/orgMatch.js');
+  const same = [
+    ['CDER', 'CDER Group'],
+    ['Octopus', 'Octopus Energy'],
+    ['OVO', 'OVO Energy'],
+    ['OVO Energy Ltd', 'OVO Energy'],
+    ['Lowell', 'Lowell Financial Ltd'],
+    ['UK Power Networks', 'UK Power Networks Ltd'],
+    ['Liverpool Council', 'Liverpool City Council'],
+    ['Sefton Council', 'Sefton Metropolitan Borough Council'],
+    ['Brittish Gas Services', 'British Gas Services'],
+    ['British Gas', 'British Gas Services Ltd'],
+  ];
+  for (const [a, b] of same) assert.equal(sameOrgName(a, b), true, `${a} / ${b}`);
+  const different = [
+    ['Liverpool', 'Liverpool City Council'],
+    ['Liverpool', 'Liverpool Homes'],
+    ['Scottish Power', 'Scottish Water'],
+    ['EON', 'E.ON Next'],
+    ['Liverpool City Council', 'Knowsley Council'],
+    ['Manchester City Council', 'Manchester Metropolitan University'],
+    ['Places for People', 'Plus Dane'],
+  ];
+  for (const [a, b] of different) assert.equal(sameOrgName(a, b), false, `${a} / ${b}`);
+  // Two saved organisations it could be: neither.
+  assert.equal(matchOrgName([{ id: 'a', name: 'Scottish Power' }, { id: 'b', name: 'Scottish Water' }], 'Scottish'), null);
+  // Name not recognised, but their complaints address is on file: that one.
+  const orgs = [
+    { id: 'lcc', name: 'Liverpool City Council', complaints_email: 'complaints@liverpool.gov.uk' },
+    { id: 'bg', name: 'British Gas', complaints_email: 'complaints@britishgas.co.uk' },
+  ];
+  assert.equal(matchOrg(orgs, { name: 'Council Tax Team', domains: ['liverpool.gov.uk'] })?.id, 'lcc');
+  // Never by a webmail domain, our own, or one two organisations share.
+  assert.equal(matchOrg(orgs, { name: 'Someone', domains: ['gmail.com'] }), null);
+  assert.equal(matchOrg(orgs, { name: 'Someone', domains: ['greenco.co.uk'], ourDomain: 'greenco.co.uk' }), null);
+  assert.equal(matchOrg([...orgs, { id: 'x', name: 'Other', complaints_email: 'x@liverpool.gov.uk' }], { name: 'Someone', domains: ['liverpool.gov.uk'] }), null);
+});

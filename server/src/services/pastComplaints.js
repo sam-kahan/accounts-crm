@@ -534,7 +534,16 @@ async function importClaimed(id, group, by) {
   // 4. The organisation: matched, or set up (with its complaints address, if
   //    the emails show it).
   const orgName = pick('org_name');
-  let org = orgName ? await findOrgByName(orgName) : null;
+  // By name, or failing that by their complaints address as read from the
+  // emails (its domain against the complaints addresses on file), so a name
+  // read slightly differently doesn't set up a second organisation. Not every
+  // domain in the thread: a debt collector writes about a supplier's bill.
+  let org = orgName || x?.org_complaints_email
+    ? await findOrgByName(orgName, {
+      domains: [domainOf(x?.org_complaints_email)].filter(Boolean),
+      ourDomain: config.complaintEmail.domain,
+    })
+    : null;
   if (!org && orgName) {
     org = (await query(
       `INSERT INTO organisations (name, type, complaints_email, research_status, notes)
