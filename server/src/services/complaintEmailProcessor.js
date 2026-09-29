@@ -541,7 +541,7 @@ export async function undoEmail(em, by) {
      VALUES ($1, $4, 'note', $2, $3, $5)`,
     [
       em.complaint_id,
-      `Automatic record from the email "${em.subject || '(no subject)'}" undone` +
+      `${applied.by ? `What ${applied.by} recorded` : 'Automatic record'} from the email "${em.subject || '(no subject)'}" undone` +
         (undoneWords(applied).length ? ` (${undoneWords(applied).join('; ')})` : '') + '.',
       by,
       todayISO(),

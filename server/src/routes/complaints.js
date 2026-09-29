@@ -1142,13 +1142,16 @@ router.post(
     if (on > todayISO()) throw new HttpError(400, 'That date is in the future');
     const subject = em.subject || '(no subject)';
 
-    // Once only: a double-click, or two people at once, can't record it twice.
-    const marked = await query(
-      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, party_id = $4
-        WHERE id = $1 AND reviewed_at IS NULL`,
-      [em.id, d.as, who(req), partyId],
-    );
-    if (!marked.rowCount) throw new HttpError(409, 'This email has already been dealt with.');
+    const cid = req.params.id;
+    // What it changes, kept on the email (`applied`, as an automatic record
+    // is) so Undo puts back exactly what was there. One transaction: the
+    // email is never left marked with its dates unrecorded.
+    const changes = d.as === 'acknowledgement'
+      ? { acknowledged_on: on }
+      : d.as === 'response'
+        ? { responded_on: on, ...(complaint.stage === 'stage_2' ? { final_response_on: on } : {}) }
+        : {};
+    const before = Object.fromEntries(Object.keys(changes).map((k) => [k, complaint[k] ?? null]));
     // Replacing a date already recorded is allowed, but never silently.
     const replacing =
       d.as === 'acknowledgement' && complaint.acknowledged_on && complaint.acknowledged_on !== on
@@ -1156,37 +1159,49 @@ router.post(
         : d.as === 'response' && complaint.responded_on && complaint.responded_on !== on
           ? `responded: ${readable(complaint.responded_on)} → ${readable(on)}`
           : null;
-    const cid = req.params.id;
-    if (replacing) {
-      await query(
-        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-         VALUES ($1,$2,$3,'note',$4,$5)`,
-        [cid, partyId, todayISO(), `Details corrected: ${replacing} (from the email "${subject}")`, who(req)],
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Once only: a double-click, or two people at once, can't record it twice.
+      const marked = await client.query(
+        `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = $2, reviewed_by = $3, party_id = $4
+          WHERE id = $1 AND reviewed_at IS NULL`,
+        [em.id, d.as, who(req), partyId],
       );
-    }
-    if (d.as === 'acknowledgement') {
-      await query(`UPDATE ${track.table} SET acknowledged_on = $2 WHERE id = $1`, [complaint.id, on]);
-      await query(
-        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-         VALUES ($1,$2,$3,'acknowledged',$4,$5)`,
-        [cid, partyId, on, `Acknowledged by email: ${subject}`, who(req)],
-      );
-    } else if (d.as === 'response') {
-      await query(
-        `UPDATE ${track.table} SET responded_on = $2,
-                final_response_on = CASE WHEN stage = 'stage_2' THEN $2::date ELSE final_response_on END
-          WHERE id = $1`,
-        [complaint.id, on],
-      );
-      await query(
-        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-         VALUES ($1,$2,$3,'response_received',$4,$5)`,
-        [
-          cid, partyId, on,
-          `${complaint.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`,
-          who(req),
-        ],
-      );
+      if (!marked.rowCount) throw new HttpError(409, 'This email has already been dealt with.');
+      if (replacing) {
+        await client.query(
+          `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+           VALUES ($1,$2,$3,'note',$4,$5)`,
+          [cid, partyId, todayISO(), `Details corrected: ${replacing} (from the email "${subject}")`, who(req)],
+        );
+      }
+      let eventId = null;
+      const cols = Object.keys(changes);
+      if (cols.length) {
+        await client.query(
+          `UPDATE ${track.table} SET ${cols.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`,
+          [complaint.id, ...cols.map((k) => changes[k])],
+        );
+        const note = d.as === 'acknowledgement'
+          ? `Acknowledged by email: ${subject}`
+          : `${complaint.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`;
+        eventId = (await client.query(
+          `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [cid, partyId, on, d.as === 'acknowledgement' ? 'acknowledged' : 'response_received', note, who(req)],
+        )).rows[0].id;
+        await client.query('UPDATE complaint_emails SET applied = $2 WHERE id = $1', [
+          em.id,
+          JSON.stringify({ before, after: changes, event_id: eventId, kind: em.analysis?.kind || null, party_id: partyId, by: who(req) }),
+        ]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
     await recomputeTrack(track);
     scheduleReview(cid);

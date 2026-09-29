@@ -556,7 +556,7 @@ export default function ComplaintDetail() {
   // response) is left for a person, and the page says how many.
   const [acceptingAll, setAcceptingAll] = useState(false);
   async function acceptAllReadings(list) {
-    if (!confirm(`Accept the AI’s reading for ${list.length === 1 ? 'this email' : `all ${list.length} emails`}? Acknowledgements and responses are recorded on the dates shown below (check them first: their deadlines follow), everything else is filed as correspondence.`)) return;
+    if (!confirm(`Accept the AI’s reading for ${list.length === 1 ? 'this email' : `all ${list.length} emails`}? Acknowledgements and responses are recorded on the dates shown below (check them first: their deadlines follow), everything else is filed as correspondence. Each recorded date has Undo on its email.`)) return;
     setAcceptingAll(true);
     setMsg(null);
     let done = 0;
@@ -585,7 +585,7 @@ export default function ComplaintDetail() {
     }
   }
   async function undoEmail(em) {
-    if (!confirm('Undo what was recorded automatically from this email? It goes back to “New” for you to decide.')) return;
+    if (!confirm('Undo what was recorded from this email? The dates it set go back to what they were, and the email goes back to “New” for you to decide.')) return;
     setMsg(null);
     try {
       await api.complaints.undoEmail(id, em.id);
@@ -1745,7 +1745,7 @@ export default function ComplaintDetail() {
                     )}
                     {em.applied && (
                       <div className="inline-note" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
-                        Recorded automatically
+                        {em.applied.by ? `Recorded by ${em.applied.by}` : 'Recorded automatically'}
                         {em.applied.after?.acknowledged_on && <>: acknowledged {formatDate(em.applied.after.acknowledged_on)}</>}
                         {em.applied.after?.responded_on && <>: responded {formatDate(em.applied.after.responded_on)}</>}
                         {em.applied.after?.stage === 'stage_2' && <>: moved to Stage 2 from {formatDate(em.applied.after.stage_started_on)} (our Stage 2 request)</>}

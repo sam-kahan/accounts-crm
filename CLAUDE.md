@@ -746,6 +746,15 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — an email marked by hand can be undone
+- `POST /:id/emails/:emailId/review` (a person's choice, and "Accept the AI's
+  reading for all") now stores what it changed in `complaint_emails.applied`
+  (`before`/`after`/`event_id`/`party_id`, plus `by`), exactly as an
+  automatic record does, so the email's **Undo** puts the dates back
+  (`undoEmail`, which refuses if they have been changed since). Marking and
+  recording are one transaction: an email is never left "dealt with" with
+  its dates unrecorded. The page says "Recorded by <name>".
+
 ### 2026-09-29 — an organisation taken off stays off; unsure acknowledgements that change nothing file themselves
 - **Taking an organisation off a complaint** (a further one, or the main one
   replaced by the next) now records it (migration `045`):
