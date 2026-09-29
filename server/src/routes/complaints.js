@@ -18,7 +18,7 @@ import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
-import { processEmail, undoEmail, fileWaitingEmails, EARLIER_BY } from '../services/complaintEmailProcessor.js';
+import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes, mailboxAllowed, allowedMailboxList } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
@@ -143,6 +143,9 @@ const input = z.object({
   description: z.string().optional().nullable(),
   channel: z.enum(['email', 'phone', 'portal', 'letter', 'other']).optional(),
   raised_on: isoDate,
+  // Logged before it has been sent to them: the page then offers to draft
+  // and send it, and it runs from the day it goes.
+  not_sent_yet: z.boolean().optional(),
   response_due: isoDate.optional().nullable(), // override
   // Set when importing an existing complaint at a known stage.
   stage: z.enum(['stage_1', 'stage_2', 'ombudsman']).optional(),
@@ -1621,18 +1624,7 @@ router.get(
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     const evidence = await evidenceFor(decorated, { events, emails, attachments });
-    const awaiting_first_email = await firstEmailPending(rows[0]);
-    if (awaiting_first_email) {
-      // Nothing is due from them until it has gone: the dates worked out from
-      // the day it was logged would say it was made and awaits an
-      // acknowledgement.
-      decorated.label = 'Not sent to them yet';
-      decorated.nextAction = `Send the complaint to ${decorated.org_name}: nothing is due from them until it has gone.`;
-      decorated.steps = [{
-        key: 'raised', label: 'Complaint made', date: null, state: 'pending',
-        note: 'Not sent to them yet. Their deadlines are worked out from the day it goes.',
-      }];
-    }
+    const awaiting_first_email = awaitingFirstEmail(decorated);
     res.json({ ...decorated, awaiting_first_email, events, emails, attachments, email_search, bounces, outbox, evidence, external_cc: config.smtp.externalCc });
   }),
 );
@@ -2413,34 +2405,13 @@ router.post(
 // then started from that day: Stage 1, every deadline and the ombudsman clock
 // running from the formal complaint, never from the earlier emails.
 // ---------------------------------------------------------------------------
-// Also the FIRST email of a complaint logged here before it was sent to them
-// (awaitingFirstEmail): the same draft and send, and the complaint then runs
-// from the day it went.
-const FORMAL_MADE_SQL = `EXISTS (SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND type = 'raised'
-  AND note LIKE 'Formal complaint made%' AND removed_org IS NULL)`;
-
-async function firstEmailPending(c) {
-  const [{ rows: [n] }, { rows: [f] }] = await Promise.all([
-    query(
-      // An email from before the complaint was made (found later by its
-      // account number, say, like our own earlier request to them) is
-      // background, not the complaint: it doesn't count as it being under way.
-      `SELECT (SELECT count(*) FROM complaint_emails e WHERE e.complaint_id = $1
-                 AND e.reviewed_by IS DISTINCT FROM $2
-                 AND NOT (CASE WHEN e.analysis->>'sent_on' ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                               THEN (e.analysis->>'sent_on')::date < $3::date ELSE false END))::int AS emails,
-              (SELECT count(*) FROM complaint_outbox WHERE complaint_id = $1)::int AS outbox,
-              (SELECT count(*) FROM complaint_parties WHERE complaint_id = $1)::int AS parties`,
-      [c.id, EARLIER_BY, c.raised_on]),
-    query(`SELECT ${FORMAL_MADE_SQL} AS made`, [c.id]),
-  ]);
-  return awaitingFirstEmail(c, { hasParties: n.parties > 0, emailCount: n.emails, outboxCount: n.outbox, formallyMade: f.made });
-}
-
+// Also the FIRST email of a complaint logged before it was sent to them
+// (`not_sent_yet`, awaitingFirstEmail): the same draft and send, and the
+// complaint then runs from the day it went.
 async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere = false } = {}) {
-  const before = (await query('SELECT raised_on, stage, complaint_doubt FROM complaints WHERE id = $1', [id])).rows[0];
+  const before = (await query('SELECT raised_on, stage, complaint_doubt, not_sent_yet FROM complaints WHERE id = $1', [id])).rows[0];
   if (!before) return false;
-  const first = !before.complaint_doubt;
+  const first = Boolean(before.not_sent_yet);
   // Only while the question is still open (or, for a complaint logged before
   // it was sent, while nothing has happened on it and it was never made from
   // here), in the same statement that answers it, so two at once (a send and
@@ -2450,14 +2421,12 @@ async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere =
     `UPDATE complaints
         SET raised_on = $2, stage = 'stage_1', stage_started_on = $2, acknowledged_on = NULL,
             responded_on = NULL, final_response_on = NULL, response_due_manual = false,
-            channel = 'email', complaint_doubt = NULL
+            channel = 'email', complaint_doubt = NULL, not_sent_yet = false
       WHERE id = $1 AND (
         (complaint_doubt->>'kind' = 'not_complaint'
           AND COALESCE((complaint_doubt->>'answered')::boolean, false) = false)
-        OR (complaint_doubt IS NULL AND stage = 'stage_1' AND acknowledged_on IS NULL
-          AND responded_on IS NULL AND final_response_on IS NULL
-          AND NOT EXISTS (SELECT 1 FROM complaint_parties WHERE complaint_id = $1)
-          AND NOT ${FORMAL_MADE_SQL}))
+        OR (not_sent_yet AND state = 'open' AND stage = 'stage_1' AND acknowledged_on IS NULL
+          AND responded_on IS NULL AND final_response_on IS NULL))
       RETURNING id`,
     [id, sentOn],
   );
@@ -2487,7 +2456,7 @@ router.post(
     // The first email of a complaint logged before it was sent: nothing on it
     // but what was typed in and the documents uploaded, so the documents are
     // read in full (one call, pressed by a person).
-    const first = !row.complaint_doubt && await firstEmailPending(row);
+    const first = awaitingFirstEmail(row);
     const ctx = await gatherContext(req.params.id, undefined, first ? {} : { files: 2 });
     const c = ctx.complaint;
     const days = c.rule?.defaulted?.includes('stage1Days') ? null : c.rule?.stage1Days;
@@ -2541,7 +2510,7 @@ router.post(
     // Only while the question is open: starting it again later would wipe
     // the dates recorded since it was made.
     const doubtOpen = c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered;
-    if (!doubtOpen && !(await firstEmailPending(c))) {
+    if (!doubtOpen && !awaitingFirstEmail(c)) {
       throw new HttpError(409, 'This complaint is already recorded as a formal complaint.');
     }
     // One formal complaint at a time: a waiting one (sending, or failed with

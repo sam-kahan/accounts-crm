@@ -23,6 +23,10 @@ function makeRefCode() {
 // whose own record of having made it must commit with it (an import: a
 // restart between the two would otherwise make it again).
 export async function createComplaint(d, { by = null, raisedNote = null, needsCheck = false, afterInsert = null } = {}) {
+  // Not sent to them yet: Stage 1 with nothing from them, whatever else came
+  // with it; it runs from the day it goes.
+  const notSent = Boolean(d.not_sent_yet);
+  if (notSent) Object.assign(d, { stage: 'stage_1', acknowledged_on: null, responded_on: null, final_response_on: null, stage_started_on: null, response_due: null });
   const stage = d.stage || 'stage_1';
   // A linked organisation brings its type: the type decides the default for
   // anything its procedure doesn't state.
@@ -52,8 +56,8 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           (organisation_id, org_name, org_type, reference, our_reference, property,
            subject, category, description, channel, raised_on, stage, state,
            response_due, response_due_manual, ref_code, acknowledged_on, responded_on,
-           imported, stage_started_on, final_response_on, account_numbers, outcome_wanted, losses)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+           imported, stage_started_on, final_response_on, account_numbers, outcome_wanted, losses, not_sent_yet)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
          RETURNING *`,
         [
           d.organisation_id || null, d.org_name, d.org_type || 'council',
@@ -67,6 +71,7 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
             .map((a) => String(a || '').trim().slice(0, 40)).filter(Boolean)).kept.slice(0, 6),
           // For the ombudsman, when given (the API; the complaint page asks for them later).
           (d.outcome_wanted || '').trim() || null, (d.losses || '').trim() || null,
+          notSent,
         ],
       );
       await client.query(

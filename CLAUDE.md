@@ -747,26 +747,27 @@ the page says how far each date can be trusted.
 ## Recent changes
 
 ### 2026-09-29 — a complaint logged before it was sent: the system drafts the complaint email
-- **A complaint logged here with nothing sent or received** (open, Stage 1,
-  one organisation, no email on it or queued, not by phone, no question from a
-  re-check, never made from the page: `complaintRules.js#awaitingFirstEmail`,
-  pure, tested) shows **Next step: send the complaint to <org>** with **Draft
-  the complaint email…** instead of "wait for their acknowledgement" of a
-  complaint they never received (`awaiting_first_email` on `GET /:id`).
-- It is the formal-complaint draft and send (`/:id/formal/draft`,
+- **The Log form asks "Has this complaint been sent to them yet?"** and
+  assumes **not yet** (a complaint brought in by an import, or started from an
+  email, has been made and isn't asked). Not yet stores
+  `complaints.not_sent_yet` (migration `054`), with no date raised asked for.
+  **It is a person's answer, never guessed from what is on file**: an earlier
+  version inferred it from "no emails on the complaint", which would have put
+  complaints sent from Outlook back to the first step. Every complaint already
+  on file stayed as it was; the migration set it on GC-C-HTZNCU alone.
+- While it is set (`complaintRules.js#awaitingFirstEmail`: the flag, open,
+  Stage 1, nothing from them; pure, tested) `deriveStatus` says **Not sent to
+  them yet** (`status: 'not_sent'`, nothing to chase), `procedureSteps` has no
+  dates (they would run from the day it was logged), no referral opens, and the
+  morning email lists it as "Complaint NOT SENT YET" (never overdue). The page
+  offers **Draft the complaint email…**.
+- That is the formal-complaint draft and send (`/:id/formal/draft`,
   `/:id/formal/raise`, `FormalComplaintModal`) with its own wording: the draft
   reads the documents in full (one call, pressed by a person; an earlier email
-  of ours in them is background, not the complaint), and once it has gone (or
-  is recorded as sent from Outlook on a date) the complaint runs from that day
-  with a "Formal complaint made" entry, so it is never offered again
-  (`startFormalComplaint`'s UPDATE checks the same conditions, so two presses
-  can't both restart the dates).
-- An email from BEFORE the complaint was made doesn't count as it being under
-  way (`reviewed_by` = `EARLIER_BY`, or the AI's `sent_on` before `raised_on`):
-  the account-number search files our own earlier request to them as
-  background, and that had hidden the step. While the step shows, the page's
-  status is "Not sent to them yet" and its checklist has no dates (they would
-  run from the day it was logged, not the day it goes).
+  of ours in them is background, not the complaint). Once it has gone (or is
+  recorded as sent from Outlook on a date) `startFormalComplaint` clears the
+  flag in the same UPDATE that restarts the dates from that day, so two
+  presses can't both do it.
 
 ### 2026-09-29 — fixes from a review of the month end and the invoicing bridge
 - **Paid here stays paid** (`applyExternalState`): an invoice marked paid

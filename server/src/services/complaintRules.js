@@ -369,18 +369,14 @@ export function trackOpen(t) {
   return (t?.state || 'open') === 'open' && !['resolved', 'closed'].includes(t?.stage);
 }
 
-// A complaint logged here that hasn't been made to them yet: open, at Stage 1
-// with one organisation, nothing from them, not a phone complaint, no email
-// on it at all (ours or theirs) and none queued, and never made formally from
-// the page. Then the page offers to draft and send the complaint itself,
-// rather than "wait for their acknowledgement" of one they never received.
-// Deliberately narrow: any email on it means it is under way, and the usual
-// steps apply.
-export function awaitingFirstEmail(c, { hasParties = false, emailCount = 0, outboxCount = 0, formallyMade = false } = {}) {
-  if (!c || (c.state || 'open') !== 'open' || hasParties) return false;
-  if (c.stage !== 'stage_1' || c.acknowledged_on || c.responded_on || c.final_response_on) return false;
-  if (c.channel === 'phone' || c.complaint_doubt) return false;
-  return !emailCount && !outboxCount && !formallyMade;
+// A complaint logged here before it was sent to them (`not_sent_yet`, set
+// only when a person says so on the Log form, never guessed): nothing can be
+// due from them, so the page offers to draft and send it instead of "wait for
+// their acknowledgement". Anything from them (an acknowledgement, a response)
+// means it has gone, whatever the flag says.
+export function awaitingFirstEmail(c) {
+  if (!c?.not_sent_yet || (c.state || 'open') !== 'open') return false;
+  return c.stage === 'stage_1' && !c.acknowledged_on && !c.responded_on && !c.final_response_on;
 }
 
 // A value for a sentence: an ISO date as ukDate, anything else unchanged.
@@ -500,6 +496,7 @@ const plural = (n, word) => `${n} working day${n === 1 ? '' : 's'}${word ? ` ${w
 // a sentence part saying why not.
 export function referralOpen(t, today = todayISO()) {
   if (t.stage === 'ombudsman') return { open: true, from: null, why: null };
+  if (awaitingFirstEmail(t)) return { open: false, from: null, why: 'the complaint hasn’t been sent to them yet' };
   const doubt = t.complaint_doubt && !t.complaint_doubt.answered ? t.complaint_doubt : null;
   if (doubt) {
     return { open: false, from: null, why: doubt.kind === 'not_complaint'
@@ -536,6 +533,13 @@ export function deriveStatus(complaint, rule) {
     return { ...base, status: 'resolved', label: 'Resolved', nextAction: null };
   if (complaint.state === 'closed' || complaint.stage === 'closed')
     return { ...base, status: 'closed', label: 'Closed', nextAction: null };
+  if (awaitingFirstEmail(complaint))
+    return {
+      ...base,
+      status: 'not_sent',
+      label: 'Not sent to them yet',
+      nextAction: `Send the complaint to ${complaint.org_name || 'them'}: nothing is due from them until it has gone.`,
+    };
   if (complaint.stage === 'ombudsman')
     return {
       ...base,
@@ -668,6 +672,13 @@ export function procedureSteps(complaint, rule) {
   const timed = (date, done) =>
     done ? 'done' : closed ? 'past' : !date ? 'pending' : date < today ? 'overdue' : 'due';
 
+  // Not sent yet: every date would run from the day it was logged.
+  if (awaitingFirstEmail(complaint)) {
+    return [{
+      key: 'raised', label: 'Complaint made', date: null, state: 'pending',
+      note: 'Not sent to them yet. Their deadlines are worked out from the day it goes.',
+    }];
+  }
   const steps = [];
   steps.push({
     key: 'raised', label: 'Complaint made', date: complaint.raised_on, state: 'done',

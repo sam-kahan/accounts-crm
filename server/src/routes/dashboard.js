@@ -134,7 +134,7 @@ export async function collectComplaintDueItems(days = 30) {
       // The last day to refer to the ombudsman: after it the complaint can't
       // go there at all, so it is listed whatever else the track is waiting
       // for (a final response in hand, for one, leaves nothing else due).
-      if (!['with_ombudsman', 'resolved', 'closed'].includes(t.status) && t.ombudsman_deadline && t.ombudsman_deadline <= horizon) {
+      if (!['with_ombudsman', 'resolved', 'closed', 'not_sent'].includes(t.status) && t.ombudsman_deadline && t.ombudsman_deadline <= horizon) {
         const passed = t.ombudsman_deadline < todayISO();
         items.push({
           type: 'complaint', id: c.id,
@@ -147,6 +147,15 @@ export async function collectComplaintDueItems(days = 30) {
         });
       }
       // Nothing due from them: responded, with the ombudsman, or finished.
+      // Not sent to them yet: listed so it isn't forgotten, never as overdue.
+      if (t.status === 'not_sent') {
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint NOT SENT YET: ${c.subject}`,
+          due_date: todayISO(), company_name: t.org_name, overdue: false, detail: t.nextAction, link,
+        });
+        continue;
+      }
       if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;
       // Overdue, but Greenco has just written to them: nothing to do until
       // the hold ends, so it is listed as coming up on that day, never as

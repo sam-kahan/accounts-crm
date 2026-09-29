@@ -85,6 +85,12 @@ function NewComplaintModal({
     responded_on: '',
     ...(initial || {}),
   });
+  // Logged by hand, a complaint is assumed NOT yet sent to them: the page then
+  // offers to draft and send it, and it runs from the day it goes. One brought
+  // in from before (an import) or started from an email has been made.
+  const askSent = !importMode && !fromEmailId;
+  const [notSent, setNotSent] = useState(askSent);
+  const sentAlready = !askSent || !notSent;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [researching, setResearching] = useState(false);
@@ -181,8 +187,12 @@ function NewComplaintModal({
         stage_started_on: form.stage !== 'stage_1' ? form.stage_started_on || null : null,
         // Brought in from before (rather than made today) when it's past Stage 1
         // or already has dates from them.
-        imported: Boolean(importMode) ||
-          (filled && (form.stage !== 'stage_1' || Boolean(form.acknowledged_on || form.responded_on))),
+        imported: sentAlready && (Boolean(importMode) ||
+          (filled && (form.stage !== 'stage_1' || Boolean(form.acknowledged_on || form.responded_on)))),
+        ...(sentAlready ? {} : {
+          not_sent_yet: true, raised_on: todayISO(), stage: 'stage_1',
+          acknowledged_on: null, responded_on: null, stage_started_on: null,
+        }),
       });
       onCreated(created);
     } catch (err) {
@@ -324,6 +334,28 @@ function NewComplaintModal({
               placeholder="repairs, council tax, billing…"
             />
           </label>
+          {askSent && (
+            <div className="field full">
+              <span className="lbl">Has this complaint been sent to them yet?</span>
+              <div className="btn-row" style={{ marginTop: 4 }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', margin: 0 }}>
+                  <input type="radio" name="sent" checked={notSent} onChange={() => setNotSent(true)} />
+                  Not yet: draft it for me to send
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', margin: 0 }}>
+                  <input type="radio" name="sent" checked={!notSent} onChange={() => setNotSent(false)} />
+                  Yes, it has been sent
+                </label>
+              </div>
+              {notSent && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Once it is saved, the complaint offers to draft the email from what you enter here and the documents
+                  you upload. Its deadlines start from the day it is sent.
+                </span>
+              )}
+            </div>
+          )}
+          {sentAlready && (
           <label className="field">
             <span className="lbl">Date raised *</span>
             <input
@@ -333,6 +365,7 @@ function NewComplaintModal({
               onChange={(e) => setForm({ ...form, raised_on: e.target.value })}
             />
           </label>
+          )}
           <label className="field">
             <span className="lbl">Channel</span>
             <select
@@ -353,7 +386,7 @@ function NewComplaintModal({
               onChange={(e) => setForm({ ...form, reference: e.target.value })}
             />
           </label>
-          {(importMode || filled) && (
+          {sentAlready && (importMode || filled) && (
             <>
               <label className="field">
                 <span className="lbl">Current stage</span>
