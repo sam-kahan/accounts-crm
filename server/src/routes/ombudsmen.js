@@ -32,6 +32,10 @@ const text = z.string().trim().max(4000).optional().nullable();
 const input = z.object({
   name: z.string().trim().min(1).max(200),
   website: text, refer_url: text, phone: text, email: text, post: text,
+  // The address that takes a NEW complaint by email (checked on their site),
+  // and what they say about it (their form to attach, a size limit).
+  refer_email: z.string().trim().email().max(320).optional().nullable().or(z.literal('')),
+  refer_email_note: text,
   wait_weeks: z.number().int().min(1).max(104).optional().nullable(),
   after_final_response: z.boolean(),
   after_missed_deadline: z.boolean(),
@@ -56,7 +60,7 @@ router.put(
     const before = (await query('SELECT * FROM ombudsmen WHERE id = $1', [req.params.id])).rows[0];
     if (!before) throw new HttpError(404, 'Not found');
     const same = (k) => (before[k] ?? null) === (d[k] ?? null);
-    const contentSame = [...RULE_FIELDS, 'name', 'website', 'refer_url', 'phone', 'email', 'post',
+    const contentSame = [...RULE_FIELDS, 'name', 'website', 'refer_url', 'phone', 'email', 'post', 'refer_email', 'refer_email_note',
       'who_can_complain', 'representative', 'notes'].every(same) &&
       JSON.stringify(before.what_to_include || []) === JSON.stringify(d.what_to_include || []);
     // Kept as it was only when ticked and nothing changed; stamped afresh when
@@ -66,7 +70,7 @@ router.put(
       `UPDATE ombudsmen SET name=$2, website=$3, refer_url=$4, phone=$5, email=$6, post=$7,
               wait_weeks=$8, after_final_response=$9, after_missed_deadline=$10,
               time_limit_months=$11, time_limit_from=$12, who_can_complain=$13, representative=$14,
-              what_to_include=$15, notes=$16,
+              what_to_include=$15, notes=$16, refer_email=$20, refer_email_note=$21,
               verified_at = CASE WHEN $17 THEN verified_at WHEN $18 THEN now() ELSE NULL END,
               verified_by = CASE WHEN $17 THEN verified_by WHEN $18 THEN $19 ELSE NULL END,
               updated_at = now()
@@ -74,7 +78,8 @@ router.put(
       [req.params.id, d.name, d.website || null, d.refer_url || null, d.phone || null, d.email || null, d.post || null,
         d.wait_weeks ?? null, d.after_final_response, d.after_missed_deadline,
         d.time_limit_months ?? null, d.time_limit_from || null, d.who_can_complain || null, d.representative || null,
-        d.what_to_include || [], d.notes || null, Boolean(keep), Boolean(d.verified && !keep), who(req)],
+        d.what_to_include || [], d.notes || null, Boolean(keep), Boolean(d.verified && !keep), who(req),
+        d.refer_email || null, d.refer_email_note || null],
     );
     // A change to when it can go, or the time limit, re-dates the open
     // complaints it applies to (each move written on their timeline).

@@ -14,7 +14,7 @@ import Modal from '../components/Modal.jsx';
 const EVIDENCE_LABEL = {
   wait_weeks: 'When it can take a case', after_final_response: 'After the final response', time_limit: 'Time limit',
   who_can_complain: 'Who can complain', representative: 'Complaining for someone else', what_to_include: 'What to include',
-  refer_url: 'How to refer', phone: 'Phone', email: 'Email', housing: 'Council as landlord', service_charges: 'Service charges',
+  refer_url: 'How to refer', refer_email: 'Complaints by email', phone: 'Phone', email: 'Email', housing: 'Council as landlord', service_charges: 'Service charges',
   watrs: 'WATRS', adr_stopped: 'Adjudication stopped', charges: 'Charges for representatives',
 };
 
@@ -82,9 +82,14 @@ export default function Ombudsmen() {
               <div><div><strong>Time limit</strong></div>{timeLimit(s)}</div>
               <div>
                 <div><strong>How to refer</strong></div>
-                {s.refer_url ? <a href={s.refer_url} target="_blank" rel="noreferrer">Their complaint form ↗</a> : 'Not known'}
+                {s.refer_email && (
+                  <div><strong>By email:</strong> {s.refer_email} (the referral can be sent from the complaint)
+                    {s.refer_email_note && <div className="muted" style={{ fontSize: 13 }}>{s.refer_email_note}</div>}
+                  </div>
+                )}
+                {s.refer_url ? <div><a href={s.refer_url} target="_blank" rel="noreferrer">{s.refer_email ? 'Or on their website ↗' : 'Their complaint form ↗'}</a></div> : (!s.refer_email && 'Not known')}
                 {s.phone && <div>Phone: {s.phone}</div>}
-                {s.email && <div>Email: {s.email}</div>}
+                {s.email && s.email !== s.refer_email && <div>Email: {s.email}</div>}
                 {s.post && <div className="muted" style={{ fontSize: 13 }}>Post: {s.post}</div>}
               </div>
               <div>
@@ -177,6 +182,7 @@ function EditScheme({ scheme, onClose, onSaved }) {
       const r = await api.ombudsmen.update(scheme.id, {
         name: f.name, website: f.website || null, refer_url: f.refer_url || null, phone: f.phone || null,
         email: f.email || null, post: f.post || null,
+        refer_email: f.refer_email || null, refer_email_note: f.refer_email_note || null,
         wait_weeks: num(f.wait_weeks), after_final_response: Boolean(f.after_final_response),
         after_missed_deadline: Boolean(f.after_missed_deadline),
         time_limit_months: num(f.time_limit_months), time_limit_from: f.time_limit_from || null,
@@ -220,7 +226,13 @@ function EditScheme({ scheme, onClose, onSaved }) {
           <label>Website<input value={f.website || ''} onChange={set('website')} /></label>
           <label>Where a case is made (their form)<input value={f.refer_url || ''} onChange={set('refer_url')} /></label>
           <label>Phone<input value={f.phone || ''} onChange={set('phone')} /></label>
-          <label>Email<input value={f.email || ''} onChange={set('email')} /></label>
+          <label>Email (general)<input value={f.email || ''} onChange={set('email')} /></label>
+          <label>Email that takes a NEW complaint (blank: they don't take one by email)
+            <input type="email" value={f.refer_email || ''} onChange={set('refer_email')} />
+          </label>
+          <label>What they say about complaining by email (their form to attach, size limits)
+            <input value={f.refer_email_note || ''} onChange={set('refer_email_note')} />
+          </label>
           <label>Post<input value={f.post || ''} onChange={set('post')} /></label>
         </div>
         <h3 style={{ marginTop: 16 }}>When it will take a case</h3>

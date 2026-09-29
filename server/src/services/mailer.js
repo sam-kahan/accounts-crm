@@ -60,7 +60,7 @@ export function withExternalCc(to, cc) {
 // commission invoices). Greenco's own copy address is always copied in (see
 // config.smtp.externalCc). Throws if SMTP2GO isn't configured so the caller
 // can surface it.
-export async function sendMail({ to, cc, subject, text, html, replyTo }) {
+export async function sendMail({ to, cc, subject, text, html, replyTo, attachments }) {
   const transport = getTransport();
   if (!transport) {
     throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
@@ -76,6 +76,7 @@ export async function sendMail({ to, cc, subject, text, html, replyTo }) {
     subject,
     text,
     html,
+    ...(attachments?.length ? { attachments } : {}),
   });
   return { sent: true, messageId: info.messageId };
 }

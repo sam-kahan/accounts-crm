@@ -282,7 +282,10 @@ export default function ComplaintDetail() {
           const stageOf = (x) => [x.stage, ...(x.parties || []).map((p) => p.stage)].join('|');
           const esc = done.find((o) => o.then_escalate) || stageOf(fresh) !== stageOf(c);
           const formal = done.find((o) => o.then_formal);
-          setMsg(formal
+          const referred = done.find((o) => o.then_refer);
+          setMsg(referred
+            ? 'Sent: the referral has gone to the ombudsman with the evidence, and the complaint is recorded as referred today.'
+            : formal
             ? 'Sent: the formal complaint has been made. This complaint now runs from today (Stage 1), with its deadlines from today.'
             : sup
             ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
@@ -467,18 +470,41 @@ export default function ComplaintDetail() {
       then,
     });
   }
+  // The referral by email: drafted on the server from the facts on file (no
+  // AI), with the grounds from the referral pack when it has been built.
+  const [referDraftBusy, setReferDraftBusy] = useState(false);
+  async function openReferEmail(t) {
+    setReferDraftBusy(true);
+    setMsg(null);
+    try {
+      const d = await api.complaints.referralDraft(id, partyIdOf(t), referral?.grounds || null);
+      setSend({
+        to: d.to, party_id: partyIdOf(t), org_name: t.org_name, cc: '',
+        subject: signEmail(d.subject, me), body: signEmail(d.body, me),
+        then: 'refer', note: d.note || null, ombudsman: theOmbudsman(t.rule?.ombudsman), scheme: t.rule?.scheme?.name || null,
+      });
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setReferDraftBusy(false);
+    }
+  }
   async function doSend() {
     setSending(true);
     setMsg(null);
     try {
       // Queued at once; it goes out in the background, so nobody waits on
       // the mail server. The banner below follows it until it has gone.
-      const r = await api.complaints.sendEmail(id, send);
+      const r = send.then === 'refer'
+        ? await api.complaints.sendReferral(id, { party_id: send.party_id || null, to: send.to, cc: send.cc, subject: send.subject, body: send.body })
+        : await api.complaints.sendEmail(id, send);
       setSend(null);
       await load();
-      setMsg(r?.escalating
-        ? 'Sending now. The complaint moves to Stage 2 as soon as it has gone; you can carry on.'
-        : 'Sending now; you can carry on.');
+      setMsg(send.then === 'refer'
+        ? 'Sending the referral with the evidence now. It is recorded as referred as soon as it has gone; you can carry on.'
+        : r?.escalating
+          ? 'Sending now. The complaint moves to Stage 2 as soon as it has gone; you can carry on.'
+          : 'Sending now; you can carry on.');
     } catch (e) {
       // Said in the window, not behind it: the page's message is hidden while
       // the email is open.
@@ -900,10 +926,12 @@ export default function ComplaintDetail() {
     };
   };
 
-  // How to refer, next to a step that says to: it is done on the ombudsman's
-  // website, not by email, so the page gives the three steps in order. Shown
-  // only when a referral is really open (referralOpen on the server), so it
-  // can never invite one too early.
+  // How to refer, next to a step that says to. Where the scheme takes a new
+  // complaint by email (register: refer_email, found on their own site) it is
+  // sent from here with the evidence attached, and the complaint moves on
+  // when it has gone; otherwise their website (or phone, or post), as their
+  // record says. Shown only when a referral is really open (referralOpen on
+  // the server), so it can never invite one too early.
   const refersNow = (text) => /\brefer\b/i.test(text || '') && !/Don’t refer|Not the ombudsman|can’t take it|Before any referral/i.test(text || '');
   const referSection = (t, advice, aiSaysRefer) => {
     if (!trackOpen(t) || !['stage_1', 'stage_2'].includes(t.stage) || !t.referral?.open) return null;
@@ -911,14 +939,29 @@ export default function ComplaintDetail() {
     const who = theOmbudsman(t.rule?.ombudsman);
     const sc = t.rule?.scheme || null;
     const formUrl = sc?.refer_url || t.rule?.ombudsmanUrl;
+    const byEmail = Boolean(sc?.refer_email);
+    const waiting = (c.outbox || []).some((o) => o.then_refer);
     return (
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border, #e5e7eb)' }}>
-        <div><strong>Referring it to {who}</strong> is done on their website, not by email:</div>
-        <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
-          <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once). Download the evidence (every email and document) to upload with it.</li>
-          <li>Make the referral on {who}’s website{formUrl ? '' : ' (find it on their site: no website is on file for it)'}{sc?.phone ? ` (or phone ${sc.phone})` : ''}.</li>
-          <li>Record it here with the date you referred it, so the complaint moves on.</li>
-        </ol>
+        {byEmail ? (
+          <>
+            <div><strong>Referring it to {who}:</strong> they take a new complaint by email ({sc.refer_email}), so it can be sent from here with the evidence attached{formUrl ? ', or made on their website' : ''}.</div>
+            <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
+              <li>Optional: build the referral pack, so the email sets out the grounds (uses the AI once). Without it you write them in yourself.</li>
+              {sc.refer_email_note && <li>{sc.refer_email_note}</li>}
+              <li>Email the referral: check it, then send. The summary, the correspondence and the documents go with it, and the complaint is recorded as referred the day it goes.</li>
+            </ol>
+          </>
+        ) : (
+          <>
+            <div><strong>Referring it to {who}</strong>{sc?.refer_email_note ? `: ${sc.refer_email_note}` : ' is done on their website (no address for new complaints by email is on file: see Complaints → Ombudsmen).'}</div>
+            <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
+              <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once). Download the evidence (every email and document) to upload with it.</li>
+              <li>Make the referral on {who}’s website{formUrl ? '' : ' (find it on their site: no website is on file for it)'}{sc?.phone ? ` (or phone ${sc.phone})` : ''}.</li>
+              <li>Record it here with the date you referred it, so the complaint moves on.</li>
+            </ol>
+          </>
+        )}
         {/* Their own checklist, from the register (checked by a person). */}
         {sc && (sc.representative || sc.what_to_include?.length > 0 || sc.who_can_complain) && (
           <details style={{ marginBottom: 8 }} open>
@@ -937,16 +980,31 @@ export default function ComplaintDetail() {
             </div>
           </details>
         )}
-        <div className="btn-row">
-          <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
-            {referralBusy ? 'Building…' : '1. Build the referral pack'}
-          </button>
-          <a className="btn btn-sm" href={`/api/complaints/${c.id}/evidence.zip`} download>Download the evidence (.zip)</a>
-          {formUrl && (
-            <a className="btn btn-sm" href={formUrl} target="_blank" rel="noreferrer">2. Open their complaint form ↗</a>
-          )}
-          <button className="btn-primary btn-sm" onClick={() => setAction(REFER(t, multi))}>3. I’ve referred it…</button>
-        </div>
+        {byEmail ? (
+          <div className="btn-row">
+            <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
+              {referralBusy ? 'Building…' : referral ? 'Pack built ✓ (build again)' : 'Build the referral pack'}
+            </button>
+            <button className="btn-primary btn-sm" disabled={referDraftBusy || waiting} onClick={() => openReferEmail(t)}
+              title={waiting ? 'A referral is already being sent (see above)' : undefined}>
+              {referDraftBusy ? 'Preparing…' : `Email the referral to ${who}…`}
+            </button>
+            <a className="btn btn-sm" href={`/api/complaints/${c.id}/evidence.zip`} download>Download the evidence (.zip)</a>
+            {formUrl && <a className="btn-ghost btn-sm" href={formUrl} target="_blank" rel="noreferrer">Their website form ↗</a>}
+            <button className="btn-ghost btn-sm" onClick={() => setAction(REFER(t, multi))}>Referred it another way? Record it…</button>
+          </div>
+        ) : (
+          <div className="btn-row">
+            <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
+              {referralBusy ? 'Building…' : '1. Build the referral pack'}
+            </button>
+            <a className="btn btn-sm" href={`/api/complaints/${c.id}/evidence.zip`} download>Download the evidence (.zip)</a>
+            {formUrl && (
+              <a className="btn btn-sm" href={formUrl} target="_blank" rel="noreferrer">2. Open their complaint form ↗</a>
+            )}
+            <button className="btn-primary btn-sm" onClick={() => setAction(REFER(t, multi))}>3. I’ve referred it…</button>
+          </div>
+        )}
       </div>
     );
   };
@@ -1102,7 +1160,7 @@ export default function ComplaintDetail() {
           </div>
         ) : (
           <div key={o.id} className="inline-note" style={{ marginBottom: 12 }}>
-            Sending “{o.subject}” to {o.to_addresses.join(', ')}…{o.then_escalate ? ' The complaint moves to Stage 2 once it has gone.' : ''}
+            Sending “{o.subject}” to {o.to_addresses.join(', ')}…{o.then_escalate ? ' The complaint moves to Stage 2 once it has gone.' : ''}{o.then_refer ? ' With the evidence attached; recorded as referred once it has gone.' : ''}
             {o.supplier_name ? ` ${o.supplier_name} joins this complaint once it has gone.` : ''}
           </div>
         )
@@ -2089,7 +2147,9 @@ export default function ComplaintDetail() {
       {/* Compose / send modal */}
       {send && (
         <Modal
-          title={`${send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}${send.org_name ? ` to ${send.org_name}` : ''}`}
+          title={send.then === 'refer'
+            ? `Refer the complaint${send.org_name ? ` against ${send.org_name}` : ''} to ${send.ombudsman} by email`
+            : `${send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}${send.org_name ? ` to ${send.org_name}` : ''}`}
           onClose={() => setSend(null)}
           footer={
             <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
@@ -2097,14 +2157,25 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || !send.to || !send.subject || !send.body}
+                disabled={sending || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[(Please|What we are asking)/.test(send.body))}
               >
-                {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : 'Send'}
+                {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
             </div>
           }
         >
           {send.error && <div className="login-error" style={{ marginBottom: 12 }}>Not sent: {send.error}</div>}
+          {send.then === 'refer' && (
+            <div className="inline-note" style={{ marginBottom: 12 }}>
+              <strong>The evidence goes with it:</strong> a summary with the timeline, all the correspondence as one
+              file, and each document on this complaint (as many as an email can carry; any left over are named in
+              the email). It is recorded as referred, dated the day it goes.
+              {send.note && <div style={{ marginTop: 6 }}><strong>{send.scheme || send.ombudsman} says:</strong> {send.note}</div>}
+              {/\[(Please|What we are asking)/.test(send.body) && (
+                <div className="login-error" style={{ marginTop: 6 }}>Fill in the parts in [square brackets] before sending.</div>
+              )}
+            </div>
+          )}
           <label className="field">
             <span className="lbl">To *</span>
             <input value={send.to} onChange={(e) => setSend({ ...send, to: e.target.value })}

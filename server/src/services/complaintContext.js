@@ -129,7 +129,7 @@ export async function decorateMany(rows) {
       // its next step.
       if (c.ai_review?.email) c.ai_review.email_step = isStage2Request(c.ai_review.email) ? 'stage2_request' : null;
       // Its advice (as guarded above) is to go to the ombudsman: the page
-      // shows how, next to the step, since that is a form, not an email.
+      // shows how (by email from here where the scheme takes one, else its website).
       if (c.ai_review) c.ai_review.refer_step = recommendsReferral(c.ai_review);
       // Each organisation's own step, checked against its own dates and
       // correspondence (reviewGuard.js#guardByOrg).

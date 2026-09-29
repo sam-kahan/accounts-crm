@@ -746,6 +746,38 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — refer to the ombudsman by email, from the complaint
+- **The page said referrals are "done on their website, not by email": wrong
+  for several schemes.** Research of each scheme's official site (search
+  results for the pages; the pages themselves couldn't be opened from the
+  research environment, so each is to be confirmed on Complaints ->
+  Ombudsmen): the Energy Ombudsman (enquiry@energyombudsman.org), The
+  Property Ombudsman (admin@tpos.co.uk, with their signed form) and the
+  Financial Ombudsman (complaint.info@financial-ombudsman.org.uk, with their
+  form) take a new complaint by email; the Housing Ombudsman (online form or
+  phone only since 13 Jan 2026), the LGSCO (form, phone or postal form) and
+  CCW (emails not actioned) don't; the PRS is not confirmed. Migration `050`
+  records this (`ombudsmen.refer_email`, `refer_email_note`, with the source
+  in `evidence`), editable on the Ombudsmen page; the rules and the "checked"
+  stamp are untouched.
+- **Email the referral to <ombudsman>…** (`referSection`, when a referral is
+  open and the scheme has a `refer_email`): `GET /:id/referral/draft`
+  (`referralEmailDraft`, no AI: the facts on file, what we want, and the
+  grounds from the referral pack when it has been built) opens in the Send
+  window; `POST /:id/referral/send` refuses before a referral is open, with
+  a [square-bracket] gap left, or while one is waiting (`queueOutbox`), and
+  queues it (`complaint_outbox.then_refer` + `attach_evidence`, migration
+  `049`). At send, `referralAttachments()` attaches an OUTWARD summary
+  (`packText(..., { outward: true })`: no readiness lines, no evidence
+  checklist, no internal notes), all the correspondence as ONE text file
+  (internal-only emails between Greenco addresses left out, `internalOnly`)
+  and each document, up to ~14 MB (the rest named in the email as available
+  on request); the attachment list goes into the body before the sign-off
+  and the body kept is the one sent. Once it has gone that part moves to
+  "with the ombudsman" dated that day (`escalateFromEmail(..., { to:
+  'ombudsman' })`, Undo on the email). Schemes that don't take email keep the
+  website steps, with their own note on how to refer.
+
 ### 2026-09-29 — fixes from a review of the deadline engine
 - **A final response can come at Stage 1** (a debt collector's FCA final
   response, an energy deadlock letter): **Record their response** at Stage 1

@@ -8,6 +8,7 @@ import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
 import { zipStore, safeName } from '../lib/zip.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
+import { plural } from '../lib/words.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
 import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom } from '../services/complaintRules.js';
@@ -401,7 +402,20 @@ export async function deliverOutbox(outboxId) {
   if (!o) return;
   let sent;
   try {
-    sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body });
+    // A referral carries the evidence; the files that didn't fit are named in
+    // the email itself, and the body kept is exactly the one that went.
+    let attachments;
+    if (o.attach_evidence) {
+      const r = await referralAttachments(o.complaint_id);
+      attachments = r.attachments;
+      const listed = `Attached: ${attachments.map((x) => x.filename).join('; ')}.` +
+        (r.left.length ? ` Too large to email together, and available on request: ${r.left.join('; ')}.` : '');
+      // Before the sign-off, where a reader expects it.
+      const at = o.body.search(/\n(Kind regards|Yours sincerely|Yours faithfully|Many thanks|Regards),?\s*\n/i);
+      o.body = at >= 0 ? `${o.body.slice(0, at).trimEnd()}\n\n${listed}\n${o.body.slice(at)}` : `${o.body.trimEnd()}\n\n${listed}`;
+      await query('UPDATE complaint_outbox SET body = $2 WHERE id = $1', [o.id, o.body]);
+    }
+    sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body, attachments });
   } catch (err) {
     // The mail server refused it outright, so it certainly didn't go (a
     // Try again after a restart that may have sent it included): no "It
@@ -467,6 +481,21 @@ async function afterSent(o, messageId, { sentAt = null } = {}) {
       const s = o.then_supplier;
       if (!(await joinSupplierOnce(o.complaint_id, s, { sentOn, emailId, subject: o.subject, by: o.sent_by }))) {
         await note(`The complaint to ${s.org_name} was sent, but they were already on this complaint by then, so nothing was added.`);
+      }
+      scheduleReview(o.complaint_id);
+      return;
+    }
+    if (o.then_refer) {
+      // The email IS the referral: that part is with the ombudsman from the
+      // day it went (Undo on the email, as for any step it records). To an
+      // organisation since taken off, or a part that has moved on: noted,
+      // nothing changed.
+      const track = o.to_party && !o.party_id ? null
+        : o.party_id ? (await query('SELECT stage FROM complaint_parties WHERE id = $1', [o.party_id])).rows[0] : cur;
+      if (track && ['stage_1', 'stage_2'].includes(track.stage)) {
+        await escalateFromEmail(o.complaint_id, o.party_id || null, sentOn, o.sent_by, emailId, { to: 'ombudsman' });
+      } else {
+        await note(`The referral to the ombudsman was sent, but ${track ? 'that part had already moved on' : 'that organisation had been taken off the complaint'}, so nothing was changed.`, o.party_id);
       }
       scheduleReview(o.complaint_id);
       return;
@@ -614,28 +643,46 @@ async function evidenceFor(c, { events, emails, attachments }) {
 // and missing), the grounds (drafted by the AI, or left for the pack), the
 // timeline and the correspondence log. Shared by the pack and the evidence
 // download so the two can't disagree.
-async function packText(ctx, grounds) {
+// An email only between Greenco addresses (a colleague forwarding it, a
+// note between us): ours to read, never sent to an outside body.
+function internalOnly(em) {
+  const ours = String(config.complaintEmail.domain || '').toLowerCase();
+  if (!ours) return false;
+  const addrs = [em.sender_email, ...(em.to_addresses || [])].filter(Boolean).map((a) => String(a).toLowerCase());
+  return addrs.length > 0 && addrs.every((a) => a.endsWith(`@${ours}`));
+}
+
+// `outward`: the version that goes TO the ombudsman (an emailed referral):
+// the facts, what we want, the documents enclosed, the grounds, the timeline
+// of steps and the correspondence log, without our own working (the
+// readiness lines, the evidence checklist with its "how to fix", internal
+// notes on the timeline).
+async function packText(ctx, grounds, { outward = false } = {}) {
   const c = ctx.complaint;
   const stageWords = (st) => ({ stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'with the ombudsman', resolved: 'resolved', closed: 'closed' })[st] || st;
   const lines = [];
-  lines.push(`OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
+  lines.push(outward ? `COMPLAINT SUMMARY: ${c.ref_code} (Greenco's reference)` : `OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
   lines.push('='.repeat(48));
   // Never sent too early: a pack prepared before it can go says so first.
-  const notReady = [c, ...(c.parties || [])].filter((t) => trackOpen(t) && t.referral && !t.referral.open);
+  const notReady = outward ? [] : [c, ...(c.parties || [])].filter((t) => trackOpen(t) && t.referral && !t.referral.open);
   for (const t of notReady) {
     lines.push(`NOT READY TO SEND${c.parties?.length ? ` (${t.org_name})` : ''}: ${t.referral.why}.`);
   }
   if (notReady.length) lines.push('');
   lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
-  lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
-  if (c.property) lines.push(`Property / account: ${c.property}`);
+  if (!outward) lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
+  if (c.property) lines.push(`Property: ${c.property}`);
+  if (c.account_numbers?.length) lines.push(`Account number${c.account_numbers.length === 1 ? '' : 's'}: ${c.account_numbers.join(', ')}`);
   if (c.reference) lines.push(`Their reference: ${c.reference}`);
   lines.push(`Subject: ${c.subject}`);
   lines.push(`Raised: ${readable(c.raised_on)}   Stage: ${stageWords(c.stage)}   Status: ${c.label}`);
   if (c.acknowledged_on) lines.push(`Acknowledged: ${readable(c.acknowledged_on)}`);
   if (c.responded_on) lines.push(`Their response: ${readable(c.responded_on)}`);
-  if (c.ombudsman_from) lines.push(`Can refer from: ${readable(c.ombudsman_from)}`);
-  lines.push(`Refer by: ${readable(c.ombudsman_deadline) || 'n/a'}`);
+  if (c.final_response_on) lines.push(`Their final response: ${readable(c.final_response_on)}`);
+  if (!outward) {
+    if (c.ombudsman_from) lines.push(`Can refer from: ${readable(c.ombudsman_from)}`);
+    lines.push(`Refer by: ${readable(c.ombudsman_deadline) || 'n/a'}`);
+  }
   if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
   for (const p of c.parties || []) {
     lines.push('');
@@ -645,48 +692,55 @@ async function packText(ctx, grounds) {
     if (p.acknowledged_on) lines.push(`  Acknowledged: ${readable(p.acknowledged_on)}`);
     if (p.responded_on) lines.push(`  Their response: ${readable(p.responded_on)}`);
     if (p.final_response_on) lines.push(`  Their final response: ${readable(p.final_response_on)}`);
-    lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${readable(p.ombudsman_deadline) || 'n/a'}`);
+    if (!outward) lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${readable(p.ombudsman_deadline) || 'n/a'}`);
   }
   lines.push('');
   lines.push('WHAT WE WANT');
   lines.push('-'.repeat(48));
-  lines.push(c.outcome_wanted || '(not stated yet: add "The outcome we want" on the complaint)');
+  lines.push(c.outcome_wanted || (outward ? '(set out in our covering email)' : '(not stated yet: add "The outcome we want" on the complaint)'));
   if (c.losses) lines.push(`Money lost or extra costs: ${c.losses}`);
   // What the ombudsman will ask for: on file, and still missing.
   const attachments = await listAttachments(c.id);
   const ev = await evidenceFor(c, { events: ctx.events, emails: ctx.emails, attachments });
   const mark = { ok: '[x]', missing: '[ ] MISSING:', optional: '[ ] (optional)', na: '[-]' };
   const itemLine = (i) => `${mark[i.state]} ${i.label}${i.detail ? `: ${i.detail}` : ''}${i.fix && i.state !== 'ok' ? `. ${i.fix}` : ''}`;
-  lines.push('');
-  lines.push(`EVIDENCE${ev.missing ? ` (${ev.missing} still missing)` : ''}`);
-  lines.push('-'.repeat(48));
-  for (const i of ev.shared) lines.push(itemLine(i));
-  for (const t of ev.tracks) {
-    if (ev.tracks.length > 1) lines.push(`${t.org_name}:`);
-    for (const i of t.items) lines.push(`${ev.tracks.length > 1 ? '  ' : ''}${itemLine(i)}`);
+  if (!outward) {
+    lines.push('');
+    lines.push(`EVIDENCE${ev.missing ? ` (${ev.missing} still missing)` : ''}`);
+    lines.push('-'.repeat(48));
+    for (const i of ev.shared) lines.push(itemLine(i));
+    for (const t of ev.tracks) {
+      if (ev.tracks.length > 1) lines.push(`${t.org_name}:`);
+      for (const i of t.items) lines.push(`${ev.tracks.length > 1 ? '  ' : ''}${itemLine(i)}`);
+    }
   }
   if (attachments.length) {
     lines.push('');
-    lines.push('Documents on file:');
+    lines.push(outward ? 'Documents enclosed:' : 'Documents on file:');
     for (const a of [...attachments].reverse()) lines.push(`  ${readable(londonDateOf(new Date(a.uploaded_at)))}  ${a.filename}`);
   }
   lines.push('');
   lines.push('GROUNDS FOR REFERRAL');
   lines.push('-'.repeat(48));
-  lines.push(grounds === null
+  if (outward && !grounds) lines.push('Set out in our covering email.');
+  else lines.push(grounds === null
     ? 'Not drafted here: press “Build referral pack” on the complaint for the AI to draft the grounds from everything on file.'
     : grounds || '(The AI returned no grounds this time: build the pack again, or write them from the timeline below.)');
   lines.push('');
   lines.push('CASE TIMELINE');
   lines.push('-'.repeat(48));
+  // Outward: the steps of the complaint only, never our own notes (which
+  // include working notes and what the system did).
   for (const e of [...ctx.events].reverse()) {
+    if (outward && (e.type === 'note' || /^Automatic|^Import/.test(e.created_by || ''))) continue;
     lines.push(`${readable(e.event_date)}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
   }
   lines.push('');
   lines.push('CORRESPONDENCE LOG');
   lines.push('-'.repeat(48));
-  if (ctx.emails.length) {
-    for (const em of [...ctx.emails].reverse()) {
+  const logged = outward ? ctx.emails.filter((em) => !em.removed_org && !internalOnly(em)) : ctx.emails;
+  if (logged.length) {
+    for (const em of [...logged].reverse()) {
       lines.push(
         `${em.received_at ? readable(londonDateOf(new Date(em.received_at))) : ''}  ${em.direction === 'outbound' || em.analysis?.kind === 'our_email' ? 'SENT' : 'RECEIVED'}  ` +
           `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}` +
@@ -716,64 +770,76 @@ router.get(
 // text file (oldest first, numbered, with who, when and to whom) and every
 // document as it was received. An organisation taken off the complaint: its
 // emails and what came with them are left out (its history, not this case).
+// The evidence as files: the summary (the referral pack's text, with the
+// grounds when they were drafted), every email as a text file (oldest first,
+// numbered, with who, when and to whom) and every document as received. An
+// organisation taken off the complaint: its emails and what came with them
+// are left out (its history, not this case). Shared by the .zip download and
+// the referral sent by email, so the two carry exactly the same evidence.
+async function evidenceFiles(ctx, { grounds = null, outward = false } = {}) {
+  const c = ctx.complaint;
+  const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }).replace('Sept', 'Sep');
+  const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, grounds, { outward }) }];
+  // Each email dated the day it was SENT (a forward's own date is only when
+  // it was forwarded), oldest first; ours by the same test as everywhere
+  // (sent from here, read as ours, or from our address with no reading).
+  const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
+  const isOurs = (e) => e.direction === 'outbound' || e.analysis?.kind === 'our_email' ||
+    (ourDomain && String(e.sender_email || '').toLowerCase().endsWith(`@${ourDomain}`) && !e.analysis?.kind);
+  const sentDay = (e) => (/^\d{4}-\d{2}-\d{2}$/.test(e.analysis?.sent_on || '') ? e.analysis.sent_on
+    : e.received_at ? londonDateOf(new Date(e.received_at)) : '');
+  // An organisation taken off the complaint: its emails (and what came with
+  // them) are its history, left out of what goes to the ombudsman.
+  const offIds = new Set(ctx.emails.filter((e) => e.removed_org).map((e) => e.id));
+  const emails = ctx.emails.filter((e) => !e.removed_org && !(outward && internalOnly(e)))
+    .sort((a, b) => sentDay(a).localeCompare(sentDay(b)) || new Date(a.received_at) - new Date(b.received_at));
+  emails.forEach((e, i) => {
+    const day = sentDay(e);
+    const forwarded = day && e.received_at && day !== londonDateOf(new Date(e.received_at));
+    files.push({
+      name: `Emails/${String(i + 1).padStart(3, '0')} ${day} ${isOurs(e) ? 'SENT' : 'RECEIVED'} ${safeName(e.subject, 60)}.txt`,
+      date: e.received_at ? new Date(e.received_at) : undefined,
+      data: [
+        `From: ${e.sender_name ? `${e.sender_name} <${e.sender_email || ''}>` : e.sender_email || ''}`,
+        `To: ${(e.to_addresses || []).join(', ')}`,
+        `Date: ${forwarded ? `${readable(day)} (as sent; forwarded here ${when(e.received_at)})` : e.received_at ? when(e.received_at) : ''}`,
+        `Subject: ${e.subject || '(no subject)'}`,
+        '',
+        e.body_text || e.body_preview || '(no text kept)',
+      ].join('\r\n'),
+    });
+  });
+  const docs = (await query(
+    `SELECT filename, storage_path, uploaded_at, sha256, source_email_id FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at`,
+    [c.id],
+  )).rows.filter((d) => !d.source_email_id || !offIds.has(d.source_email_id));
+  const seen = new Set();
+  const unreadable = [];
+  for (const d of docs) {
+    if (d.sha256 && seen.has(d.sha256)) continue; // the same file saved twice
+    if (d.sha256) seen.add(d.sha256);
+    try {
+      files.push({
+        name: `Documents/${londonDateOf(new Date(d.uploaded_at))} ${safeName(d.filename, 100, { keepExt: true })}`,
+        date: new Date(d.uploaded_at),
+        data: await fs.readFile(d.storage_path),
+      });
+    } catch {
+      unreadable.push(d.filename);
+    }
+  }
+  if (unreadable.length) {
+    files.push({ name: 'Documents/Could not be included.txt', data: `These files are on the complaint but couldn't be read from storage:\r\n${unreadable.join('\r\n')}` });
+  }
+  return files;
+}
+
 router.get(
   '/:id/evidence.zip',
   asyncHandler(async (req, res) => {
     const ctx = await gatherContext(req.params.id, undefined, { files: 0 });
     const c = ctx.complaint;
-    const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }).replace('Sept', 'Sep');
-    const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, null) }];
-    // Each email dated the day it was SENT (a forward's own date is only when
-    // it was forwarded), oldest first; ours by the same test as everywhere
-    // (sent from here, read as ours, or from our address with no reading).
-    const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
-    const isOurs = (e) => e.direction === 'outbound' || e.analysis?.kind === 'our_email' ||
-      (ourDomain && String(e.sender_email || '').toLowerCase().endsWith(`@${ourDomain}`) && !e.analysis?.kind);
-    const sentDay = (e) => (/^\d{4}-\d{2}-\d{2}$/.test(e.analysis?.sent_on || '') ? e.analysis.sent_on
-      : e.received_at ? londonDateOf(new Date(e.received_at)) : '');
-    // An organisation taken off the complaint: its emails (and what came with
-    // them) are its history, left out of what goes to the ombudsman.
-    const offIds = new Set(ctx.emails.filter((e) => e.removed_org).map((e) => e.id));
-    const emails = ctx.emails.filter((e) => !e.removed_org)
-      .sort((a, b) => sentDay(a).localeCompare(sentDay(b)) || new Date(a.received_at) - new Date(b.received_at));
-    emails.forEach((e, i) => {
-      const day = sentDay(e);
-      const forwarded = day && e.received_at && day !== londonDateOf(new Date(e.received_at));
-      files.push({
-        name: `Emails/${String(i + 1).padStart(3, '0')} ${day} ${isOurs(e) ? 'SENT' : 'RECEIVED'} ${safeName(e.subject, 60)}.txt`,
-        date: e.received_at ? new Date(e.received_at) : undefined,
-        data: [
-          `From: ${e.sender_name ? `${e.sender_name} <${e.sender_email || ''}>` : e.sender_email || ''}`,
-          `To: ${(e.to_addresses || []).join(', ')}`,
-          `Date: ${forwarded ? `${readable(day)} (as sent; forwarded here ${when(e.received_at)})` : e.received_at ? when(e.received_at) : ''}`,
-          `Subject: ${e.subject || '(no subject)'}`,
-          '',
-          e.body_text || e.body_preview || '(no text kept)',
-        ].join('\r\n'),
-      });
-    });
-    const docs = (await query(
-      `SELECT filename, storage_path, uploaded_at, sha256, source_email_id FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at`,
-      [c.id],
-    )).rows.filter((d) => !d.source_email_id || !offIds.has(d.source_email_id));
-    const seen = new Set();
-    const unreadable = [];
-    for (const d of docs) {
-      if (d.sha256 && seen.has(d.sha256)) continue; // the same file saved twice
-      if (d.sha256) seen.add(d.sha256);
-      try {
-        files.push({
-          name: `Documents/${londonDateOf(new Date(d.uploaded_at))} ${safeName(d.filename, 100, { keepExt: true })}`,
-          date: new Date(d.uploaded_at),
-          data: await fs.readFile(d.storage_path),
-        });
-      } catch {
-        unreadable.push(d.filename);
-      }
-    }
-    if (unreadable.length) {
-      files.push({ name: 'Documents/Could not be included.txt', data: `These files are on the complaint but couldn't be read from storage:\r\n${unreadable.join('\r\n')}` });
-    }
+    const files = await evidenceFiles(ctx);
     const zip = zipStore(files);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName(`${c.ref_code} evidence for the ombudsman`)}.zip"`);
@@ -781,6 +847,144 @@ router.get(
     res.send(zip);
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Referring to the ombudsman BY EMAIL, from the complaint. Most schemes take a
+// new complaint by email as well as on their website (ombudsmen.refer_email,
+// checked on their own site); where one does, the referral is drafted here
+// (no AI: the facts on file, and the grounds when the referral pack has
+// drafted them), sent in the background with the evidence attached, and once
+// it has gone that organisation's part is "with the ombudsman", dated the
+// day it went. Never before a referral is open (referralOpen).
+// ---------------------------------------------------------------------------
+async function referralTrack(complaintId, partyId) {
+  const c = await decoratedById(complaintId);
+  const t = partyId ? (c.parties || []).find((p) => p.id === partyId) : c;
+  if (!t) throw new HttpError(400, 'That organisation isn’t on this complaint.');
+  return { c, t };
+}
+
+function referralRefusal(t) {
+  if (!trackOpen(t) || !['stage_1', 'stage_2'].includes(t.stage)) return 'This part of the complaint isn’t waiting to be referred.';
+  if (!t.referral?.open) return `Not yet: ${t.referral?.why || 'a referral isn’t open'}.`;
+  if (!t.rule?.scheme?.refer_email) return `${theOmbudsman(t.rule?.ombudsman)} has no address on file for new complaints by email (Complaints → Ombudsmen): refer on their website.`;
+  return null;
+}
+
+// The covering email, from the facts on file. `grounds` is the referral
+// pack's drafted grounds when it has been built (the page passes them).
+export function referralEmailDraft(c, t, grounds = null) {
+  const sc = t.rule.scheme;
+  const accounts = (c.account_numbers || []).join(', ');
+  const refs = [t.reference && `their reference ${t.reference}`, accounts && `account ${accounts}`].filter(Boolean).join(', ');
+  const lines = [];
+  lines.push(`Dear ${sc.name} team,`);
+  lines.push('');
+  lines.push(`We would like to refer our complaint against ${t.org_name} to you for an independent review${c.property ? `. It concerns ${c.property}` : ''}${refs ? ` (${refs})` : ''}.`);
+  lines.push('');
+  const steps = [`We made our complaint to ${t.org_name} on ${ukDate(t.raised_on)}.`];
+  if (t.acknowledged_on) steps.push(`They acknowledged it on ${ukDate(t.acknowledged_on)}.`);
+  if (t.stage === 'stage_2' && t.stage_started_on) steps.push(`We asked for it to be escalated to Stage 2 on ${ukDate(t.stage_started_on)}.`);
+  if (t.final_response_on) steps.push(`Their final response is dated ${ukDate(t.final_response_on)}, and it did not resolve matters.`);
+  else if (t.responded_on && t.stage === 'stage_2') steps.push(`Their Stage 2 response is dated ${ukDate(t.responded_on)}, and it did not resolve matters.`);
+  else if (t.response_due && t.response_due < todayISO()) steps.push(`Their response was due by ${ukDate(t.response_due)} and we have not received a final response.`);
+  else if (t.ombudsman_from) steps.push(`It is now more than ${t.rule.ombudsmanAfterWeeks || 8} weeks since we complained, and it remains unresolved.`);
+  lines.push(steps.join(' '));
+  lines.push('');
+  lines.push(grounds && String(grounds).trim()
+    ? String(grounds).trim()
+    : '[Please say briefly what went wrong and why their response has not put it right]');
+  lines.push('');
+  lines.push(c.outcome_wanted ? `To put things right, we are asking for: ${c.outcome_wanted}` : '[What we are asking for, to put things right]');
+  if (c.losses) lines.push(`The extra cost to us so far: ${c.losses}`);
+  lines.push('');
+  lines.push('We attach a summary with the timeline, the correspondence with them, and the documents we hold.');
+  lines.push(`If you need anything further from us, or a form completed${sc.representative ? ' (including authority to act for the account holder)' : ''}, please let us know, and please quote ${c.ref_code} in any reply so it reaches us.`);
+  lines.push('');
+  lines.push('Kind regards,');
+  lines.push('');
+  lines.push('[Name]');
+  lines.push('[Job title]');
+  lines.push('Greenco');
+  const subject = `Complaint referral: ${t.org_name}${accounts ? `, account ${accounts}` : ''}${c.property ? ` (${c.property})` : ''} [${c.ref_code}]`;
+  return { to: sc.refer_email, subject: subject.slice(0, 250), body: lines.join('\n'), note: sc.refer_email_note || null };
+}
+
+router.get(
+  '/:id/referral/draft',
+  asyncHandler(async (req, res) => {
+    const partyId = z.string().uuid().safeParse(req.query.party_id).success ? req.query.party_id : null;
+    const { c, t } = await referralTrack(req.params.id, partyId);
+    const refusal = referralRefusal(t);
+    if (refusal) throw new HttpError(409, refusal);
+    const grounds = typeof req.query.grounds === 'string' ? req.query.grounds.slice(0, 8000) : null;
+    res.json(referralEmailDraft(c, t, grounds));
+  }),
+);
+
+const referralSendInput = z.object({
+  party_id: z.string().uuid().optional().nullable(),
+  to: z.string().min(3),
+  cc: z.string().optional().nullable(),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().trim().min(1).max(60000),
+});
+router.post(
+  '/:id/referral/send',
+  asyncHandler(async (req, res) => {
+    const d = parse(referralSendInput, req.body);
+    if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
+    const { c, t } = await referralTrack(req.params.id, d.party_id || null);
+    const refusal = referralRefusal(t);
+    if (refusal) throw new HttpError(409, refusal);
+    // A draft's gaps must be filled in before it goes to an ombudsman.
+    if (/\[(Please|What we are asking)/.test(d.body)) {
+      throw new HttpError(400, 'The email still has a gap in square brackets to fill in (what went wrong, or what you are asking for).');
+    }
+    const to = parseRecipients(d.to);
+    const cc = parseRecipients(d.cc);
+    if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
+    if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
+    for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
+    const partyId = t.complaint_id ? t.id : null;
+    const out = await queueOutbox(c.id, {
+      guard: { sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_refer AND party_id IS NOT DISTINCT FROM $2 AND status <> 'sent'`, params: [c.id, partyId] },
+      refusal: 'A referral to the ombudsman is already being sent, or failed and is waiting on this complaint: deal with that one first (Try again, It went, or Discard).',
+    },
+    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, sent_by, then_refer, attach_evidence)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true) RETURNING id`,
+    [c.id, partyId, Boolean(partyId), to, cc, signEmail(d.subject, req.user), signEmail(d.body, req.user), who(req)]);
+    res.status(202).json({ queued: true, outbox_id: out.id });
+  }),
+);
+
+// What goes with an emailed referral: the summary, all the correspondence as
+// ONE text file (fifty attachments is a case nobody can read), and each
+// document as received, up to what an email can carry. What doesn't fit is
+// named in the email, to send once they have given the case a reference.
+const REFERRAL_ATTACH_BYTES = 14 * 1024 * 1024; // ~19 MB once encoded for email
+async function referralAttachments(complaintId) {
+  const ctx = await gatherContext(complaintId, undefined, { files: 0 });
+  const files = await evidenceFiles(ctx, { outward: true });
+  const summary = files.find((f) => f.name.startsWith('00 '));
+  const emails = files.filter((f) => f.name.startsWith('Emails/'));
+  const docs = files.filter((f) => f.name.startsWith('Documents/'));
+  const out = [];
+  if (summary) out.push({ filename: `${ctx.complaint.ref_code} summary and timeline.txt`, content: Buffer.from(summary.data, 'utf8') });
+  if (emails.length) {
+    const all = emails.map((f) => `${'='.repeat(60)}\r\n${f.data}`).join('\r\n\r\n');
+    out.push({ filename: `${ctx.complaint.ref_code} correspondence (${plural(emails.length, 'email')}).txt`, content: Buffer.from(all, 'utf8') });
+  }
+  let used = out.reduce((n, a) => n + a.content.length, 0);
+  const left = [];
+  for (const f of docs) {
+    const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(String(f.data), 'utf8');
+    if (used + data.length > REFERRAL_ATTACH_BYTES) { left.push(f.name.replace(/^Documents\/\S+ /, '')); continue; }
+    used += data.length;
+    out.push({ filename: f.name.replace(/^Documents\//, ''), content: data });
+  }
+  return { attachments: out, left };
+}
 
 // AI import: extract a structured complaint from pasted material so an existing
 // complaint can be brought in and continued. Returns fields for review; the user
@@ -1339,7 +1543,7 @@ router.get(
     // Copied in on every email sent from here (utilities@), so the page can say so.
     // Emails still going out, or that failed, shown on the complaint.
     const outbox = (await query(
-      `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_formal, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
+      `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_formal, then_refer, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     const evidence = await evidenceFor(decorated, { events, emails, attachments });
@@ -1784,11 +1988,11 @@ export async function escalateMissedStage2Requests() {
 // be taken back. Without an email row (it couldn't be stored) it is simply
 // escalated.
 const TRACK_COLS = ['stage', 'stage_started_on', 'responded_on', 'final_response_on', 'response_due_manual'];
-async function escalateFromEmail(complaintId, partyId, date, by, emailId) {
+async function escalateFromEmail(complaintId, partyId, date, by, emailId, { to = null } = {}) {
   const table = partyId ? 'complaint_parties' : 'complaints';
   const rowOf = async () => (await query(`SELECT ${TRACK_COLS.join(', ')} FROM ${table} WHERE id = $1`, [partyId || complaintId])).rows[0];
   const before = await rowOf();
-  await escalateTrack(complaintId, partyId, date, by);
+  await escalateTrack(complaintId, partyId, date, by, { to });
   if (!emailId || !before) return;
   const after = await rowOf();
   const ev = (await query(

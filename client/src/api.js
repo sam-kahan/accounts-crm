@@ -394,6 +394,15 @@ export const api = {
     discardOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}`, { method: 'DELETE' }),
     checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
     referralPack: (id) => request(`/complaints/${id}/referral-pack`),
+    // The referral as an email to the ombudsman (where it takes one), drafted
+    // from the facts on file (and the pack's grounds when built); sent in the
+    // background with the evidence attached, and the part moves to the
+    // ombudsman once it has gone.
+    referralDraft: (id, partyId, grounds) => request(`/complaints/${id}/referral/draft?${new URLSearchParams(
+      Object.fromEntries(Object.entries({ party_id: partyId || '', grounds: grounds || '' }).filter(([, v]) => v)),
+    )}`),
+    sendReferral: (id, data) =>
+      request(`/complaints/${id}/referral/send`, { method: 'POST', body: JSON.stringify(data) }),
     // Fill the log form from the complaint itself: pasted text, an uploaded
     // email/letter, or an email waiting to be filed. Saves nothing.
     parseImport: ({ text, file, emailId } = {}) => {

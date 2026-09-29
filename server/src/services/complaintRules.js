@@ -288,6 +288,7 @@ function applyScheme(rule, s) {
   out.scheme = {
     id: s.id, key: s.key, name: s.name, website: s.website || null, refer_url: s.refer_url || null,
     phone: s.phone || null, email: s.email || null, post: s.post || null,
+    refer_email: s.refer_email || null, refer_email_note: s.refer_email_note || null,
     who_can_complain: s.who_can_complain || null, representative: s.representative || null,
     what_to_include: s.what_to_include || [], notes: s.notes || null,
     after_final_response: s.after_final_response !== false, after_missed_deadline: Boolean(s.after_missed_deadline),
