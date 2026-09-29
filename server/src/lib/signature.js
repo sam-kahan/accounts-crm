@@ -18,3 +18,23 @@ export function signEmail(text, user) {
   else s = s.replace(new RegExp(`^[ \\t]*${TITLE.source}[ \\t]*\\n?`, 'gim'), '').replace(TITLE, '');
   return s;
 }
+
+// A draft whose sign-off has no placeholder (the AI signed it with a company
+// name, say "Greenco Property Group, Accounts") would never carry the
+// sender's name. The closing line and everything after it are replaced with
+// the standard sign-off, which signEmail then fills. A draft with no closing
+// line gets one added.
+const CLOSING = /^[ \t]*(?:kind regards|best regards|regards|many thanks|yours sincerely|yours faithfully),?[ \t]*$/im;
+export function ensureSignOff(body) {
+  const s = String(body ?? '').replace(/\s+$/, '');
+  if (!s) return s;
+  if (NAME.test(s)) { NAME.lastIndex = 0; return s; }
+  NAME.lastIndex = 0;
+  const lines = s.split('\n');
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (CLOSING.test(lines[i])) { at = i; break; }
+  }
+  const head = at >= 0 ? lines.slice(0, at).join('\n').replace(/\s+$/, '') : s;
+  return `${head}\n\nKind regards,\n\n[Name]\n[Job title]\nGreenco`;
+}

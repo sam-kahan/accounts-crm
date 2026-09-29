@@ -34,7 +34,7 @@ import {
   parseImportedComplaint,
 } from '../services/complaintAssistant.js';
 import { sendMail, fromAddress, withExternalCc } from '../services/mailer.js';
-import { signEmail } from '../lib/signature.js';
+import { signEmail, ensureSignOff } from '../lib/signature.js';
 import {
   listAttachments,
   attachmentTexts,
@@ -1762,12 +1762,13 @@ router.post(
         'any fees or charges added because of their error, and (4) acknowledge this complaint and give their ' +
         'complaint reference. Firm, polite, UK business English, no long dashes. Use only facts in the ' +
         'context; put [square brackets] only where a fact is genuinely unknown. In "email" give the subject ' +
-        'and the full body, greeting to sign-off (sign off as Greenco Property Group, Accounts).',
+        'and the full body, greeting to sign-off (signed off with the [Name] and [Job title] placeholders, as always).',
     });
     res.json({
       to: org?.complaints_email || null,
       subject: r.email?.subject || '',
-      body: r.email?.body || '',
+      // Always the standard sign-off, so the sender's own name goes on it.
+      body: ensureSignOff(r.email?.body || ''),
       caution: r.caution || null,
     });
   }),

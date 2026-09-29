@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
+import { ensureSignOff } from '../lib/signature.js';
 import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview, anyReferral } from './complaintContext.js';
 import { contactForOne } from './trackContact.js';
 import { assistComplaint } from './complaintAssistant.js';
@@ -74,6 +75,9 @@ export async function refreshReview(id) {
   try {
     const multi = (ctx.complaint.parties || []).length > 0;
     const raw = await assistComplaint({ ...ctx, feature: 'Standing AI review (automatic)', instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') });
+    // Every drafted email ends with the sign-off the sender's details go into.
+    if (raw?.email?.body) raw.email = { ...raw.email, body: ensureSignOff(raw.email.body) };
+    if (Array.isArray(raw?.by_org)) raw.by_org = raw.by_org.map((e) => (e?.email?.body ? { ...e, email: { ...e.email, body: ensureSignOff(e.email.body) } } : e));
     const headline = typeof raw.headline === 'string' && raw.headline.trim()
       ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
       : null;
