@@ -17,7 +17,7 @@ import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
-import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, PARTY_COLS } from '../services/orgMatch.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, sameAccount, sameOrgName, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
@@ -88,6 +88,22 @@ async function settleOverall(complaintId) {
       [complaintId, state, todayISO()],
     );
   }
+}
+
+// Other open complaints about the same account (one account, one complaint):
+// shown on the complaint with a Combine button, and checked before a supplier
+// is added, so the same account never runs as two complaints.
+async function sameAccountComplaints(c) {
+  const others = (await query(
+    `SELECT c.id, c.ref_code, c.subject, c.org_name, c.raised_on, c.reference, c.account_numbers, c.needs_check, ${PARTY_COLS}
+       FROM complaints c WHERE c.state = 'open' AND c.id <> $1`,
+    [c.id],
+  )).rows;
+  const me = (await query(`SELECT c.*, ${PARTY_COLS} FROM complaints c WHERE c.id = $1`, [c.id])).rows[0] || c;
+  return others.filter((o) => sameAccount(me, o)).map((o) => ({
+    id: o.id, ref_code: o.ref_code, subject: o.subject, raised_on: o.raised_on,
+    org_names: [o.org_name, ...(o.party_names || [])],
+  }));
 }
 
 async function decoratedById(id) {
@@ -1054,6 +1070,7 @@ router.get(
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const decorated = await decorate({ ...rows[0], recheck_progress: recheckProgressOf(rows[0]) });
     decorated.stage2_missed = (await stage2MissedFor([rows[0].id])).get(rows[0].id) || [];
+    decorated.same_account = await sameAccountComplaints(rows[0]);
     const events = await listEvents(req.params.id);
     const emails = await listComplaintEmails(req.params.id);
     const attachments = await listAttachments(req.params.id);
@@ -1744,6 +1761,13 @@ router.post(
     const org = d.organisation_id
       ? (await query('SELECT name, complaints_email FROM organisations WHERE id = $1', [d.organisation_id])).rows[0]
       : null;
+    // They already have a complaint about this account: combine, don't draft
+    // a second one (and spend nothing on it).
+    const supplierName = org?.name || d.org_name;
+    const theirs = (await sameAccountComplaints({ id: req.params.id })).find((o) => o.org_names.some((n) => sameOrgName(n, supplierName)));
+    if (theirs) {
+      throw new HttpError(409, `There is already a complaint with ${supplierName} about this account (${theirs.ref_code}, made ${readable(theirs.raised_on)}). Combine the two complaints (the button at the top of this page) rather than raising a new one.`);
+    }
     const ctx = await gatherContext(req.params.id, undefined, { files: 2 });
     const c = ctx.complaint;
     const name = org?.name || d.org_name;
@@ -1801,6 +1825,12 @@ router.post(
       (c.parties || []).some((p) => (d.organisation_id && p.organisation_id === d.organisation_id) ||
         p.org_name.trim().toLowerCase() === d.org_name.trim().toLowerCase());
     if (already) throw new HttpError(409, `${d.org_name} is already on this complaint.`);
+    // They already have a complaint about this account: combine the two
+    // rather than start a second complaint with them.
+    const theirs = (await sameAccountComplaints(c)).find((o) => o.org_names.some((n) => sameOrgName(n, d.org_name)));
+    if (theirs) {
+      throw new HttpError(409, `There is already a complaint with ${d.org_name} about this account (${theirs.ref_code}, made ${readable(theirs.raised_on)}). Combine the two complaints (the button at the top of this page) rather than raising a new one.`);
+    }
     if (d.send) {
       if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
       const waiting = (await query(

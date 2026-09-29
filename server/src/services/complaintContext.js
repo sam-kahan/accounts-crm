@@ -15,6 +15,7 @@ import {
   referralOpen,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
+import { loadSchemes, schemeFor } from './ombudsmen.js';
 import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
@@ -63,6 +64,8 @@ export async function decorateMany(rows) {
     ? new Map((await query('SELECT * FROM organisations WHERE id = ANY($1::uuid[])', [ids])).rows.map((o) => [o.id, o]))
     : new Map();
   const orgOf = (r) => (r.organisation_id ? orgs.get(r.organisation_id) || null : null);
+  // The ombudsman register (a handful of rows), for each track's scheme.
+  const schemes = await loadSchemes();
   // When Greenco last wrote to them (a chaser logged, or an email of ours), so
   // a stored review is checked against it as it is shown (reviewGuard.js).
   const lastSent = new Map((await query(
@@ -85,11 +88,11 @@ export async function decorateMany(rows) {
   );
   return rows.map((r) => {
     const c = withParties(
-      decorateWithOrg(r, orgOf(r)),
+      decorateWithOrg(r, orgOf(r), schemes),
       // A further organisation's part rests on the same checked (or unchecked)
       // record, so it carries the complaint's check and any question about it.
       parties.filter((p) => p.complaint_id === r.id)
-        .map((p) => decorateTrack({ ...p, needs_check: r.needs_check, complaint_doubt: r.complaint_doubt }, orgOf(p))),
+        .map((p) => decorateTrack({ ...p, needs_check: r.needs_check, complaint_doubt: r.complaint_doubt }, orgOf(p), schemes)),
     );
     // Overdue isn't the same as "chase them now": when Greenco has just
     // written to them, the next step is to wait (reviewGuard.js), so the
@@ -188,8 +191,8 @@ export function tracksForReview(c) {
 // One organisation's track worked out: status, rule, checklist and its
 // complaints contact. The complaint row and a complaint_parties row both go
 // through here, so the two can't be read differently.
-function decorateTrack(t, org) {
-  const rule = effectiveRule(org, t.org_type);
+function decorateTrack(t, org, schemes) {
+  const rule = effectiveRule(org, t.org_type, schemes ? schemeFor(org, t.org_type, schemes) : undefined);
   const out = {
     ...t,
     ...deriveStatus(t, rule),
@@ -225,8 +228,8 @@ function procedureOf(org) {
     : null;
 }
 
-export function decorateWithOrg(c, org) {
-  return { ...decorateTrack(c, org), email_address: complaintEmailAddress(c.ref_code) };
+export function decorateWithOrg(c, org, schemes) {
+  return { ...decorateTrack(c, org, schemes), email_address: complaintEmailAddress(c.ref_code) };
 }
 
 // A complaint's timeline, each entry saying which organisation's track it is

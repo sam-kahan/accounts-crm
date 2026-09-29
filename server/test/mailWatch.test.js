@@ -312,3 +312,16 @@ test('an organisation written slightly differently is the one on file, never a n
   assert.equal(matchOrg(orgs, { name: 'Someone', domains: ['greenco.co.uk'], ourDomain: 'greenco.co.uk' }), null);
   assert.equal(matchOrg([...orgs, { id: 'x', name: 'Other', complaints_email: 'x@liverpool.gov.uk' }], { name: 'Someone', domains: ['liverpool.gov.uk'] }), null);
 });
+
+test('an account number filed as "their reference" still matches the same account', async () => {
+  const { issueMatch } = await import('../src/services/orgMatch.js');
+  const bg = { org_name: 'British Gas', reference: 'A34025850', account_numbers: [], property: '4 Treelands Walk, Salford, M5 3FU' };
+  const lcs = { org_name: 'LCS (1st Locate UK Ltd)', reference: '46890915', account_numbers: ['A34025850'], property: '4 Treelands Walk, Salford, M5 3FU' };
+  assert.deepEqual(issueMatch(bg, lcs), { same: true, certain: true });
+  assert.deepEqual(issueMatch(lcs, bg), { same: true, certain: true });
+  // Several references in one field are read word by word.
+  assert.equal(issueMatch({ org_name: 'X', reference: 'Council Tax ref 58669277 / CDER Reference 27308462' },
+    { org_name: 'Y', account_numbers: ['58669277'] }).same, true);
+  // Two different complaints' case references across organisations are not an account.
+  assert.equal(issueMatch({ org_name: 'X', reference: '46890915' }, { org_name: 'Y', reference: '46890915' }).same, false);
+});

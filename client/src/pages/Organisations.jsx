@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 import { FIGURES, blank, mergeProfile, fillStandard } from '../procedureMerge.js';
@@ -30,6 +30,9 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       : EMPTY,
   );
   const [defaults, setDefaults] = useState(null);
+  // The ombudsman register, for choosing the scheme this organisation belongs to.
+  const [schemes, setSchemes] = useState([]);
+  useEffect(() => { api.ombudsmen.list().then(setSchemes).catch(() => setSchemes([])); }, []);
   const [docs, setDocs] = useState([]);
   const [pendingDoc, setPendingDoc] = useState(null); // file read, stored on save
   const createdId = useRef(null); // set once a new organisation has been saved
@@ -160,6 +163,8 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       phone: form.phone || null,
       ombudsman_name: form.ombudsman_name || null,
       ombudsman_url: form.ombudsman_url || null,
+      // '' = the usual scheme for its type (the register); otherwise the one chosen.
+      ombudsman_id: form.ombudsman_id || null,
       ombudsman_referral_months: num(form.ombudsman_referral_months),
       stage1_response_days: num(form.stage1_response_days),
       stage2_response_days: num(form.stage2_response_days),
@@ -363,7 +368,28 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
             <input type="number" min="0" value={form.stage2_response_days ?? ''} onChange={(e) => set('stage2_response_days', e.target.value)} />
             <Evidence k="stage2_response_days" dflt={defaults?.stage2Days} /></label>
 
-          <label className="field"><span className="lbl">Ombudsman / redress scheme</span>
+          {(() => {
+            const usual = schemes.find((x) => (x.usual_for || []).includes(form.type));
+            const chosen = schemes.find((x) => x.id === form.ombudsman_id) || (!form.ombudsman_id ? usual : null);
+            return (
+              <label className="field full"><span className="lbl">Ombudsman scheme it belongs to</span>
+                <select value={form.ombudsman_id || ''} onChange={(e) => set('ombudsman_id', e.target.value)}>
+                  <option value="">{usual ? `The usual one for this type: ${usual.name}` : 'None chosen (no scheme is known for this type)'}</option>
+                  {schemes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {chosen
+                    ? <>When a complaint can go to {chosen.name} and the time limit come from its record on the{' '}
+                      <Link to="/ombudsmen">Ombudsmen</Link> page{chosen.verified_at ? ' (checked)' : ' (not checked yet: nothing is shown as ready to refer until it is)'}.
+                      The ombudsman figures below are not used while a scheme applies.</>
+                    : form.type === 'managing_agent'
+                      ? 'A managing agent belongs to The Property Ombudsman OR the Property Redress Scheme: choose the one it says it belongs to. Until then no complaint against it is shown as ready to refer.'
+                      : 'With no scheme, no complaint against it is shown as ready to refer.'}
+                </span>
+              </label>
+            );
+          })()}
+          <label className="field"><span className="lbl">Ombudsman / redress scheme (as their procedure names it)</span>
             <input value={form.ombudsman_name || ''} onChange={(e) => set('ombudsman_name', e.target.value)} />
             <Evidence k="ombudsman_name" dflt={defaults?.ombudsman} /></label>
           <label className="field"><span className="lbl">Ombudsman website</span>

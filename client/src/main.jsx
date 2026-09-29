@@ -21,6 +21,7 @@ function KeyedComplaintDetail() {
   return <ComplaintDetail key={id} />;
 }
 import Organisations from './pages/Organisations.jsx';
+import Ombudsmen from './pages/Ombudsmen.jsx';
 import Contractors from './pages/Contractors.jsx';
 import ContractorInvoices from './pages/ContractorInvoices.jsx';
 import CommissionInvoices from './pages/CommissionInvoices.jsx';
@@ -69,6 +70,7 @@ function Gate() {
         <Route path="complaints" element={<Restricted section="complaints"><Complaints /></Restricted>} />
         <Route path="complaints/:id" element={<Restricted section="complaints"><KeyedComplaintDetail /></Restricted>} />
         <Route path="organisations" element={<Restricted section="complaints"><Organisations /></Restricted>} />
+        <Route path="ombudsmen" element={<Restricted section="complaints"><Ombudsmen /></Restricted>} />
         <Route path="commission/contractors" element={<Restricted section="commission"><Contractors /></Restricted>} />
         <Route path="commission/invoices" element={<Restricted section="commission"><ContractorInvoices /></Restricted>} />
         <Route path="commission/raised" element={<Restricted section="commission"><CommissionInvoices /></Restricted>} />

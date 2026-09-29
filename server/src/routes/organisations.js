@@ -63,13 +63,24 @@ const input = z.object({
   // so an edit to a checked procedure has to be checked again.
   verified: z.boolean().optional(),
   notes: z.string().optional().nullable(),
+  // The ombudsman scheme it belongs to (the register), when it isn't the
+  // usual one for its type; null = the usual one. Omitted = left as it is.
+  ombudsman_id: z.string().uuid().optional().nullable(),
 });
+
+// The scheme chosen on the form, saved alongside (a managing agent is TPO or
+// PRS; a supplier may belong to none).
+async function saveScheme(org, d) {
+  if (d.ombudsman_id === undefined) return org;
+  const { rows } = await query(`UPDATE organisations SET ombudsman_id = $2 WHERE id = $1 RETURNING ombudsman_id`, [org.id, d.ombudsman_id]);
+  return { ...org, ombudsman_id: rows[0]?.ombudsman_id ?? null };
+}
 
 const COLS = `id, name, type, location, complaints_email, complaints_url, phone,
   ombudsman_name, ombudsman_url, ombudsman_referral_months, stage1_response_days,
   stage2_response_days, ack_days, procedure_ref, stage1_clock, ombudsman_after_weeks,
   referral_from, procedure_summary, legal_basis, sources, unconfirmed, procedure_evidence,
-  procedure_sources, research_status, researched_at, verified_at, verified_by, notes, created_at, updated_at`;
+  procedure_sources, research_status, researched_at, verified_at, verified_by, notes, ombudsman_id, created_at, updated_at`;
 
 const who = (req) => req.user?.name || req.user?.email || null;
 
@@ -232,7 +243,7 @@ router.post(
        RETURNING ${COLS}`,
       [...values(d), status, d.verified ? who(req) : null],
     );
-    const saved = await saveSources(rows[0], d);
+    const saved = await saveScheme(await saveSources(rows[0], d), d);
     res.status(201).json(saved);
   }),
 );
@@ -278,7 +289,7 @@ router.put(
       [req.params.id, ...values(d), d.research_status || null, Boolean(d.verified), who(req)],
     );
     if (!rows[0]) throw new HttpError(404, 'Organisation not found');
-    rows[0] = await saveSources(rows[0], d);
+    rows[0] = await saveScheme(await saveSources(rows[0], d), d);
     // A linked complaint takes its type from the organisation (the type sets
     // the defaults for anything the procedure doesn't state).
     await query('UPDATE complaints SET org_type = $2 WHERE organisation_id = $1', [req.params.id, rows[0].type]);

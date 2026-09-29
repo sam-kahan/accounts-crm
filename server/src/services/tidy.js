@@ -94,9 +94,24 @@ export async function tidySuggestions() {
 // then removed. `fromPartyId` null = the main track of `fromComplaintId`;
 // `targetPartyId` null = the target complaint's main track.
 const FOLD_COLS = ['reference', 'acknowledged_on', 'responded_on', 'final_response_on', 'stage_started_on', 'outcome'];
+// The track's own dates and stage, taken whole from the EARLIER complaint.
+const ORIGINAL_COLS = ['raised_on', 'stage', 'stage_started_on', 'acknowledged_on', 'responded_on',
+  'final_response_on', 'response_due', 'response_due_manual'];
+const dayOf = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null);
 async function foldTrack(client, { fromComplaintId, fromPartyId, source, target, targetTable, targetPartyId }) {
   const fill = {};
-  for (const c of FOLD_COLS) if (!target[c] && source[c]) fill[c] = source[c];
+  // The same organisation complained to twice: the earlier complaint is the
+  // real one (a supplier added to a debt collector's complaint "today" while
+  // its own complaint from June was still open), so its date, stage and dates
+  // are kept, not today's; the later one stays on the timeline.
+  const earlier = dayOf(source.raised_on) && dayOf(target.raised_on) && dayOf(source.raised_on) < dayOf(target.raised_on) &&
+    (source.state || 'open') === 'open' && !['resolved', 'closed'].includes(source.stage);
+  if (earlier) {
+    for (const c of ORIGINAL_COLS) if ((source[c] ?? null) !== (target[c] ?? null)) fill[c] = source[c] ?? null;
+    if (source.reference && !target.reference) fill.reference = source.reference;
+  } else {
+    for (const c of FOLD_COLS) if (!target[c] && source[c]) fill[c] = source[c];
+  }
   const cols = Object.keys(fill);
   if (cols.length) {
     await client.query(
@@ -115,9 +130,11 @@ async function foldTrack(client, { fromComplaintId, fromPartyId, source, target,
     [fromComplaintId, targetPartyId, fromPartyId],
   );
   if (fromPartyId) await client.query('DELETE FROM complaint_parties WHERE id = $1', [fromPartyId]);
-  const stageNote = source.stage && target.stage && source.stage !== target.stage
-    ? ` (it was at ${source.stage.replace('_', ' ')} there, ${target.stage.replace('_', ' ')} here: check which is right)`
-    : '';
+  const stageNote = earlier
+    ? ` (its complaint made on ${ukDate(dayOf(source.raised_on))} was kept as the original, with its stage and dates; the later one, made on ${ukDate(dayOf(target.raised_on))}, is on the timeline)`
+    : source.stage && target.stage && source.stage !== target.stage
+      ? ` (it was at ${source.stage.replace('_', ' ')} there, ${target.stage.replace('_', ' ')} here: check which is right)`
+      : '';
   return { filled: cols, stageNote };
 }
 

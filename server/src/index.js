@@ -18,6 +18,7 @@ import keyDates from './routes/keyDates.js';
 import tasks from './routes/tasks.js';
 import dashboard from './routes/dashboard.js';
 import organisations from './routes/organisations.js';
+import ombudsmen from './routes/ombudsmen.js';
 import { resumeInterruptedScan, releaseStuckImports, runAutoImport } from './services/pastComplaints.js';
 import { getSetting, setSetting } from './services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails } from './services/accountNumbers.js';
@@ -126,6 +127,7 @@ app.use('/api/companies', requireAuth, requirePermission('companies'), companies
 app.use('/api/key-dates', requireAuth, requirePermission('companies'), keyDates);
 app.use('/api/tasks', requireAuth, requirePermission('tasks'), tasks);
 app.use('/api/organisations', requireAuth, requirePermission('complaints'), organisations);
+app.use('/api/ombudsmen', requireAuth, requirePermission('complaints'), ombudsmen);
 // Greenco Invoicing calls this when an invoice changes over there. Server to
 // server, so it authenticates with the shared integration secret rather than a
 // login session — mounted on its own path so no authed route is widened.
@@ -264,6 +266,21 @@ app.listen(config.port, () => {
     .then(({ settleInterruptedRechecks }) => settleInterruptedRechecks())
     .then((n) => n && console.log(`  Re-checks cut off by the restart: ${n}`))
     .catch((err) => console.error('  Interrupted re-checks:', err.message));
+  // The ombudsman register (migrations 042/043) sets each scheme's time limit
+  // and what it counts from: the open complaints' stored refer-by dates are
+  // worked out again once, each change written on the timeline.
+  getSetting('ombudsman_register_applied')
+    .then(async (done) => {
+      if (done) return;
+      const { recomputeForOrganisation } = await import('./services/complaintDeadlines.js');
+      const opts = { by: 'Automatic (ombudsman register)', reviewAll: false, source: 'the ombudsman’s own rules (Complaints → Ombudsmen)' };
+      for (const o of (await query('SELECT id FROM organisations')).rows) await recomputeForOrganisation(o.id, [], opts);
+      const loose = (await query(`SELECT id FROM complaints WHERE state = 'open' AND organisation_id IS NULL`)).rows.map((r) => r.id);
+      if (loose.length) await recomputeForOrganisation(null, loose, opts);
+      await setSetting('ombudsman_register_applied', { at: new Date().toISOString() }, 'start-up');
+      console.log('  Refer-by dates worked out from the ombudsman register');
+    })
+    .catch((err) => console.error('  Ombudsman register:', err.message));
   // A Stage 2 request sent from here before its words were recognised moves
   // its organisation on now, dated the day it went (no AI).
   import('./routes/complaints.js')

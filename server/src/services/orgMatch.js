@@ -218,6 +218,21 @@ export function refsOf(x) {
   return out;
 }
 
+// Every account-like number written in a complaint's references, word by
+// word ("Council Tax ref 58669277 / CDER Reference 27308462" gives both).
+// An import sometimes files the account number as "their reference", so the
+// account-number rule looks here too.
+export function refNumbersOf(x) {
+  const out = new Set();
+  for (const v of [x?.reference, ...(Array.isArray(x?.party_refs) ? x.party_refs : [])]) {
+    for (const tok of String(v || '').split(/[\s,;:()[\]/]+/)) {
+      const k = norm(tok);
+      if (refLike(k) && k.length >= 6) out.add(k);
+    }
+  }
+  return out;
+}
+
 const DAY = 86400000;
 const nearInTime = (a, b) => Boolean(a && b) &&
   Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) <= 14 * DAY;
@@ -258,6 +273,16 @@ export function sameAddressText(pa, pb) {
   return [...wa].some((w) => wb.has(w));
 }
 
+// The same account number on both, however it was filed (as an account
+// number on one, "their reference" on the other). The account number is the
+// key: one account, one complaint.
+export function sameAccount(a, b) {
+  const aa = accountsOf(a); const ab = accountsOf(b);
+  const ra = refNumbersOf(a); const rb = refNumbersOf(b);
+  const long = (v) => v.length >= 6;
+  return [...aa].some((v) => long(v) && (ab.has(v) || rb.has(v))) || [...ab].some((v) => long(v) && ra.has(v));
+}
+
 export function issueMatch(a, b) {
   const no = { same: false, certain: false };
   const aa = accountsOf(a);
@@ -266,6 +291,14 @@ export function issueMatch(a, b) {
   // a debt collector or solicitor chasing the bill (LCS for British Gas)
   // quotes the supplier's account number under its own name.
   if ([...aa].some((v) => v.length >= 6 && ab.has(v))) return { same: true, certain: true };
+  // The same number filed as an account number on one and as "their
+  // reference" on the other (an import did that with A34025850): the same
+  // account, so the same complaint, whichever organisation it is against.
+  const ra = refNumbersOf(a);
+  const rb = refNumbersOf(b);
+  if ([...aa].some((v) => v.length >= 6 && rb.has(v)) || [...ab].some((v) => v.length >= 6 && ra.has(v))) {
+    return { same: true, certain: true };
+  }
   if (!a?.org_name || !b?.org_name || !sameOrgName(a.org_name, b.org_name)) return no;
   if (shares(aa, ab)) return { same: true, certain: true };
   if (aa.size && ab.size) return no;

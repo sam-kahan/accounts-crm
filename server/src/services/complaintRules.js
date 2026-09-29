@@ -242,7 +242,41 @@ const KIND_PHRASE = {
   other: 'this kind of organisation',
 };
 
-export function effectiveRule(org, type) {
+// The rule for a complaint: the type's defaults, the organisation's own
+// procedure on top, and — when `scheme` is given (services/ombudsmen.js
+// #schemeFor: a record, or null for none) — the ombudsman's own rules for
+// WHEN a case can go and the time limit, which only the scheme can set. Left
+// out (undefined), no register is consulted (the pure tests of the rest).
+export function effectiveRule(org, type, scheme) {
+  const rule = orgRule(org, type);
+  return scheme === undefined ? rule : applyScheme(rule, scheme);
+}
+
+const FROM_SCHEME = ['ombudsman', 'ombudsmanUrl', 'ombudsmanAfterWeeks', 'referralMonths', 'referralFrom'];
+function applyScheme(rule, s) {
+  if (!s) return { ...rule, scheme: null };
+  const out = { ...rule, sourceOf: { ...(rule.sourceOf || {}) } };
+  out.ombudsman = s.name;
+  out.ombudsmanUrl = s.website || s.refer_url || '';
+  out.ombudsmanAfterWeeks = s.wait_weeks ?? null;
+  // The scheme's own time limit, or none: a scheme whose limit isn't known
+  // gets no "refer by" date, never the type default passed off as its rule.
+  out.referralMonths = s.time_limit_months || null;
+  out.referralFrom = s.time_limit_from || 'raised';
+  out.defaulted = (rule.defaulted || []).filter((k) => !FROM_SCHEME.includes(k));
+  for (const k of FROM_SCHEME) out.sourceOf[k] = 'ombudsman_register';
+  out.scheme = {
+    id: s.id, key: s.key, name: s.name, website: s.website || null, refer_url: s.refer_url || null,
+    phone: s.phone || null, email: s.email || null, post: s.post || null,
+    who_can_complain: s.who_can_complain || null, representative: s.representative || null,
+    what_to_include: s.what_to_include || [], notes: s.notes || null,
+    after_final_response: s.after_final_response !== false, after_missed_deadline: Boolean(s.after_missed_deadline),
+    verified: Boolean(s.verified_at), verified_at: s.verified_at || null, verified_by: s.verified_by || null,
+  };
+  return out;
+}
+
+function orgRule(org, type) {
   const base = {
     stage1Clock: 'receipt',
     referralFrom: 'raised',
@@ -375,7 +409,15 @@ export function computeResponseDue(complaint, rule) {
 // raised unless the body's window runs from its final response, in which case
 // there is no date until that response arrives — a guess would be a deadline
 // nobody could rely on.
+// The time limit to refer, in words ("12 months from their final response"),
+// or that it isn't known for this scheme.
+export function referLimitText(rule) {
+  if (!rule.referralMonths) return `the time limit for ${theOmbudsman(rule.ombudsman)} isn’t known yet (see its record under Ombudsmen)`;
+  return `${rule.referralMonths} months from ${rule.referralFrom === 'final_response' ? 'their final response' : 'when the complaint was made'}`;
+}
+
 export function computeOmbudsmanDeadline(complaint, rule) {
+  if (!rule.referralMonths) return null; // not known for this scheme
   if (rule.referralFrom === 'final_response') {
     return complaint.final_response_on
       ? addMonths(complaint.final_response_on, rule.referralMonths)
@@ -390,7 +432,9 @@ export function computeOmbudsmanFrom(complaint, rule) {
   const early = rule.ombudsmanAfterWeeks
     ? addCalendarDays(complaint.raised_on, rule.ombudsmanAfterWeeks * 7)
     : null;
-  const dates = [early, complaint.final_response_on].filter(Boolean).sort();
+  // Their final response opens it, unless the scheme says it doesn't.
+  const finalOpens = rule.scheme?.after_final_response !== false ? complaint.final_response_on : null;
+  const dates = [early, finalOpens].filter(Boolean).sort();
   return dates[0] || null;
 }
 
@@ -421,6 +465,14 @@ export function referralOpen(t, today = todayISO()) {
   if (t.needs_check) {
     return { open: false, from: null, why: `this imported complaint hasn’t been checked: confirm the date it was made (recorded as ${ukDate(t.raised_on)}) and press Looks right first` };
   }
+  // The scheme's own rules decide, and only once a person has checked them
+  // (Complaints → Ombudsmen). Without a register lookup (the pure tests) this
+  // is skipped.
+  if (t.rule && 'scheme' in t.rule) {
+    const s = t.rule.scheme;
+    if (!s) return { open: false, from: null, why: 'no ombudsman scheme is set for this organisation: choose the scheme it belongs to on the Organisations page' };
+    if (!s.verified) return { open: false, from: null, why: `${theOmbudsman(s.name)}’s rules in the system haven’t been checked yet (Complaints → Ombudsmen)` };
+  }
   const from = t.ombudsman_from || null;
   if (from && from <= today) return { open: true, from, why: null };
   const weeks = t.rule?.ombudsmanAfterWeeks;
@@ -429,7 +481,8 @@ export function referralOpen(t, today = todayISO()) {
       : weeks ? `${weeks} week${weeks === 1 ? '' : 's'} after the complaint was made on ${ukDate(t.raised_on)}` : null;
     return { open: false, from, why: `${theOmbudsman(t.rule?.ombudsman)} can’t take it until ${ukDate(from)}${basis ? ` (${basis})` : ''}` };
   }
-  if (t.stage === 'stage_2' && t.response_due && t.response_due < today && !t.responded_on) return { open: true, from: null, why: null };
+  if (t.stage === 'stage_2' && t.response_due && t.response_due < today && !t.responded_on &&
+      (!t.rule?.scheme || t.rule.scheme.after_missed_deadline)) return { open: true, from: null, why: null };
   return { open: false, from: null, why: 'their complaints procedure hasn’t finished yet: there is no final response' };
 }
 
@@ -643,11 +696,8 @@ export function procedureSteps(complaint, rule) {
   steps.push({
     key: 'ombudsman_by', label: 'Refer by', date: by,
     state: at >= 3 ? 'done' : closed ? 'past' : !by ? 'pending' : by < today ? 'overdue' : 'upcoming',
-    note:
-      rule.referralFrom === 'final_response'
-        ? `${rule.referralMonths} months from their final response` +
-          (complaint.final_response_on ? '' : ', dated once it arrives')
-        : `${rule.referralMonths} months from when the complaint was made`,
+    note: referLimitText(rule) +
+      (rule.referralMonths && rule.referralFrom === 'final_response' && !complaint.final_response_on ? ', dated once it arrives' : ''),
   });
   return steps;
 }

@@ -46,6 +46,17 @@ const REVIEWED_AS = {
 // organisation) or one of its further organisations (c.parties). With more
 // than one organisation the title names whose step it is.
 const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name || 'ombudsman'}`);
+// Where an organisation's part stands with its ombudsman, beside its stage:
+// the stage alone says nothing about it (energy can go after 8 weeks at any
+// stage). From referralOpen on the server, so it never says "can go" early.
+function ombudsmanBadge(t) {
+  if (!trackOpen(t) || t.stage === 'ombudsman' || !t.referral) return null;
+  const name = t.rule?.scheme?.name || t.rule?.ombudsman || 'the ombudsman';
+  if (t.referral.open) return <span className="badge ok" title={`It can be referred to ${name} now`}>Can go to {name}</span>;
+  if (t.referral.from) return <span className="badge grey" title={t.referral.why}>{name} from {formatDate(t.referral.from)}</span>;
+  return <span className="badge grey" title={t.referral.why}>Ombudsman: not yet</span>;
+}
+
 // "just now" / "4 min ago" / "2 hours ago", for how long something has been running.
 function sinceText(iso) {
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -214,6 +225,7 @@ export default function ComplaintDetail() {
   // Moving an organisation to Stage 2 from the request we already sent.
   const [catchingUp, setCatchingUp] = useState(null);
   const [answering, setAnswering] = useState(null);
+  const [combining, setCombining] = useState(null);
 
   // Timers started by a button (watching a search or a re-check finish) are
   // stopped when the page is left or another complaint is opened, so one
@@ -815,20 +827,40 @@ export default function ComplaintDetail() {
     if (!trackOpen(t) || !['stage_1', 'stage_2'].includes(t.stage) || !t.referral?.open) return null;
     if (!(aiSaysRefer || refersNow(advice))) return null;
     const who = theOmbudsman(t.rule?.ombudsman);
+    const sc = t.rule?.scheme || null;
+    const formUrl = sc?.refer_url || t.rule?.ombudsmanUrl;
     return (
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border, #e5e7eb)' }}>
         <div><strong>Referring it to {who}</strong> is done on their website, not by email:</div>
         <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
           <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once).</li>
-          <li>Make the referral on {who}’s website{t.rule?.ombudsmanUrl ? '' : ' (find it on their site: no website is on file for it)'}.</li>
+          <li>Make the referral on {who}’s website{formUrl ? '' : ' (find it on their site: no website is on file for it)'}{sc?.phone ? ` (or phone ${sc.phone})` : ''}.</li>
           <li>Record it here with the date you referred it, so the complaint moves on.</li>
         </ol>
+        {/* Their own checklist, from the register (checked by a person). */}
+        {sc && (sc.representative || sc.what_to_include?.length > 0 || sc.who_can_complain) && (
+          <details style={{ marginBottom: 8 }} open>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Before you refer: {sc.name}’s own requirements</summary>
+            {sc.representative && <p style={{ margin: '6px 0' }}><strong>Complaining for a landlord or client:</strong> {sc.representative}</p>}
+            {sc.who_can_complain && <p style={{ margin: '6px 0' }}><strong>Who can complain:</strong> {sc.who_can_complain}</p>}
+            {sc.what_to_include?.length > 0 && (
+              <>
+                <strong>Have ready:</strong>
+                <ul style={{ margin: '4px 0' }}>{sc.what_to_include.map((x) => <li key={x}>{x}</li>)}</ul>
+              </>
+            )}
+            <div className="muted" style={{ fontSize: 12 }}>
+              From the <Link to="/ombudsmen">Ombudsmen</Link> register, checked by {sc.verified_by || 'a colleague'}
+              {sc.verified_at ? ` on ${formatDate(String(sc.verified_at).slice(0, 10))}` : ''}.
+            </div>
+          </details>
+        )}
         <div className="btn-row">
           <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
             {referralBusy ? 'Building…' : '1. Build the referral pack'}
           </button>
-          {t.rule?.ombudsmanUrl && (
-            <a className="btn btn-sm" href={t.rule.ombudsmanUrl} target="_blank" rel="noreferrer">2. Open their website ↗</a>
+          {formUrl && (
+            <a className="btn btn-sm" href={formUrl} target="_blank" rel="noreferrer">2. Open their complaint form ↗</a>
           )}
           <button className="btn-primary btn-sm" onClick={() => setAction(REFER(t, multi))}>3. I’ve referred it…</button>
         </div>
@@ -1033,6 +1065,7 @@ export default function ComplaintDetail() {
             <div className="btn-row" style={{ marginBottom: 12 }}>
               <span className="badge navy">{STAGE_LABEL[c.stage]}</span>
               <span className={`badge ${statusBadge}`}>{c.label}</span>
+              {ombudsmanBadge(c)}
               {c.imported && <span className="badge grey">Imported</span>}
             </div>
           )}
@@ -1068,6 +1101,7 @@ export default function ComplaintDetail() {
                       <strong>{t.org_name}</strong>
                       <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
                       <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
+                      {ombudsmanBadge(t)}
                       {t.chase_now && <span className="badge amber"><strong>Action needed</strong></span>}
                     </div>
                     <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
@@ -1186,6 +1220,32 @@ export default function ComplaintDetail() {
 
       <BounceWarning list={c.bounces} onDone={load} />
 
+      {/* One account, one complaint: another open complaint is about the same
+          account number. Combining keeps everything from both (emails,
+          documents, timeline) and, where the same organisation is on both,
+          the earlier complaint's date and stage. */}
+      {(c.same_account || []).map((o) => (
+        <div key={o.id} className="inline-note warn" style={{ marginBottom: 16 }} role="alert">
+          <strong>⚠ Another complaint is about the same account:</strong>{' '}
+          <Link to={`/complaints/${o.id}`}>{o.ref_code}</Link>, {o.subject} ({o.org_names.join(' and ')}, made {formatDate(o.raised_on)}).
+          One account should be one complaint.
+          <div className="btn-row" style={{ marginTop: 8 }}>
+            <button className="btn-primary btn-sm" disabled={combining !== null}
+              onClick={async () => {
+                if (!confirm(`Combine ${o.ref_code} into this complaint?\n\nIts emails, documents and timeline move here, each organisation keeps its own part, and where the same organisation is on both the EARLIER complaint's date and stage are kept. ${o.ref_code} is then removed. This can't be undone.`)) return;
+                setCombining(o.id);
+                try {
+                  await api.complaints.mergeComplaints(id, o.id);
+                  await load();
+                  setMsg(`Combined: ${o.ref_code} is now part of this complaint. Check the timeline and each organisation’s dates.`);
+                } catch (e) { setMsg(e.message); } finally { setCombining(null); }
+              }}>
+              {combining === o.id ? 'Combining…' : `Combine ${o.ref_code} into this one`}
+            </button>
+          </div>
+        </div>
+      ))}
+
       {/* Against a debt collector: the debt is the supplier's, so the
           complaint goes to them too and is joined to this one. Suggested by
           the AI review (it names the supplier) or by the collector's type. */}
@@ -1195,6 +1255,14 @@ export default function ComplaintDetail() {
           const b = String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
           return a && b && (a.includes(b) || b.includes(a));
         });
+        // A supplier who already has a complaint about this account: combine
+        // (the banner above), never raise a second complaint with them.
+        const onOther = (n) => (c.same_account || []).some((o) => o.org_names.some((x) => {
+          const a = String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const b = String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return a && b && (a.includes(b) || b.includes(a));
+        }));
+        if ((c.same_account || []).length && (!c.ai_review?.supplier?.name || onOther(c.ai_review.supplier.name))) return null;
         const suggested = c.ai_review?.supplier?.name && !onIt(c.ai_review.supplier.name) ? c.ai_review.supplier : null;
         const collector = tracks.find((t) => t.org_type === 'debt_collector');
         const hasSupplier = tracks.some((t) => t.org_type !== 'debt_collector');

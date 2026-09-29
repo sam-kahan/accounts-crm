@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
 import { track } from './aiUsage.js';
+import { referLimitText } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -132,9 +133,17 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
     `Timescales — acknowledge within ${rule.ackDays} working days; Stage 1 outcome within ` +
       (rule.stage1Weeks ? `${rule.stage1Weeks} weeks of receipt; ` : `${rule.stage1Days} working days of ${rule.stage1Clock === 'acknowledgement' ? 'their acknowledgement' : 'receipt'}; `) +
       `Stage 2 within ${rule.stage2Days} working days of the Stage 2 request; refer to ${rule.ombudsman} ` +
-      `within ${rule.referralMonths} months of ${rule.referralFrom === 'final_response' ? 'their final response' : 'the complaint being raised'}` +
+      `within ${referLimitText(rule)}` +
       (rule.ombudsmanAfterWeeks ? ` (or once ${rule.ombudsmanAfterWeeks} weeks have passed since the complaint was made).` : '.'),
   );
+  // Whether it can go to the ombudsman NOW, as the system has decided it
+  // (the scheme's checked rules, the complaint's own checks). Authoritative:
+  // the AI must not advise a referral when this says not yet.
+  if (complaint.referral) {
+    lines.push(complaint.referral.open
+      ? `Ombudsman referral: allowed now (${rule.ombudsman}).`
+      : `Ombudsman referral: NOT YET — ${complaint.referral.why}. Do not advise referring to the ombudsman.`);
+  }
   if (rule.defaulted?.length) {
     lines.push(
       `NOT confirmed from their own procedure (general defaults — do not present these to them as ` +
@@ -171,8 +180,11 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
       if (p.procedure?.procedure_summary) lines.push(`  How their procedure works: ${p.procedure.procedure_summary}`);
       lines.push(
         `  Timescales: acknowledge within ${r.ackDays} working days; Stage 1 within ${r.stage1Weeks ? `${r.stage1Weeks} weeks` : `${r.stage1Days} working days`}; ` +
-          `Stage 2 within ${r.stage2Days}; refer to ${r.ombudsman} within ${r.referralMonths} months.`,
+          `Stage 2 within ${r.stage2Days}; refer to ${r.ombudsman} within ${referLimitText(r)}.`,
       );
+      if (p.referral) {
+        lines.push(p.referral.open ? `  Ombudsman referral: allowed now.` : `  Ombudsman referral: NOT YET — ${p.referral.why}. Do not advise it.`);
+      }
       if (r.defaulted?.length) lines.push(`  NOT confirmed from their own procedure (general defaults): ${r.defaulted.join(', ')}.`);
       if (p.nextAction) lines.push(`  System-suggested next action for them: ${p.nextAction}`);
     }

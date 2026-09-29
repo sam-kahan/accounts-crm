@@ -1,3 +1,4 @@
+import { schemeFor } from './ombudsmen.js';
 import { query } from '../db/pool.js';
 import {
   effectiveRule,
@@ -22,7 +23,9 @@ export async function ruleForComplaint(c, db = { query }) {
     org = (await db.query('SELECT * FROM organisations WHERE id = $1', [c.organisation_id]))
       .rows[0] || null;
   }
-  return { org, rule: effectiveRule(org, c.org_type) };
+  // The ombudsman's own time limit and wait come from the register.
+  const schemes = (await db.query('SELECT * FROM ombudsmen')).rows;
+  return { org, rule: effectiveRule(org, c.org_type, schemeFor(org, c.org_type, schemes)) };
 }
 
 export async function recomputeDeadlines(id, db = { query }) {
@@ -63,14 +66,14 @@ export async function recomputePartyDeadlines(partyId, db = { query }) {
 // `reviewAll: false` (the start-up correction): only complaints whose dates
 // actually moved get a fresh AI review — the rest are unchanged and a review
 // each would be paid for nothing.
-export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)', reviewAll = true } = {}) {
+export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Automatic (procedure updated)', reviewAll = true, source: sourceOverride = null } = {}) {
   const { rows } = await query(
     `SELECT id, response_due, ombudsman_deadline, stage FROM complaints
       WHERE state = 'open' AND (organisation_id = $1 OR id = ANY($2::uuid[]))`,
     [orgId, extraIds],
   );
   const org = orgId ? (await query('SELECT name, procedure_ref FROM organisations WHERE id = $1', [orgId])).rows[0] : null;
-  const source = org ? (org.procedure_ref || `${org.name}'s procedure`) : 'the general timescales';
+  const source = sourceOverride || (org ? (org.procedure_ref || `${org.name}'s procedure`) : 'the general timescales');
   const { scheduleReview } = await import('./complaintReview.js');
   const { todayISO } = await import('../lib/dates.js');
   let changed = 0;

@@ -739,6 +739,39 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the ombudsman register; one account, one complaint
+- **Ombudsmen page** (Complaints → Ombudsmen; migrations `042` table +
+  `organisations.ombudsman_id`, `043` seed): one record per scheme — when it
+  takes a case (`wait_weeks`, `after_final_response`, `after_missed_deadline`),
+  the time limit and what it counts from, how to refer (form, phone, post),
+  who can complain, what a representative needs, what to include, notes, and
+  `evidence` (the source page and text for each figure). Seeded from research
+  of each official website on 29 Sep 2026, ALL marked not checked; the
+  Property Redress Scheme's rules weren't found and are left blank.
+- **The engine reads the register** (`services/ombudsmen.js#schemeFor`: the
+  organisation's chosen scheme, else `DEFAULT_SCHEME` for its type; managing
+  agents must choose TPO or PRS). `effectiveRule(org, type, scheme)` takes the
+  scheme's wait and time limit (none known → no refer-by date, never the type
+  default); `referralOpen` also needs the scheme CHECKED. So nothing is shown
+  as ready to refer until a person checks that scheme's record. Changing a
+  scheme's rules re-dates its open complaints with timeline notes; start-up
+  re-dated them once (`app_settings.ombudsman_register_applied`). Corrections
+  this made: energy and housing time limits run from the final response
+  (deadlock / Stage 2), not from the complaint; WATRS no longer exists.
+- The complaint page shows each organisation's ombudsman position beside its
+  stage ("Can go to …", "… from <date>", "Ombudsman: not yet"), and the
+  referral steps show the scheme's own requirements and complaint form.
+- **One account, one complaint**: an account number filed as "their
+  reference" now matches (`orgMatch.js#refNumbersOf`, `sameAccount`, in
+  `issueMatch` too). The complaint page shows other open complaints on the
+  same account with **Combine**; "Raise it with the supplier" refuses (before
+  any AI) when that supplier already has a complaint on the account. Combining
+  the same organisation's two tracks keeps the EARLIER complaint's date and
+  stage (`tidy.js#foldTrack`), not the one added later.
+- Drafted emails always end with the [Name]/[Job title] sign-off
+  (`lib/signature.js#ensureSignOff`); with two organisations the next-steps
+  box is amber when one needs action ("Action needed").
+
 ### 2026-09-29 — never the ombudsman too early; only real complaints imported
 - **`complaintRules.js#referralOpen` is the one rule** for "can it go to the
   ombudsman now" (on every decorated track as `referral`): never while the

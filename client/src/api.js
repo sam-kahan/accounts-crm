@@ -114,6 +114,11 @@ export const api = {
     remove: (id) => request(`/tasks/${id}`, { method: 'DELETE' }),
   },
 
+  // The ombudsman register: each scheme's rules, sources and who checked them.
+  ombudsmen: {
+    list: () => request('/ombudsmen'),
+    update: (id, data) => request(`/ombudsmen/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  },
   organisations: {
     list: () => request('/organisations'),
     get: (id) => request(`/organisations/${id}`),

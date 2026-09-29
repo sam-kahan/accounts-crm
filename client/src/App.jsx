@@ -30,6 +30,7 @@ const AREAS = [
     items: [
       { to: '/complaints', label: 'Complaints', icon: '⚑', section: 'complaints' },
       { to: '/organisations', label: 'Organisations', icon: '☰', section: 'complaints' },
+      { to: '/ombudsmen', label: 'Ombudsmen', icon: '⚖', section: 'complaints' },
     ],
   },
   {
@@ -47,6 +48,7 @@ const TITLES = {
   '/tasks': 'Tasks',
   '/complaints': 'Complaints',
   '/organisations': 'Organisations',
+  '/ombudsmen': 'Ombudsmen',
   '/commission/invoices': 'Contractor invoices',
   '/commission/raised': 'Commission invoices',
   '/commission/contractors': 'Contractors',
