@@ -19,9 +19,26 @@ async function chFetch(path) {
   }
 
   const url = `${config.companiesHouse.baseUrl}${path}`;
-  const res = await fetch(url, {
-    headers: { Authorization: authHeader(), Accept: 'application/json' },
-  });
+  // A hung call never holds up the morning email (20 seconds), and their
+  // rate limit (600 requests in 5 minutes) is waited out, up to three times,
+  // rather than failing the rest of a long list.
+  let res;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: authHeader(), Accept: 'application/json' },
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (err) {
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new HttpError(504, 'Companies House did not answer in time');
+      }
+      throw new HttpError(502, `Companies House could not be reached (${err.message})`);
+    }
+    if (res.status !== 429 || attempt >= 4) break;
+    const wait = Math.min(Number(res.headers.get('retry-after')) || 30, 120);
+    await new Promise((r) => setTimeout(r, wait * 1000));
+  }
 
   if (res.status === 404) {
     throw new HttpError(404, 'Company not found at Companies House');

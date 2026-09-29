@@ -746,6 +746,35 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of companies and the reminders
+- **Done moves a recurring date ONE period on** (`lib/dates.js#nextOccurrence`,
+  no `today`): a May VAT return marked done in August went to November,
+  skipping August's without a word. Now it goes to August's, still overdue,
+  which needs its own Done.
+- **Companies no longer filing aren't reminded** (`REMINDED_COMPANY` in
+  `routes/dashboard.js`): dissolved, liquidation, administration,
+  receivership, insolvency proceedings, closed/removed (a voluntary
+  arrangement keeps filing, so it stays). A synced date Companies House no
+  longer gives is closed with a note on it (`syncCompany`).
+- **A confirmation statement is late only after its deadline**
+  (`KEY_DEADLINE`: `companies.confirmation_statement_next_due`, 14 days after
+  the date it is reminded on); between the two it reads "ready to file; the
+  deadline is …" on the dashboard, the digest and the company page.
+- **The reminder run is in the background** (`POST /dashboard/send-reminders`
+  → 202, `GET /dashboard/reminders-run`; one at a time, 409 while one runs):
+  it outlasted nginx's 60 seconds, so the button showed an error and a second
+  press sent a second digest. A person pressing it gets the email themselves;
+  the morning run goes to `REMINDER_TO`. **The digest says when Companies
+  House wasn't refreshed** (`buildDigest(items, { notes })`); Companies House
+  calls time out after 20 seconds and wait out its rate limit.
+- Marking a Companies House date done only marks the date the page saw
+  (409 if a sync moved it meanwhile); the sync keeps a company marked
+  **dormant** here and notes a name change on the company; `PUT /companies/:id`
+  updates only the fields sent (`buildUpdateSet`); a duplicate company number
+  (or any unique index) is a 409, not a 500; key-date, task and company dates
+  must be real `YYYY-MM-DD` dates (`lib/http.js#isoDate`, `optionalIsoDate`);
+  "synced" shows the UK day.
+
 ### 2026-09-29 — fixes from a security review
 - **Which mailboxes can be read** (`settings.js#mailboxAllowed`): the Graph
   connection reaches every mailbox in the tenant, so a chosen mailbox must be

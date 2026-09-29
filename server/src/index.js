@@ -193,6 +193,10 @@ app.use((err, _req, res, _next) => {
   if (err instanceof HttpError) {
     return res.status(err.status).json({ error: err.message, details: err.details });
   }
+  // A unique index refusing a second copy: say so, don't call it a fault.
+  if (err?.code === '23505') {
+    return res.status(409).json({ error: 'That is already on file.' });
+  }
   // eslint-disable-next-line no-console
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });

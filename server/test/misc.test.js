@@ -66,12 +66,13 @@ import { nextOccurrence } from '../src/lib/dates.js';
 
 test('a recurring date rolls to the right day, never drifting past a month end', () => {
   assert.equal(nextOccurrence('2026-08-31', 'monthly', '2026-09-01'), '2026-09-30');
-  assert.equal(nextOccurrence('2026-08-31', 'monthly', '2026-09-30'), '2026-10-31'); // back to the 31st
+  assert.equal(nextOccurrence('2026-09-30', 'monthly'), '2026-10-31'); // back to the 31st
   assert.equal(nextOccurrence('2026-08-31', 'quarterly', '2026-09-01'), '2026-11-30');
   assert.equal(nextOccurrence('2024-02-29', 'annual', '2024-03-01'), '2025-02-28');
-  assert.equal(nextOccurrence('2024-02-29', 'annual', '2027-03-01'), '2028-02-29');
-  // Several periods overdue: lands after today, not on another past date.
-  assert.equal(nextOccurrence('2026-01-15', 'monthly', '2026-09-29'), '2026-10-15');
+  assert.equal(nextOccurrence('2027-02-28', 'annual'), '2028-02-29'); // a month end stays a month end
+  // Several periods overdue: one period at a time, so no missed one is skipped.
+  assert.equal(nextOccurrence('2026-01-15', 'monthly', '2026-09-29'), '2026-02-15'); // one period, never past a missed one
+  assert.equal(nextOccurrence('2026-05-07', 'quarterly'), '2026-08-07');
   assert.equal(nextOccurrence('2026-09-29', 'monthly', '2026-09-29'), '2026-10-29');
   assert.equal(nextOccurrence('2026-01-15', 'none', '2026-09-29'), null);
   // Only the current date is stored, so a month end must stay a month end

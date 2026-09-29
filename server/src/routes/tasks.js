@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, optionalIsoDate } from '../lib/http.js';
 import { buildUpdateSet } from '../lib/sql.js';
 
 const router = Router();
@@ -13,7 +13,7 @@ const input = z.object({
   company_id: z.string().uuid().optional().nullable(),
   title: z.string().min(1),
   description: z.string().optional().nullable(),
-  due_date: z.string().optional().nullable(),
+  due_date: optionalIsoDate,
   priority: z.enum(['low', 'medium', 'high']).optional(),
   status: z.enum(['todo', 'in_progress', 'done']).optional(),
 });

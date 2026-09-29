@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, isoDate } from '../lib/http.js';
 import { nextOccurrence } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 
@@ -24,7 +24,7 @@ const input = z.object({
     ])
     .optional(),
   title: z.string().min(1),
-  due_date: z.string().min(1),
+  due_date: isoDate,
   recurrence: z.enum(['none', 'annual', 'quarterly', 'monthly']).optional(),
   notes: z.string().optional().nullable(),
 });
@@ -114,11 +114,14 @@ router.post(
       if (!updated.rows[0]) throw new HttpError(409, 'This date has already been marked done. Refresh to see where it stands.');
       return res.json({ ...updated.rows[0], rolled_forward_to: next });
     }
+    // Only the date read above, still pending: a Companies House sync that
+    // moved it to the next period in between must not have THAT marked done.
     const updated = await query(
       `UPDATE key_dates SET status = 'done', completed_at = now()
-         WHERE id = $1 RETURNING *`,
-      [req.params.id],
+         WHERE id = $1 AND due_date = $2 AND status = 'pending' RETURNING *`,
+      [req.params.id, kd.due_date],
     );
+    if (!updated.rows[0]) throw new HttpError(409, 'This date has just changed (or was already marked done). Refresh to see where it stands.');
     res.json(updated.rows[0]);
   }),
 );

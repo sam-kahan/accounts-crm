@@ -164,12 +164,18 @@ const safeLink = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : nul
 // Each item is one block (date, what, whose, the next step and a link) rather
 // than table columns, because it is mostly read on a phone. An item may carry
 // `detail` (what to do) and `link` (where to do it).
-export function buildDigest(items) {
+// `notes`: what the reader must know about the list itself (a Companies
+// House sync that failed means its dates may be stale), shown first.
+export function buildDigest(items, { notes = [] } = {}) {
+  const noteText = notes.length ? `PLEASE NOTE\n${notes.map((n) => `- ${n}`).join('\n')}\n\n` : '';
+  const noteHtml = notes.length
+    ? `<div style="margin:12px 0;padding:10px 12px;background:#fef3c7;border-radius:6px;font-size:13px;">${notes.map((n) => `<div>${esc(n)}</div>`).join('')}</div>`
+    : '';
   if (items.length === 0) {
     return {
       subject: 'Greenco Accounts: nothing due',
-      text: 'No key dates, tasks or complaint deadlines are due or overdue right now.',
-      html: '<p>No key dates, tasks or complaint deadlines are due or overdue right now.</p>',
+      text: `${noteText}No key dates, tasks or complaint deadlines are due or overdue right now.`,
+      html: `${noteHtml}<p>No key dates, tasks or complaint deadlines are due or overdue right now.</p>`,
     };
   }
   const overdue = items.filter((i) => i.overdue);
@@ -199,13 +205,14 @@ export function buildDigest(items) {
   ].filter(Boolean).join(', ');
   return {
     subject: `Greenco Accounts: ${counts}`,
-    text: [
+    text: noteText + [
       overdue.length ? `OVERDUE (${overdue.length})\n\n${textOf(overdue)}` : null,
       coming.length ? `COMING UP (${coming.length})\n\n${textOf(coming)}` : null,
     ].filter(Boolean).join('\n\n'),
     html: `
       <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;max-width:640px;">
         <h2 style="color:#1e2235;margin-bottom:0;">Greenco Accounts reminders</h2>
+        ${noteHtml}
         ${overdue.length ? heading(`Overdue (${overdue.length})`, '#b91c1c') + htmlOf(overdue, '#b91c1c') : ''}
         ${coming.length ? heading(`Coming up (${coming.length})`, '#1e2235') + htmlOf(coming, '#1e2235') : ''}
       </div>`,

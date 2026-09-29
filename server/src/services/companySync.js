@@ -1,6 +1,7 @@
 import { pool, query } from '../db/pool.js';
 import { getCompanyProfile } from './companiesHouse.js';
 import { config } from '../config.js';
+import { todayISO } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // Keeping a company's statutory dates in step with Companies House.
@@ -44,9 +45,21 @@ export async function upsertKeyDates(companyId, keyDates, client = { query }) {
 
 // Write a mapped Companies House profile's fields onto an existing company row.
 export async function applyProfile(client, id, company) {
+  // A name Companies House gives differently is noted on the company, so a
+  // mistyped number (another company's) or a renaming is seen, not silent.
+  const { rows: [before] } = await client.query('SELECT name FROM companies WHERE id = $1', [id]);
+  if (before && company.name && before.name.trim().toLowerCase() !== company.name.trim().toLowerCase()) {
+    await client.query(
+      `UPDATE companies SET notes = concat_ws(E'\n', NULLIF(notes, ''), $2::text) WHERE id = $1`,
+      [id, `Name updated from Companies House on ${todayISO()}: "${before.name}" is now "${company.name}". If this isn't the same company, check the company number.`],
+    );
+  }
   await client.query(
     `UPDATE companies SET
-       name = $2, status = $3, incorporation_date = $4,
+       -- Companies House never says "dormant": a company marked dormant here
+       -- stays dormant while they call it active.
+       name = $2, status = CASE WHEN status = 'dormant' AND $3 = 'active' THEN status ELSE $3 END,
+       incorporation_date = $4,
        accounts_next_due = $5, confirmation_statement_next_due = $6,
        registered_office = $7, sic_codes = $8, accounts_next_made_up_to = $9,
        confirmation_statement_next_made_up_to = $10,
@@ -75,6 +88,16 @@ export async function syncCompany(id, companyNumber) {
     await client.query('BEGIN');
     await applyProfile(client, id, company);
     await upsertKeyDates(id, keyDates, client);
+    // A date Companies House no longer gives (a company in liquidation, say)
+    // is closed with the reason, rather than left overdue for ever.
+    await client.query(
+      `UPDATE key_dates SET status = 'done', completed_at = now(),
+              notes = concat_ws(E'\n', NULLIF(notes, ''), $3::text)
+        WHERE company_id = $1 AND source = 'companies_house' AND status = 'pending'
+          AND NOT (category = ANY($2::text[]))`,
+      [id, keyDates.map((k) => k.category),
+        `Closed by the Companies House sync on ${todayISO()}: Companies House no longer gives this date.`],
+    );
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

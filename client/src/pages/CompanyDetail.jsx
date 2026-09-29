@@ -97,7 +97,15 @@ function AddKeyDateModal({ companyId, onClose, onSaved }) {
   );
 }
 
+// The UK day of a timestamp (a sync at 00:30 BST is that day, not the UTC day before).
+const ukDay = (ts) => new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+
 export default function CompanyDetail() {
+  // A confirmation statement can be filed from its date; it is late only
+  // after its deadline (14 days on), which Companies House gives separately.
+  const deadlineOf = (k) => (k.category === 'confirmation_statement' && k.source === 'companies_house'
+    && company?.confirmation_statement_next_due && company.confirmation_statement_next_due >= k.due_date
+    ? company.confirmation_statement_next_due : k.due_date);
   const { id } = useParams();
   const navigate = useNavigate();
   const [company, setCompany] = useState(null);
@@ -202,7 +210,7 @@ export default function CompanyDetail() {
             <div className="muted" style={{ marginTop: 4 }}>
               {company.company_number ? `Company no. ${company.company_number}` : 'No company number'}
               {company.ch_last_synced_at &&
-                ` · synced ${formatDate(company.ch_last_synced_at.slice(0, 10))}`}
+                ` · synced ${formatDate(ukDay(company.ch_last_synced_at))}`}
             </div>
           </div>
           <div className="btn-row">
@@ -219,7 +227,7 @@ export default function CompanyDetail() {
             <Info label="Status" value={<span className="badge navy">{company.status}</span>} />
             <Info label="Incorporated" value={formatDate(company.incorporation_date)} />
             <Info label="Financial year end" value={
-              <span className={`due ${dueClass(company.accounts_next_made_up_to)}`}>
+              <span className="due">
                 {formatDate(company.accounts_next_made_up_to)}
               </span>
             } />
@@ -229,7 +237,7 @@ export default function CompanyDetail() {
               </span>
             } />
             <Info label="Confirmation statement date" value={
-              <span className={`due ${dueClass(company.confirmation_statement_next_made_up_to)}`}>
+              <span className="due">
                 {formatDate(company.confirmation_statement_next_made_up_to)}
               </span>
             } />
@@ -262,9 +270,12 @@ export default function CompanyDetail() {
             <tbody>
               {pendingDates.map((k) => (
                 <tr key={k.id}>
-                  <td className={`due ${dueClass(k.due_date)}`}>
+                  <td className={`due ${dueClass(deadlineOf(k))}`}>
                     {formatDate(k.due_date)}
-                    {daysUntil(k.due_date) < 0 && <span className="badge red" style={{ marginLeft: 8 }}>overdue</span>}
+                    {daysUntil(deadlineOf(k)) < 0 && <span className="badge red" style={{ marginLeft: 8 }}>overdue</span>}
+                    {deadlineOf(k) !== k.due_date && daysUntil(k.due_date) <= 0 && daysUntil(deadlineOf(k)) >= 0 && (
+                      <span className="badge amber" style={{ marginLeft: 8 }}>ready to file, deadline {formatDate(deadlineOf(k))}</span>
+                    )}
                   </td>
                   <td>{k.title}</td>
                   <td><span className="badge grey">{CATEGORY_LABEL[k.category] || k.category}</span></td>
@@ -276,7 +287,7 @@ export default function CompanyDetail() {
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn-ghost btn-sm" disabled={Boolean(completing)} onClick={() => completeDate(k)}>
-                      {completing === k.id ? '…' : k.recurrence === 'none' ? 'Done' : 'Done ↻'}
+                      {completing === k.id ? '…' : k.recurrence === 'none' || k.source === 'companies_house' ? 'Done' : 'Done ↻'}
                     </button>
                     <button className="btn-danger btn-sm" onClick={() => removeDate(k.id)}>Delete</button>
                   </td>

@@ -51,3 +51,14 @@ export function attachmentDisposition(name, fallback = 'download') {
   const encoded = encodeURIComponent(real).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
+
+// A date as the forms send it (YYYY-MM-DD, a real day). Anything else is
+// refused rather than handed to Postgres, which reads "12/01/2026" as 1 Dec.
+const realDay = (v) => {
+  const [y, m, d] = v.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+};
+export const isoDate = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-09-30').refine(realDay, 'Not a real date');
+// The same, for a date that may be left blank: '' and null both clear it.
+export const optionalIsoDate = z.union([isoDate, z.literal('').transform(() => null)]).optional().nullable();

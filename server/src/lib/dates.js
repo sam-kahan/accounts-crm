@@ -54,27 +54,24 @@ export function monthLabel(month) {
   });
 }
 
-// The next occurrence of a recurring date AFTER `today` (marking a VAT
+// The next occurrence of a recurring date, ONE period on (marking a VAT
 // quarter or a PAYE month done). A date on the LAST day of its month stays on
 // the last day (a month-end deadline): 31 Aug monthly is 30 Sep, then 31 Oct;
 // a 30 Sep quarter end is 31 Dec, not 30 Dec. Only the current date is
 // stored, so this has to be read off the date itself; clamping alone let a
 // month-end date drift a day early for good after its first short month.
 // Any other day is kept (clamped in a shorter month): the 15th stays the
-// 15th. As many periods as needed, so a date several periods overdue doesn't
-// land on another past date.
-export function nextOccurrence(dateStr, recurrence, today = todayISO()) {
+// 15th. Never more than one period: a May return marked done in August
+// moves to August's, which is overdue too and needs its own Done. Rolling
+// on to the first date after today skipped the missed return without a word.
+export function nextOccurrence(dateStr, recurrence) {
   const step = { annual: 12, quarterly: 3, monthly: 1 }[recurrence];
   if (!step || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr || '')) return null;
   const [y, m, d] = dateStr.split('-').map(Number);
   const monthEnd = d === new Date(Date.UTC(y, m, 0)).getUTCDate();
-  for (let n = 1; n < 2400; n += 1) {
-    const total = y * 12 + (m - 1) + n * step;
-    const ty = Math.floor(total / 12);
-    const tm = total % 12;
-    const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
-    const next = `${ty}-${String(tm + 1).padStart(2, '0')}-${String(monthEnd ? last : Math.min(d, last)).padStart(2, '0')}`;
-    if (next > today) return next;
-  }
-  return null;
+  const total = y * 12 + (m - 1) + step;
+  const ty = Math.floor(total / 12);
+  const tm = total % 12;
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return `${ty}-${String(tm + 1).padStart(2, '0')}-${String(monthEnd ? last : Math.min(d, last)).padStart(2, '0')}`;
 }

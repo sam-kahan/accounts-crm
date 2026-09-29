@@ -68,6 +68,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ days }),
     }),
+  remindersRun: () => request('/dashboard/reminders-run'),
 
   companies: {
     list: (search = '') =>

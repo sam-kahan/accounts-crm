@@ -16,9 +16,25 @@ import { syncInvoicing } from '../services/invoicingSync.js';
 import { refreshStaleReviews } from '../services/complaintReview.js';
 import { withNumbers } from '../lib/money.js';
 import { todayISO, addDays } from '../lib/dates.js';
+import { plural } from '../lib/words.js';
 import { theOmbudsman, ukDate } from '../services/complaintRules.js';
 
 const router = Router();
+
+// Companies whose dates are still reminded. Once a company is dissolved, in
+// liquidation, administration or receivership, or closed, the office holder
+// files (or nothing is filed) and Companies House stops moving its dates on,
+// so they would read as overdue every morning for ever. A voluntary
+// arrangement keeps trading and filing, so it stays.
+const STOPPED = ['dissolved', 'liquidation', 'administration', 'receivership', 'insolvency-proceedings',
+  'converted-closed', 'closed', 'removed'];
+const REMINDED_COMPANY = `COALESCE(c.status, 'active') NOT IN (${STOPPED.map((x) => `'${x}'`).join(', ')})`;
+// When a key date is actually late. A confirmation statement is reminded on
+// the date it is made up to (it can be filed from then), but the legal
+// deadline is 14 days later: overdue only after that.
+const KEY_DEADLINE = `(CASE WHEN k.category = 'confirmation_statement' AND k.source = 'companies_house'
+    AND c.confirmation_statement_next_due >= k.due_date
+  THEN c.confirmation_statement_next_due ELSE k.due_date END)`;
 
 // Collect pending key dates + open tasks that have a due date, flagged overdue,
 // within `days` ahead (plus everything already overdue).
@@ -27,12 +43,11 @@ async function collectDueItems(days = 30) {
     await query(
       `SELECT k.id, k.title, k.due_date, k.category, k.source, k.recurrence,
               c.name AS company_name,
-              (k.due_date < $2::date) AS overdue
+              ${KEY_DEADLINE} AS deadline,
+              (${KEY_DEADLINE} < $2::date) AS overdue
          FROM key_dates k JOIN companies c ON c.id = k.company_id
         WHERE k.status = 'pending'
-          -- A dissolved company files nothing more, and the sync no longer
-          -- rolls its dates on, so they would read as overdue for ever.
-          AND c.status <> 'dissolved'
+          AND ${REMINDED_COMPANY}
           AND k.due_date <= $2::date + ($1 || ' days')::interval
         ORDER BY k.due_date ASC`,
       // Today in the UK, not the database server's clock.
@@ -41,7 +56,12 @@ async function collectDueItems(days = 30) {
   ).rows.map((r) => ({
     type: 'key_date',
     id: r.id,
-    label: r.title,
+    // Ready to file but not yet late (a confirmation statement between its
+    // date and its deadline) says so, rather than "overdue".
+    label: !r.overdue && r.deadline !== r.due_date && r.due_date <= todayISO()
+      ? `${r.title} (ready to file; the deadline is ${ukDate(r.deadline)})`
+      : r.title,
+    deadline: r.deadline,
     due_date: r.due_date,
     category: r.category,
     source: r.source,
@@ -207,7 +227,7 @@ router.get(
           (SELECT count(*) FROM companies) AS companies,
           (SELECT count(*) FROM tasks WHERE status <> 'done') AS open_tasks,
           (SELECT count(*) FROM key_dates k JOIN companies c ON c.id = k.company_id
-             WHERE k.status = 'pending' AND k.due_date < $1::date AND c.status <> 'dissolved') AS overdue_key_dates,
+             WHERE k.status = 'pending' AND ${KEY_DEADLINE} < $1::date AND ${REMINDED_COMPANY}) AS overdue_key_dates,
           (SELECT count(*) FROM tasks
              WHERE status <> 'done' AND due_date < $1::date) AS overdue_tasks
       `, [todayISO()])
@@ -302,71 +322,105 @@ router.get(
   }),
 );
 
-// Send the reminder digest by email (SMTP2GO). Trigger manually now; a cron/
-// scheduler can hit this endpoint daily later.
+// The morning run: refresh Companies House, put the invoicing systems in
+// step, refresh stale AI reviews, then email the digest. It takes minutes
+// (well past nginx's 60 seconds), so it runs in the background: the request
+// answers at once, a second run is refused while one is going (a gateway
+// timeout used to invite a second press, and a second digest to everyone),
+// and GET /reminders-run says how it went.
+let reminderRun = null;
+async function runReminders({ days, to }) {
+  // Refresh statutory dates from Companies House first, so an item filed at
+  // CH (accounts, confirmation statement) has already rolled forward and
+  // won't be emailed as overdue. Best-effort: a CH hiccup must not stop the
+  // digest going out, but the digest SAYS so, since its dates may be stale.
+  const notes = [];
+  let sync = null;
+  try {
+    sync = await syncAllCompanies();
+    if (!sync.enabled) {
+      notes.push('Companies House is not connected (no API key on the server), so company dates were not refreshed.');
+    } else if (sync.failed) {
+      console.warn(`[reminders] Companies House sync: ${sync.synced}/${sync.total} ok, ${sync.failed} failed`);
+      notes.push(`Companies House: the dates of ${plural(sync.failed, 'company', 'companies')} of ${sync.total} could not be refreshed ` +
+        `(${sync.failures[0]?.error || 'unknown error'}), so they may be out of date.`);
+    }
+  } catch (err) {
+    console.error('[reminders] Companies House sync failed:', err.message);
+    notes.push(`Companies House: company dates could not be refreshed (${err.message}), so they may be out of date.`);
+  }
+
+  // Then put the two invoicing systems back in step: re-push anything that
+  // never reached Greenco Invoicing, and read back anything that could have
+  // moved there without us hearing about it. Best-effort for the same reason
+  // — a bridge that is down must not stop the digest going out.
+  let invoicing = null;
+  try {
+    invoicing = await syncInvoicing();
+    if (
+      invoicing?.pushes?.sent ||
+      invoicing?.refreshes?.changed ||
+      invoicing?.withdrawals?.withdrawn
+    ) {
+      console.log(
+        `[reminders] invoicing: ${invoicing.pushes.sent} pushed, ` +
+          `${invoicing.withdrawals.withdrawn} withdrawn, ${invoicing.refreshes.changed} updated`,
+      );
+    }
+  } catch (err) {
+    console.error('[reminders] invoicing sync failed:', err.message);
+  }
+
+  // Complaints whose position the calendar has moved on overnight get a
+  // fresh AI review, so the next step is waiting when someone opens them.
+  let reviews = null;
+  try {
+    reviews = await refreshStaleReviews();
+  } catch (err) {
+    console.error('[reminders] complaint reviews failed:', err.message);
+  }
+
+  const [dueItems, complaintItems] = await Promise.all([
+    collectDueItems(days),
+    collectComplaintDueItems(days),
+  ]);
+  const items = [...dueItems, ...complaintItems].sort((a, b) =>
+    a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0,
+  );
+  const digest = buildDigest(items, { notes });
+  const result = await sendReminderEmail({ ...digest, to });
+  return { items: items.length, sync: sync && { ...sync, failures: sync.failures?.slice(0, 5) }, invoicing, reviews, ...result };
+}
+
 router.post(
   '/send-reminders',
   // Everything the nightly job does, so administrators only by hand.
   sessionOrCronKey('admin'),
   asyncHandler(async (req, res) => {
+    if (reminderRun?.status === 'running') {
+      return res.status(409).json({ error: 'The reminders are already being sent. They take a minute or two.', run: reminderRun });
+    }
     const days = Number(req.body?.days) || 14;
+    // A person pressing the button gets the email themselves; the morning
+    // run (the cron key) goes to the reminder list.
+    const to = req.user?.email ? [req.user.email] : undefined;
+    reminderRun = { status: 'running', started_at: new Date().toISOString(), by: req.user?.email || 'scheduled' };
+    const run = reminderRun;
+    runReminders({ days, to })
+      .then((result) => Object.assign(run, { status: 'done', finished_at: new Date().toISOString(), result }))
+      .catch((err) => {
+        console.error('[reminders] run failed:', err);
+        Object.assign(run, { status: 'failed', finished_at: new Date().toISOString(), error: err.message });
+      });
+    res.status(202).json({ started: true, run: reminderRun });
+  }),
+);
 
-    // Refresh statutory dates from Companies House first, so an item filed at
-    // CH (accounts, confirmation statement) has already rolled forward and
-    // won't be emailed as overdue. Best-effort: a CH hiccup must not stop the
-    // digest going out, so failures are swallowed after being logged.
-    let sync = null;
-    try {
-      sync = await syncAllCompanies();
-      if (sync.failed) {
-        console.warn(
-          `[reminders] Companies House sync: ${sync.synced}/${sync.total} ok, ${sync.failed} failed`,
-        );
-      }
-    } catch (err) {
-      console.error('[reminders] Companies House sync failed:', err.message);
-    }
-
-    // Then put the two invoicing systems back in step: re-push anything that
-    // never reached Greenco Invoicing, and read back anything that could have
-    // moved there without us hearing about it. Best-effort for the same reason
-    // — a bridge that is down must not stop the digest going out.
-    let invoicing = null;
-    try {
-      invoicing = await syncInvoicing();
-      if (
-        invoicing?.pushes?.sent ||
-        invoicing?.refreshes?.changed ||
-        invoicing?.withdrawals?.withdrawn
-      ) {
-        console.log(
-          `[reminders] invoicing: ${invoicing.pushes.sent} pushed, ` +
-            `${invoicing.withdrawals.withdrawn} withdrawn, ${invoicing.refreshes.changed} updated`,
-        );
-      }
-    } catch (err) {
-      console.error('[reminders] invoicing sync failed:', err.message);
-    }
-
-    // Complaints whose position the calendar has moved on overnight get a
-    // fresh AI review, so the next step is waiting when someone opens them.
-    let reviews = null;
-    try {
-      reviews = await refreshStaleReviews();
-    } catch (err) {
-      console.error('[reminders] complaint reviews failed:', err.message);
-    }
-
-    const [dueItems, complaintItems] = await Promise.all([
-      collectDueItems(days),
-      collectComplaintDueItems(days),
-    ]);
-    const items = [...dueItems, ...complaintItems].sort((a, b) =>
-      a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0,
-    );
-    const digest = buildDigest(items);
-    const result = await sendReminderEmail(digest);
-    res.json({ items: items.length, sync, invoicing, reviews, ...result });
+router.get(
+  '/reminders-run',
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    res.json(reminderRun || { status: 'never' });
   }),
 );
 

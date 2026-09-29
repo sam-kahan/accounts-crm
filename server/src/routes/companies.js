@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, optionalIsoDate } from '../lib/http.js';
 import {
   getCompanyProfile,
   searchCompanies,
@@ -13,6 +13,7 @@ import {
   syncAllCompanies,
 } from '../services/companySync.js';
 import { config } from '../config.js';
+import { buildUpdateSet } from '../lib/sql.js';
 import { can } from '../services/permissions.js';
 
 const router = Router();
@@ -24,11 +25,11 @@ const companyInput = z.object({
   name: z.string().min(1),
   company_number: z.string().trim().optional().nullable(),
   status: z.enum(['active', 'dormant', 'dissolved', 'other']).optional(),
-  incorporation_date: z.string().optional().nullable(),
-  accounts_next_due: z.string().optional().nullable(),
-  accounts_next_made_up_to: z.string().optional().nullable(),
-  confirmation_statement_next_due: z.string().optional().nullable(),
-  confirmation_statement_next_made_up_to: z.string().optional().nullable(),
+  incorporation_date: optionalIsoDate,
+  accounts_next_due: optionalIsoDate,
+  accounts_next_made_up_to: optionalIsoDate,
+  confirmation_statement_next_due: optionalIsoDate,
+  confirmation_statement_next_made_up_to: optionalIsoDate,
   registered_office: z.string().optional().nullable(),
   sic_codes: z.array(z.string()).optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -120,7 +121,12 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const data = parse(companyInput, req.body);
-    const row = await insertCompany(data);
+    let row;
+    try {
+      row = await insertCompany(data);
+    } catch (err) {
+      throw duplicateNumber(err);
+    }
     res.status(201).json(row);
   }),
 );
@@ -156,7 +162,8 @@ router.post(
       res.status(201).json(inserted);
     } catch (err) {
       await client.query('ROLLBACK');
-      throw err;
+      // Two imports of the same number at once: the second meets the index.
+      throw duplicateNumber(err);
     } finally {
       client.release();
     }
@@ -200,30 +207,30 @@ router.post(
 router.put(
   '/:id',
   asyncHandler(async (req, res) => {
-    const data = parse(companyInput, req.body);
-    const { rows } = await query(
-      `UPDATE companies SET
-         name = $2, company_number = $3, status = $4, incorporation_date = $5,
-         accounts_next_due = $6, confirmation_statement_next_due = $7,
-         registered_office = $8, sic_codes = $9, notes = $10,
-         accounts_next_made_up_to = $11,
-         confirmation_statement_next_made_up_to = $12
-       WHERE id = $1 RETURNING ${COLS}`,
-      [
-        req.params.id,
-        data.name,
-        data.company_number ? normaliseCompanyNumber(data.company_number) : null, // as Companies House writes it, so a typed and an imported company match
-        data.status || 'active',
-        data.incorporation_date || null,
-        data.accounts_next_due || null,
-        data.confirmation_statement_next_due || null,
-        data.registered_office || null,
-        data.sic_codes || null,
-        data.notes || null,
-        data.accounts_next_made_up_to || null,
-        data.confirmation_statement_next_made_up_to || null,
-      ],
-    );
+    // Only the fields sent: an omitted one is left as it is (a full-row
+    // update wiped notes, SIC codes and dates it wasn't given).
+    const data = parse(companyInput.partial(), req.body);
+    const { clause, values } = buildUpdateSet({
+      name: data.name,
+      company_number: data.company_number === undefined ? undefined
+        : data.company_number ? normaliseCompanyNumber(data.company_number) : null, // as Companies House writes it, so a typed and an imported company match
+      status: data.status,
+      incorporation_date: data.incorporation_date,
+      accounts_next_due: data.accounts_next_due,
+      confirmation_statement_next_due: data.confirmation_statement_next_due,
+      registered_office: data.registered_office,
+      sic_codes: data.sic_codes,
+      notes: data.notes,
+      accounts_next_made_up_to: data.accounts_next_made_up_to,
+      confirmation_statement_next_made_up_to: data.confirmation_statement_next_made_up_to,
+    });
+    if (!clause) throw new HttpError(400, 'No fields to update');
+    let rows;
+    try {
+      ({ rows } = await query(`UPDATE companies SET ${clause} WHERE id = $1 RETURNING ${COLS}`, [req.params.id, ...values]));
+    } catch (err) {
+      throw duplicateNumber(err);
+    }
     if (!rows[0]) throw new HttpError(404, 'Company not found');
     res.json(rows[0]);
   }),
@@ -241,6 +248,12 @@ router.delete(
 );
 
 // --- helpers ---------------------------------------------------------------
+
+// A company number already on file is a clear 409, not "Internal server error".
+function duplicateNumber(err) {
+  if (err?.code === '23505') return new HttpError(409, 'A company with that number is already on file.');
+  return err;
+}
 
 async function insertCompany(data, client = { query }) {
   const { rows } = await client.query(

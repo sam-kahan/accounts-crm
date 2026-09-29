@@ -61,7 +61,7 @@ function ItemRow({ item, onDismiss, onError }) {
       </td>
       <td className="muted">{item.company_name || '—'}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-        <DueBadge date={item.due_date} />
+        <DueBadge date={item.deadline || item.due_date} />
         {mayDismiss && item.type !== 'complaint' && <button
           className="btn-ghost btn-sm"
           style={{ marginLeft: 8 }}
@@ -144,13 +144,25 @@ export default function Dashboard() {
     setSending(true);
     setMsg(null);
     try {
-      // Email the same window that's shown on screen (next 90 days).
-      const res = await api.sendReminders(90);
-      setMsg(
-        res.sent
-          ? `Reminder email sent to ${res.to.join(', ')} (${plural(res.items, 'item')}).`
-          : `Email not sent: ${res.reason}. Configure SMTP2GO in the server .env.`,
-      );
+      // Email the same window that's shown on screen (next 90 days). It runs
+      // in the background (Companies House is refreshed first), so the page
+      // follows it until it has gone.
+      await api.sendReminders(90);
+      setMsg('Refreshing Companies House and preparing your reminder email. This takes a minute or two…');
+      for (let i = 0; i < 120; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
+        let run;
+        try { run = await api.remindersRun(); } catch { continue; }
+        if (run.status === 'running') continue;
+        if (run.status === 'failed') { setMsg(`The reminder email wasn't sent: ${run.error}`); return; }
+        const r = run.result || {};
+        setMsg(r.sent
+          ? `Reminder email sent to ${r.to.join(', ')} (${plural(r.items, 'item')}).`
+          : `Email not sent: ${r.reason}. Configure SMTP2GO in the server .env.`);
+        load();
+        return;
+      }
+      setMsg('Still working on it. The email will arrive when it is ready.');
     } catch (e) {
       setMsg(e.message);
     } finally {
