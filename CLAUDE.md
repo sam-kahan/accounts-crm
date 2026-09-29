@@ -726,8 +726,7 @@ the page says how far each date can be trusted.
   error is looked up by its GC-COM reference
   (`invoicesManager.js#findInvoiceByReference`,
   `GET /api/external/invoices?companyId=&reference=` in
-  `sam-kahan/invoices-manager`: written, awaiting the owner to ship it there;
-  until it exists the check fails visibly and is retried nightly) before being
+  `sam-kahan/invoices-manager`, added there in the same change) before being
   taken as never sent. Never
   re-pushed to find out: that would create an invoice. `needsWithdrawing()`
   counts these until checked.
