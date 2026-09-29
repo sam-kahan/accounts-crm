@@ -369,6 +369,20 @@ export function trackOpen(t) {
   return (t?.state || 'open') === 'open' && !['resolved', 'closed'].includes(t?.stage);
 }
 
+// A complaint logged here that hasn't been made to them yet: open, at Stage 1
+// with one organisation, nothing from them, not a phone complaint, no email
+// on it at all (ours or theirs) and none queued, and never made formally from
+// the page. Then the page offers to draft and send the complaint itself,
+// rather than "wait for their acknowledgement" of one they never received.
+// Deliberately narrow: any email on it means it is under way, and the usual
+// steps apply.
+export function awaitingFirstEmail(c, { hasParties = false, emailCount = 0, outboxCount = 0, formallyMade = false } = {}) {
+  if (!c || (c.state || 'open') !== 'open' || hasParties) return false;
+  if (c.stage !== 'stage_1' || c.acknowledged_on || c.responded_on || c.final_response_on) return false;
+  if (c.channel === 'phone' || c.complaint_doubt) return false;
+  return !emailCount && !outboxCount && !formallyMade;
+}
+
 // A value for a sentence: an ISO date as ukDate, anything else unchanged.
 export function readable(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? ukDate(v) : v;

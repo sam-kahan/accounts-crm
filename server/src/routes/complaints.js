@@ -12,7 +12,7 @@ import { todayISO, londonDateOf } from '../lib/dates.js';
 import { plural } from '../lib/words.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom, awaitingFirstEmail } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
@@ -1621,7 +1621,8 @@ router.get(
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     const evidence = await evidenceFor(decorated, { events, emails, attachments });
-    res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, evidence, external_cc: config.smtp.externalCc });
+    const awaiting_first_email = await firstEmailPending(rows[0]);
+    res.json({ ...decorated, awaiting_first_email, events, emails, attachments, email_search, bounces, outbox, evidence, external_cc: config.smtp.externalCc });
   }),
 );
 
@@ -2401,19 +2402,44 @@ router.post(
 // then started from that day: Stage 1, every deadline and the ombudsman clock
 // running from the formal complaint, never from the earlier emails.
 // ---------------------------------------------------------------------------
+// Also the FIRST email of a complaint logged here before it was sent to them
+// (awaitingFirstEmail): the same draft and send, and the complaint then runs
+// from the day it went.
+const FORMAL_MADE_SQL = `EXISTS (SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND type = 'raised'
+  AND note LIKE 'Formal complaint made%' AND removed_org IS NULL)`;
+
+async function firstEmailPending(c) {
+  const [{ rows: [n] }, { rows: [f] }] = await Promise.all([
+    query(
+      `SELECT (SELECT count(*) FROM complaint_emails WHERE complaint_id = $1)::int AS emails,
+              (SELECT count(*) FROM complaint_outbox WHERE complaint_id = $1)::int AS outbox,
+              (SELECT count(*) FROM complaint_parties WHERE complaint_id = $1)::int AS parties`, [c.id]),
+    query(`SELECT ${FORMAL_MADE_SQL} AS made`, [c.id]),
+  ]);
+  return awaitingFirstEmail(c, { hasParties: n.parties > 0, emailCount: n.emails, outboxCount: n.outbox, formallyMade: f.made });
+}
+
 async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere = false } = {}) {
-  const before = (await query('SELECT raised_on, stage FROM complaints WHERE id = $1', [id])).rows[0];
+  const before = (await query('SELECT raised_on, stage, complaint_doubt FROM complaints WHERE id = $1', [id])).rows[0];
   if (!before) return false;
-  // Only while the question is still open, in the same statement that
-  // answers it, so two at once (a send and a record from Outlook) can't both
-  // start it: the second would wipe the dates recorded after the first.
+  const first = !before.complaint_doubt;
+  // Only while the question is still open (or, for a complaint logged before
+  // it was sent, while nothing has happened on it and it was never made from
+  // here), in the same statement that answers it, so two at once (a send and
+  // a record from Outlook) can't both start it: the second would wipe the
+  // dates recorded after the first.
   const r = await query(
     `UPDATE complaints
         SET raised_on = $2, stage = 'stage_1', stage_started_on = $2, acknowledged_on = NULL,
             responded_on = NULL, final_response_on = NULL, response_due_manual = false,
             channel = 'email', complaint_doubt = NULL
-      WHERE id = $1 AND complaint_doubt->>'kind' = 'not_complaint'
-        AND COALESCE((complaint_doubt->>'answered')::boolean, false) = false
+      WHERE id = $1 AND (
+        (complaint_doubt->>'kind' = 'not_complaint'
+          AND COALESCE((complaint_doubt->>'answered')::boolean, false) = false)
+        OR (complaint_doubt IS NULL AND stage = 'stage_1' AND acknowledged_on IS NULL
+          AND responded_on IS NULL AND final_response_on IS NULL
+          AND NOT EXISTS (SELECT 1 FROM complaint_parties WHERE complaint_id = $1)
+          AND NOT ${FORMAL_MADE_SQL}))
       RETURNING id`,
     [id, sentOn],
   );
@@ -2423,8 +2449,11 @@ async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere =
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'raised',$3,$4)`,
     [id, sentOn,
       `Formal complaint made${subject ? ` ("${subject}")` : ''}, ${fromHere ? 'sent from here' : 'sent from Outlook'}. ` +
-      `Its deadlines, and when it can go to the ombudsman, now run from ${ukDate(sentOn)}; the earlier emails are the background ` +
-      `that led to it (it had been recorded as made on ${ukDate(before.raised_on)}, at ${String(before.stage).replace('_', ' ')}).`,
+      (first
+        ? `Its deadlines, and when it can go to the ombudsman, run from ${ukDate(sentOn)}` +
+          (before.raised_on && String(before.raised_on) !== sentOn ? ` (it was logged here on ${ukDate(before.raised_on)}, before it was sent).` : '.')
+        : `Its deadlines, and when it can go to the ombudsman, now run from ${ukDate(sentOn)}; the earlier emails are the background ` +
+          `that led to it (it had been recorded as made on ${ukDate(before.raised_on)}, at ${String(before.stage).replace('_', ' ')}).`),
       by],
   );
   scheduleReview(id);
@@ -2435,15 +2464,25 @@ router.post(
   '/:id/formal/draft',
   asyncHandler(async (req, res) => {
     if (!config.anthropic.enabled) throw new HttpError(503, 'The AI isn’t configured, so the complaint can’t be drafted.');
-    const ctx = await gatherContext(req.params.id, undefined, { files: 2 });
+    const row = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!row) throw new HttpError(404, 'Complaint not found');
+    // The first email of a complaint logged before it was sent: nothing on it
+    // but what was typed in and the documents uploaded, so the documents are
+    // read in full (one call, pressed by a person).
+    const first = !row.complaint_doubt && await firstEmailPending(row);
+    const ctx = await gatherContext(req.params.id, undefined, first ? {} : { files: 2 });
     const c = ctx.complaint;
     const days = c.rule?.defaulted?.includes('stage1Days') ? null : c.rule?.stage1Days;
     const r = await assistComplaint({
       ...ctx,
-      feature: 'Formal complaint draft',
+      feature: first ? 'First complaint email draft' : 'Formal complaint draft',
       newComplaintTo: c.org_name,
       instruction:
-        `The emails show a dispute with ${c.org_name} that was never made into a FORMAL complaint. Draft the email ` +
+        (first
+          ? `This complaint has been logged here but NOT yet sent to ${c.org_name}. The details, the outcome we want and ` +
+            'the documents describe it; an earlier email of ours in the documents that asked them to put it right is ' +
+            'background (say briefly what we asked and when), not the complaint itself. Draft the email '
+          : `The emails show a dispute with ${c.org_name} that was never made into a FORMAL complaint. Draft the email `) +
         `that makes it one: a formal complaint to ${c.org_name} under their complaints procedure` +
         `${c.rule?.procedureRef ? ` (${c.rule.procedureRef})` : ''}. Keep it short and natural (see how the emails ` +
         'read). It must: say in the first sentence that this is a formal complaint to be logged under their ' +
@@ -2483,7 +2522,8 @@ router.post(
     if (c.state !== 'open') throw new HttpError(409, 'This complaint is closed.');
     // Only while the question is open: starting it again later would wipe
     // the dates recorded since it was made.
-    if (c.complaint_doubt?.kind !== 'not_complaint' || c.complaint_doubt.answered) {
+    const doubtOpen = c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered;
+    if (!doubtOpen && !(await firstEmailPending(c))) {
       throw new HttpError(409, 'This complaint is already recorded as a formal complaint.');
     }
     // One formal complaint at a time: a waiting one (sending, or failed with

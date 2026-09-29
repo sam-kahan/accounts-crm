@@ -746,6 +746,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — a complaint logged before it was sent: the system drafts the complaint email
+- **A complaint logged here with nothing sent or received** (open, Stage 1,
+  one organisation, no email on it or queued, not by phone, no question from a
+  re-check, never made from the page: `complaintRules.js#awaitingFirstEmail`,
+  pure, tested) shows **Next step: send the complaint to <org>** with **Draft
+  the complaint email…** instead of "wait for their acknowledgement" of a
+  complaint they never received (`awaiting_first_email` on `GET /:id`).
+- It is the formal-complaint draft and send (`/:id/formal/draft`,
+  `/:id/formal/raise`, `FormalComplaintModal`) with its own wording: the draft
+  reads the documents in full (one call, pressed by a person; an earlier email
+  of ours in them is background, not the complaint), and once it has gone (or
+  is recorded as sent from Outlook on a date) the complaint runs from that day
+  with a "Formal complaint made" entry, so it is never offered again
+  (`startFormalComplaint`'s UPDATE checks the same conditions, so two presses
+  can't both restart the dates).
+
 ### 2026-09-29 — fixes from a review of the month end and the invoicing bridge
 - **Paid here stays paid** (`applyExternalState`): an invoice marked paid
   here (paid to Greenco directly) turned back to `sent` on their next

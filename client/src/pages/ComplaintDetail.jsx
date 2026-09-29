@@ -1272,9 +1272,26 @@ export default function ComplaintDetail() {
             </div>
           )}
 
+          {/* Logged here but not yet sent to them: nothing can be due from
+              them, so the step is to make the complaint, drafted from what is
+              on file (the same draft and send as a formal complaint). */}
+          {c.awaiting_first_email && (
+            <div className="inline-note warn" style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 16 }}>
+                <strong>Next step:</strong> send the complaint to {c.org_name}. Nothing on file shows it has gone to
+                them yet, so nothing is due from them until it has.
+              </div>
+              <div className="btn-row" style={{ marginTop: 8 }}>
+                <button className="btn-primary btn-sm" onClick={() => setFormalOpen(true)}>
+                  {aiEnabled ? 'Draft the complaint email…' : 'Record the complaint as sent…'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* One next step: the AI's when its review is up to date, otherwise
               the one worked out from the deadlines. */}
-          {!multi && (() => {
+          {!multi && !c.awaiting_first_email && (() => {
             const aiStep = c.ai_review_current && headlineOf(c.ai_review);
             // Without the AI's view, each organisation's own next step, named.
             const text = aiStep || (multi
@@ -2640,6 +2657,9 @@ function EmailSearch({ s, busy, onSearch }) {
 // from that day: Stage 1, deadlines and the ombudsman clock from then.
 function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
   const { user: me } = useAuth();
+  // The complaint's first email (logged before it was sent), rather than a
+  // dispute being made formal: the same draft and send, told differently.
+  const first = Boolean(c.awaiting_first_email);
   const [draft, setDraft] = useState(null); // { to, subject, body, caution }
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -2669,18 +2689,26 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
     } catch (e) { setError(e.message); setBusy(null); }
   }
   return (
-    <Modal title={`Raise it as a formal complaint with ${c.org_name}`} onClose={onClose}>
+    <Modal title={first ? `Send the complaint to ${c.org_name}` : `Raise it as a formal complaint with ${c.org_name}`} onClose={onClose}>
       {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
-      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-        The emails so far don’t make a formal complaint, so {c.org_name} has no complaint to answer and nothing can
-        go to the ombudsman. This sends one under their complaints procedure. Once it has gone, this complaint starts
-        from that day (Stage 1), and the earlier emails stay on it as the background.
-      </p>
+      {first ? (
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          This drafts the complaint to {c.org_name} under their complaints procedure from what is on file: the details,
+          the outcome we want and the documents. Once it has gone, the complaint runs from that day (Stage 1), and
+          their deadlines from then.
+        </p>
+      ) : (
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          The emails so far don’t make a formal complaint, so {c.org_name} has no complaint to answer and nothing can
+          go to the ombudsman. This sends one under their complaints procedure. Once it has gone, this complaint starts
+          from that day (Stage 1), and the earlier emails stay on it as the background.
+        </p>
+      )}
       {!draft ? (
         <div className="btn-row" style={{ marginBottom: 12 }}>
           {aiEnabled && (
             <button className="btn-primary" disabled={Boolean(busy)} onClick={makeDraft}>
-              {busy === 'draft' ? 'Drafting from the emails…' : 'Draft the formal complaint'}
+              {busy === 'draft' ? (first ? 'Drafting from what is on file…' : 'Drafting from the emails…') : 'Draft the formal complaint'}
             </button>
           )}
         </div>
