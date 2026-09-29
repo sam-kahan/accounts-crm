@@ -223,8 +223,12 @@ export default function ComplaintDetail() {
         const still = new Set((fresh.outbox || []).map((o) => o.id));
         const gone = was.filter((x) => !still.has(x));
         if (gone.length) {
-          const esc = c.outbox.find((o) => gone.includes(o.id) && o.then_escalate);
-          setMsg(esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
+          const done = c.outbox.filter((o) => gone.includes(o.id));
+          const sup = done.find((o) => o.supplier_name);
+          const esc = done.find((o) => o.then_escalate);
+          setMsg(sup
+            ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
+            : esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
         }
       }).catch(() => {});
     }, 3000);
@@ -762,6 +766,7 @@ export default function ComplaintDetail() {
         o.status === 'failed' ? (
           <div key={o.id} className="inline-note warn" style={{ marginBottom: 12 }}>
             <strong>Not sent: “{o.subject}”</strong> to {o.to_addresses.join(', ')}.
+            {o.supplier_name ? ` ${o.supplier_name} hasn't been added to the complaint.` : ''}
             <div style={{ fontSize: 13, marginTop: 2 }}>{o.error}</div>
             <div className="btn-row" style={{ marginTop: 6 }}>
               <button className="btn-primary btn-sm" onClick={() => retryOutbox(o)}>Try again</button>
@@ -771,6 +776,7 @@ export default function ComplaintDetail() {
         ) : (
           <div key={o.id} className="inline-note" style={{ marginBottom: 12 }}>
             Sending “{o.subject}” to {o.to_addresses.join(', ')}…{o.then_escalate ? ' The complaint moves to Stage 2 once it has gone.' : ''}
+            {o.supplier_name ? ` ${o.supplier_name} joins this complaint once it has gone.` : ''}
           </div>
         )
       ))}
@@ -2167,7 +2173,7 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
     setBusy('send'); setError(null);
     try {
       await api.complaints.supplierRaise(c.id, { ...who, send: { to: draft.to, subject: draft.subject, body: draft.body } });
-      await onDone(`Sent to ${name} and added to this complaint. Their deadlines run from today.`);
+      await onDone(`Sending to ${name} now. They join this complaint as soon as it has gone; you can carry on.`);
     } catch (e) { setError(e.message); setBusy(null); }
   }
   async function sentFromOutlook() {

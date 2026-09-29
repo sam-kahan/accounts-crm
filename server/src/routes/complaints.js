@@ -333,8 +333,12 @@ export async function deliverOutbox(outboxId) {
   }
   // It has gone: from here on nothing may put it back to "not sent".
   await query(`UPDATE complaint_outbox SET status = 'sent', error = NULL, finished_at = now() WHERE id = $1`, [o.id]);
+  // Every step it takes is dated the day it actually went, not the day Send
+  // was first pressed: after a failure and Try again those differ, and the
+  // deadlines run from when they had it.
+  const sentOn = todayISO();
   try {
-    await recordOutboundEmail({
+    const emailId = await recordOutboundEmail({
       complaintId: o.complaint_id,
       fromEmail: fromAddress(),
       to: o.to_addresses,
@@ -345,6 +349,11 @@ export async function deliverOutbox(outboxId) {
       messageId: sent?.messageId || null,
       partyId: o.party_id,
     });
+    if (o.then_supplier) {
+      await joinSupplier(o.complaint_id, o.then_supplier, { sentOn, emailId, subject: o.subject, by: o.sent_by });
+      scheduleReview(o.complaint_id);
+      return;
+    }
     // The Stage 2 request moves the complaint on whichever button sent it:
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
@@ -359,11 +368,11 @@ export async function deliverOutbox(outboxId) {
       : isStage2Request({ subject: o.subject, body: o.body })
         ? (o.party_id ? (atStage1 ? { party } : null) : await stage2TrackFor(o.complaint_id, o.to_addresses))
         : null;
-    if (track) await escalateTrack(o.complaint_id, track.party?.id || null, londonDateOf(new Date(o.created_at)), o.sent_by);
+    if (track) await escalateTrack(o.complaint_id, track.party?.id || null, sentOn, o.sent_by);
     else if (o.then_escalate && !atStage1) {
       await query(
         `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
-        [o.complaint_id, o.party_id, todayISO(), 'The Stage 2 request was sent, but it was already past Stage 1 by then, so nothing was escalated.', o.sent_by],
+        [o.complaint_id, o.party_id, sentOn, 'The Stage 2 request was sent, but it was already past Stage 1 by then, so nothing was escalated.', o.sent_by],
       );
     }
     scheduleReview(o.complaint_id);
@@ -381,6 +390,7 @@ export async function deliverOutbox(outboxId) {
 router.post(
   '/:id/outbox/:outboxId/retry',
   asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.outboxId).success) throw new HttpError(400, 'Invalid id');
     const r = await query(
       `UPDATE complaint_outbox SET status = 'pending', error = NULL WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING id`,
       [req.params.outboxId, req.params.id],
@@ -393,6 +403,7 @@ router.post(
 router.delete(
   '/:id/outbox/:outboxId',
   asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.outboxId).success) throw new HttpError(400, 'Invalid id');
     const r = await query(
       `DELETE FROM complaint_outbox WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING id`,
       [req.params.outboxId, req.params.id],
@@ -998,7 +1009,7 @@ router.get(
     // Copied in on every email sent from here (utilities@), so the page can say so.
     // Emails still going out, or that failed, shown on the complaint.
     const outbox = (await query(
-      `SELECT id, subject, to_addresses, status, error, then_escalate, created_at FROM complaint_outbox
+      `SELECT id, subject, to_addresses, status, error, then_escalate, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, external_cc: config.smtp.externalCc });
@@ -1565,47 +1576,67 @@ router.post(
     const d = parse(supplierRaiseInput, req.body);
     if (!d.send && !d.sent_on) throw new HttpError(400, 'Send the complaint from here, or give the date it was sent.');
     const c = await decoratedById(req.params.id);
-    const raisedOn = d.send ? todayISO() : d.sent_on;
-    if (raisedOn > todayISO()) throw new HttpError(400, 'That date is in the future');
-    let sentEmailId = null;
+    if (!d.send && d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');
+    const supplier = { organisation_id: d.organisation_id || null, org_name: d.org_name, org_type: d.org_type || 'supplier' };
+    // Refused now, not after the email has gone: they can't join twice.
+    const already = (d.organisation_id && d.organisation_id === c.organisation_id) ||
+      (c.parties || []).some((p) => (d.organisation_id && p.organisation_id === d.organisation_id) ||
+        p.org_name.trim().toLowerCase() === d.org_name.trim().toLowerCase());
+    if (already) throw new HttpError(409, `${d.org_name} is already on this complaint.`);
     if (d.send) {
+      if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
+      const waiting = (await query(
+        `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_supplier IS NOT NULL AND status <> 'sent'`,
+        [c.id],
+      )).rows[0];
+      if (waiting) throw new HttpError(409, 'A complaint to a supplier is already being sent (or failed and waiting) on this complaint.');
       const to = parseRecipients(d.send.to);
       const cc = parseRecipients(d.send.cc);
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
-      d.send.body = signEmail(d.send.body, req.user);
-      const sent = await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
-      sentEmailId = await recordOutboundEmail({
-        complaintId: c.id, fromEmail: fromAddress(), to, cc,
-        subject: d.send.subject, body: d.send.body, sentBy: who(req), messageId: sent?.messageId || null,
-      });
+      // In the background like every send from a complaint: the supplier
+      // joins once it has gone (dated that day), and nothing is added if it
+      // fails — it waits on the complaint with Try again / Discard.
+      const out = (await query(
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier],
+      )).rows[0];
+      setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+      return res.status(202).json({ queued: true, outbox_id: out.id });
     }
-    const party = await createParty(c.id, {
-      organisation_id: d.organisation_id || null,
-      org_name: d.org_name,
-      org_type: d.org_type || 'supplier',
-      relationship: `Owns the account ${c.org_name} is collecting`,
-      raised_on: raisedOn,
-      channel: 'email',
-      raisedNote: `Complaint raised with ${d.org_name} too (the account ${c.org_name} is collecting is theirs)` +
-        `${d.send ? ', sent from here' : ', sent from Outlook'}.`,
-    }, who(req));
-    // The email (and its "sent" entry) is theirs: sending it to the supplier
-    // is not a step with the organisation already on the complaint.
-    if (sentEmailId) {
-      await query('UPDATE complaint_emails SET party_id = $2 WHERE id = $1', [sentEmailId, party.id]);
-      const head = `Email sent: ${d.send.subject}, to `;
-      await query(
-        `UPDATE complaint_events SET party_id = $2
-          WHERE complaint_id = $1 AND type = 'chased' AND party_id IS NULL AND event_date = $3
-            AND left(note, length($4)) = $4`,
-        [c.id, party.id, raisedOn, head],
-      );
-    }
+    await joinSupplier(c.id, supplier, { sentOn: d.sent_on, by: who(req) });
     res.status(201).json(await decoratedById(c.id));
   }),
 );
+
+// The supplier joins the complaint as a further organisation, dated the day
+// the complaint to them went. With an email sent from here, that email (and
+// its "sent" entry) is theirs: it is not a step with the organisation already
+// on the complaint.
+async function joinSupplier(complaintId, supplier, { sentOn, emailId = null, subject = null, by }) {
+  const c = (await query('SELECT org_name FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  const party = await createParty(complaintId, {
+    ...supplier,
+    relationship: `Owns the account ${c.org_name} is collecting`,
+    raised_on: sentOn,
+    channel: 'email',
+    raisedNote: `Complaint raised with ${supplier.org_name} too (the account ${c.org_name} is collecting is theirs)` +
+      `${emailId ? ', sent from here' : ', sent from Outlook'}.`,
+  }, by);
+  if (emailId) {
+    await query('UPDATE complaint_emails SET party_id = $2 WHERE id = $1', [emailId, party.id]);
+    const head = `Email sent: ${subject}, to `;
+    await query(
+      `UPDATE complaint_events SET party_id = $2
+        WHERE complaint_id = $1 AND type = 'chased' AND party_id IS NULL AND event_date = $3
+          AND left(note, length($4)) = $4`,
+      [complaintId, party.id, sentOn, head],
+    );
+  }
+  return party;
+}
 
 router.put(
   '/:id/parties/:partyId',

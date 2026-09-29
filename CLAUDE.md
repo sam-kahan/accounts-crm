@@ -650,9 +650,10 @@ the page says how far each date can be trusted.
   the page offers **Raise it with <supplier>…**: `POST /:id/supplier/draft`
   (one AI call) drafts the formal complaint to them from everything on file,
   and `POST /:id/supplier/raise` sends it from here (copied to the
-  complaint's address and utilities@) or records it sent from Outlook on a
-  date — either way the supplier joins as a further organisation
-  (`createParty`), dated the day it went. Nothing is added if sending fails.
+  complaint's address and utilities@, in the background like every send) or
+  records it sent from Outlook on a date — either way the supplier joins as a
+  further organisation (`joinSupplier`), dated the day it went. Nothing is
+  added if sending fails.
 - **Deleting a complaint deletes its emails and documents** (migration
   `034`): `complaint_emails.complaint_id` is ON DELETE SET NULL, so the
   delete route removes them itself, records their message ids in
@@ -751,6 +752,14 @@ the page says how far each date can be trusted.
   until the email has really gone. While one is sending the page says so and
   updates itself when it has gone. If recording fails after a successful send,
   a timeline note says so and it is never re-sent.
+- **Every step is dated the day the email actually went**, not the day Send
+  was first pressed, so a Stage 2 request that failed and was retried later
+  starts Stage 2 on the retry day.
+- **"Raise it with the supplier" sends the same way** (migration `038`,
+  `complaint_outbox.then_supplier`): the supplier joins the complaint once the
+  email has gone (`joinSupplier`, dated that day) and never if it fails. It is
+  refused up front if they're already on the complaint or another supplier
+  email is still waiting.
 - **A restart mid-send** marks the row failed with a note to check
   utilities@ for the copy before trying again (it may or may not have gone);
   rows still `pending` at start-up are sent.
