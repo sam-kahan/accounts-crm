@@ -253,7 +253,28 @@ export function ackChangesNothing(track, a, text = '') {
 // `soleTrack`: false when the email isn't certainly on this organisation's
 // part (a complaint with more than one): an acknowledgement then might be
 // the other organisation's first, so it isn't settled on this part's dates.
-export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', soleTrack = true } = {}) {
+// Our own email, known from its sender rather than left to the AI: sent from
+// one of our addresses and not a colleague forwarding someone else's email
+// (FW:/Fwd: subject, or read as a forward written by the organisation). A
+// chaser, a note to them, information they asked for: it goes on the file by
+// itself, never waiting for a person (it can't be their acknowledgement or
+// response). Pure, tested.
+export function isOurOwnEmail(email, a, ourDomain) {
+  const domain = String(ourDomain || '').toLowerCase();
+  const from = String(email?.sender_email || '').toLowerCase();
+  if (!domain || !from.endsWith(`@${domain}`)) return false;
+  if (/^\s*(?:fw|fwd)\s*:/i.test(String(email?.subject || ''))) return false;
+  if (a?.forwarded && a.from_organisation && a.kind !== 'our_email') return false;
+  return true;
+}
+
+export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', soleTrack = true, ownEmail = false } = {}) {
+  // Ours (isOurOwnEmail): our Stage 2 request or referral moves its part on
+  // as usual; anything else is filed, whatever the AI made of it.
+  if (ownEmail) {
+    if (a?.kind === 'our_email' && a.our_step) return planOurStep(complaint, a, today);
+    return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+  }
   if (!a) return { auto: false, reason: 'Not analysed' };
   // Not certainly this organisation's part (a complaint with more than one,
   // the email not placed): anything that could set a date waits for a

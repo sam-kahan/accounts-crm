@@ -5,7 +5,7 @@ import { londonDateOf, todayISO } from '../lib/dates.js';
 import { ukDate, trackOpen, readable, saysReturnedToClient } from './complaintRules.js';
 import { overallState } from './complaintParties.js';
 import { fetchMessageDetail } from './graphMail.js';
-import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
+import { analyseEmail, planFromAnalysis, resolutionSuggestion, isOurOwnEmail } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
 import { recomputeDeadlines, recomputePartyDeadlines } from './complaintDeadlines.js';
 import { trackForEmail, tracksOf, removedOrgFor } from './complaintParties.js';
@@ -321,7 +321,10 @@ async function applyEmail(em, analysis, skipped = []) {
   // Whose email it is, known for certain: the only organisation, or the one
   // the signs picked. Nothing is closed on a guess.
   let placed = !parties.length;
-  const fromThem = analysis?.from_organisation && analysis.kind !== 'our_email' && analysis.confidence === 'high';
+  // Sent by one of us (not a forward of their email): filed as ours whatever
+  // the AI made of it, and never read as theirs.
+  const ownEmail = isOurOwnEmail(em, analysis, config.complaintEmail.domain);
+  const fromThem = !ownEmail && analysis?.from_organisation && analysis.kind !== 'our_email' && analysis.confidence === 'high';
   // An organisation taken off this complaint writing again (or an email of
   // ours to them alone): history, never a step on another organisation's
   // part. When the signs point at both them and one still on it, a person
@@ -353,7 +356,7 @@ async function applyEmail(em, analysis, skipped = []) {
     if (pick.track) {
       placed = true;
       party = pick.track.party;
-      plan = planFromAnalysis(party || complaint, analysis, { text: emText });
+      plan = planFromAnalysis(party || complaint, analysis, { text: emText, ownEmail });
     } else {
       plan = { auto: false, reason: pick.reason };
     }
@@ -369,12 +372,12 @@ async function applyEmail(em, analysis, skipped = []) {
     const hits = tracksOf(complaint, parties, orgs).filter((t) => t.domain && domains.has(t.domain));
     if (hits.length === 1) {
       party = hits[0].party;
-      plan = planFromAnalysis(party || complaint, analysis, { text: emText });
+      plan = planFromAnalysis(party || complaint, analysis, { text: emText, ownEmail });
     } else {
       plan = { auto: false, reason: 'It looks like our Stage 2 request or referral, but it isn’t clear which organisation’s part it moves on' };
     }
   } else {
-    plan = planFromAnalysis(complaint, analysis, { text: emText, soleTrack: !parties.length });
+    plan = planFromAnalysis(complaint, analysis, { text: emText, soleTrack: !parties.length, ownEmail });
   }
   const target = party || complaint;
   const table = party ? 'complaint_parties' : 'complaints';
@@ -483,7 +486,7 @@ async function applyEmail(em, analysis, skipped = []) {
     const d = String(a).toLowerCase().split('@')[1];
     return d && d !== ours;
   });
-  const sentStep = analysis?.kind === 'our_email' && (wentOutside || analysis.forwarded);
+  const sentStep = (ownEmail || analysis?.kind === 'our_email') && (wentOutside || Boolean(analysis?.forwarded));
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
   const offOrg = off && !off.conflict ? off.org.name : null;
   const recorded = offOrg
@@ -824,10 +827,13 @@ export async function settleRoutineEmails() {
       [e.id, ROUTINE_BY],
     );
   }
+  const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
   const rows = (await query(
-    `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis, e.party_id, e.complaint_id
+    `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis, e.party_id, e.complaint_id, e.sender_email
        FROM complaint_emails e
-      WHERE e.reviewed_at IS NULL AND e.direction <> 'outbound' AND e.complaint_id IS NOT NULL AND e.analysis IS NOT NULL`,
+      WHERE e.reviewed_at IS NULL AND e.direction <> 'outbound' AND e.complaint_id IS NOT NULL
+        AND (e.analysis IS NOT NULL OR ($1 <> '' AND lower(COALESCE(e.sender_email, '')) LIKE '%@' || $1))`,
+    [ourDomain],
   )).rows;
   let n = 0;
   for (const e of rows) {
@@ -840,6 +846,8 @@ export async function settleRoutineEmails() {
       text: `${e.subject || ''}\n${e.body_text || e.body_preview || ''}`,
       // Certainly this part's: recorded against it, or the only organisation.
       soleTrack: Boolean(e.party_id) || others === 0,
+      // One of ours (a colleague's chaser) waiting from before this rule.
+      ownEmail: isOurOwnEmail(e, e.analysis, ourDomain),
     });
     if (!plan.auto || Object.keys(plan.changes || {}).length || plan.event) continue;
     const r = await query(

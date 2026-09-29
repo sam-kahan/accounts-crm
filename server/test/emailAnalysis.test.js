@@ -190,3 +190,34 @@ test('not sent to them yet: their acknowledgement waits for a person, never date
   // Once it has gone (the flag cleared), the same email is recorded as usual.
   assert.equal(planFromAnalysis(complaint({ not_sent_yet: false }), analysis(), { today: TODAY }).auto, true);
 });
+
+import { isOurOwnEmail } from '../src/services/emailAnalysis.js';
+
+test('a colleague’s chaser is ours by its sender, filed without a person, whatever the AI made of it', () => {
+  const chaser = { sender_email: 'Imogen.Moore@greenco.co.uk', subject: 'A44442483//A44442453' };
+  // The AI unsure, or reading her "no response" wording as their response: still ours.
+  for (const a of [null, analysis({ forwarded: false, kind: 'response', from_organisation: false, confidence: 'medium' }),
+    analysis({ forwarded: false, kind: 'correspondence', from_organisation: false, confidence: 'low' }),
+    // Even read as theirs, if it isn't read as a forward: she wrote it.
+    analysis({ forwarded: false, kind: 'acknowledgement', confidence: 'high' })]) {
+    assert.equal(isOurOwnEmail(chaser, a, 'greenco.co.uk'), true);
+    const plan = planFromAnalysis(complaint({ acknowledged_on: '2026-09-01' }), a, { today: TODAY, ownEmail: true });
+    assert.equal(plan.auto, true);
+    assert.deepEqual(plan.changes, {});
+    assert.equal(plan.event, null);
+    assert.equal(plan.reviewedAs, 'correspondence');
+  }
+});
+
+test('a colleague forwarding THEIR email is not ours: it is read as theirs', () => {
+  assert.equal(isOurOwnEmail({ sender_email: 'imogen.moore@greenco.co.uk', subject: 'FW: Your complaint CR-1' }, analysis(), 'greenco.co.uk'), false);
+  assert.equal(isOurOwnEmail({ sender_email: 'imogen.moore@greenco.co.uk', subject: 'Your complaint' }, analysis({ forwarded: true, from_organisation: true }), 'greenco.co.uk'), false);
+  assert.equal(isOurOwnEmail({ sender_email: 'complaints@council.gov.uk', subject: 'Re: x' }, null, 'greenco.co.uk'), false);
+  assert.equal(isOurOwnEmail({ sender_email: 'someone@notgreenco.co.uk', subject: 'x' }, null, 'greenco.co.uk'), false);
+});
+
+test('our own Stage 2 request still moves the complaint on', () => {
+  const a = analysis({ kind: 'our_email', from_organisation: false, our_step: 'stage2_request', sent_on: '2026-10-02' });
+  const plan = planFromAnalysis(complaint({ acknowledged_on: '2026-09-29', responded_on: '2026-10-01' }), a, { today: TODAY, ownEmail: true });
+  assert.equal(plan.changes?.stage, 'stage_2');
+});

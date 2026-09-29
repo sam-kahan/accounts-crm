@@ -746,6 +746,20 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — our own emails file themselves, known by the sender
+- **A colleague's email on a complaint (a chaser, a note to them) never waits
+  for a person.** It used to be ours only when the AI read it as `our_email`
+  with some confidence, so a chaser whose words mention a response ("we have
+  been in contact on numerous occasions…") sat under "New email to review".
+  `emailAnalysis.js#isOurOwnEmail` (pure, tested) decides it from the email:
+  sent from our domain, not an FW:/Fwd: subject, and not read as a forward
+  written by the organisation. `planFromAnalysis({ ownEmail })` then files it
+  as correspondence (a "Chased / sent" step when it went outside Greenco),
+  whatever the AI made of it; our Stage 2 request / referral (`our_step`)
+  still moves its part on (`planOurStep`). A colleague forwarding THEIR email
+  is read as theirs, as before. `settleRoutineEmails` (every start-up) files
+  the ones already waiting.
+
 ### 2026-09-29 — the date an email was SENT is read again
 - Two SQL patterns written `'^\d{4}-…'` inside JS strings lost the backslash
   (JS reads `\d` as `d`), so the AI's `sent_on` was never used and every
