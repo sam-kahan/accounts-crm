@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
 import { track } from './aiUsage.js';
-import { referLimitText } from './complaintRules.js';
+import { referLimitText, holdToComplaintWord } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -377,14 +377,18 @@ any reference numbers, whether it's been acknowledged and/or responded to, and t
 it's at now. Dates must be ISO YYYY-MM-DD; if a date is clearly implied but not exact, give your best
 estimate and note it. If something isn't determinable, use null. Do NOT invent facts.
 
-First decide "is_complaint": true only if the material shows Greenco (or a client, through Greenco)
-making a FORMAL complaint to an organisation: saying in so many words that it is complaining or asking
-for a complaint to be opened, logged or raised; using the organisation's complaints form, portal or
-complaints address; or the organisation treating it as a complaint (a complaint reference, an
-acknowledgement or response under its complaints procedure). A query, a disputed bill, a request to
-correct an account, meter readings, a refund being chased, or unhappiness that never became a
-complaint is false. A complaint made TO Greenco, or ordinary correspondence, is false — then the other
-fields may be null.
+First decide "is_complaint". Greenco's rule: a complaint is made ONLY by an email or letter from
+Greenco (or a client, through Greenco) that USES THE WORD "complaint" (or "complain") to make one or
+to ask for one to be opened, logged or raised ("we wish to make a formal complaint", "please log this
+as a complaint", "I am writing to complain"), or by the organisation's complaints form or portal.
+Without the word it is NOT a complaint, however unhappy it is and even if the organisation replied:
+a query, a disputed bill, a request to correct an account or refund a charge, meter readings, or a
+refund being chased is false. A complaint made TO Greenco, or ordinary correspondence, is false —
+then the other fields may be null.
+When it is true, "complaint_evidence" quotes the sentence that makes or asks for the complaint
+(exactly as written, under 300 characters, containing the word) with the date of that email or
+letter; "raised_on" is THAT date, the first time the complaint was asked for, never the date of
+earlier emails about the same problem (they are background).
 "state": "open" unless the material shows the complaint was resolved or closed ("resolved"), with
 "resolved_on" the date that happened. "summary": 1-2 sentences on what the complaint is about and
 where it ended up.
@@ -405,6 +409,7 @@ case references (a case reference goes in "reference"). Empty list if none.
 Return ONLY a single JSON object with exactly these keys:
 {
   "is_complaint": boolean,
+  "complaint_evidence": {"quote": string, "date": string|null}|null,
   "state": "open"|"resolved",
   "resolved_on": string|null,
   "summary": string|null,
@@ -443,7 +448,8 @@ export async function parseImportedComplaint({ text, hint, blocks = [], forLog =
       ? `Material about the complaint:\n<untrusted_content>\n${text}\n</untrusted_content>`
       : 'The material about the complaint is the attached document.');
   const out = await callClaude({ system: IMPORT_SYSTEM, user, blocks, maxTokens: 2000, feature: 'Reading a complaint (import / log form)' });
-  const result = extractJson(out);
+  // Held to the rule in code: no quoted sentence using the word, no complaint.
+  const result = holdToComplaintWord(extractJson(out));
   if (result && result.is_complaint === false) return result;
   if (!result || !result.subject) {
     throw new HttpError(502, 'Could not extract a complaint from that. Add more detail and retry.');

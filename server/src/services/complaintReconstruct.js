@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { track } from './aiUsage.js';
+import { usesComplaintWord } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // Importing a past complaint as a complete record. Every email about it —
@@ -55,17 +56,18 @@ const SYSTEM = `You rebuild the complete record of one complaint that Greenco (a
 accounts firm) made to an organisation, from every email about it, given in date order. Emails from
 @greenco.co.uk addresses are Greenco's; the others are the organisation's or third parties'.
 
-First decide whether a FORMAL complaint was made at all. "is_complaint" is true only when the emails
-show one of: Greenco (or its client, through Greenco) saying in so many words that it is complaining or
-asking for a complaint to be opened, logged or raised ("we wish to make a formal complaint", "please
-log this as a complaint"); a complaint made through the organisation's complaints form, portal or
-complaints address; or the organisation itself treating it as a complaint (a complaint reference, an
-acknowledgement or response under its complaints procedure). A query, a dispute of a bill, a request
-to correct an account, meter readings, a refund being chased, or unhappiness that never became a
-complaint is NOT one: is_complaint false, and say why in "not_complaint_why".
-When it is one, "complaint_evidence" quotes the sentence (under 300 characters, exactly as written)
-that shows the complaint being made, with the date of that email; "raised_on" is THAT date — the day
-the formal complaint was made — never the date of earlier emails about the same problem.
+First decide whether a FORMAL complaint was made at all. Greenco's rule: a complaint is made ONLY by
+an email or letter from Greenco (or its client, through Greenco) that USES THE WORD "complaint" (or
+"complain") to make one or to ask for one to be opened, logged or raised ("we wish to make a formal
+complaint", "please log this as a complaint", "I am writing to complain"), or by the organisation's
+complaints form or portal. Without the word it is NOT a complaint, however unhappy it is and even if
+the organisation replied or gave it a reference: a query, a dispute of a bill, a request to correct an
+account or refund a charge, meter readings, or a refund being chased is NOT one: is_complaint false,
+and say why in "not_complaint_why".
+When it is one, "complaint_evidence" quotes the sentence (under 300 characters, exactly as written,
+containing the word) that makes or asks for the complaint, with the date of that email; "raised_on"
+is THAT date, the FIRST time the complaint was asked for, never the date of earlier emails about the
+same problem (they are background).
 
 Fill in as much as the emails show, and nothing they don't. Dates are YYYY-MM-DD from the emails'
 own dates (UK day/month order in the text). Where something isn't shown, use null — never guess — and
@@ -123,11 +125,14 @@ export function normaliseReconstruction(r, { today = todayISO() } = {}) {
   // complaint (and its ombudsman clock) from an email that was only a query.
   const evQuote = str(r?.complaint_evidence?.quote, 300);
   const evDate = cleanDate(r?.complaint_evidence?.date, today);
-  const isComplaint = r?.is_complaint !== false && Boolean(evQuote);
+  // Greenco's rule, held in code: the sentence must use the word "complaint".
+  const isComplaint = r?.is_complaint !== false && Boolean(evQuote) && usesComplaintWord(evQuote);
   const out = {
     is_complaint: isComplaint,
     not_complaint_why: isComplaint ? null
-      : str(r?.not_complaint_why, 300) || (r?.is_complaint !== false ? 'no email shows a formal complaint being made' : 'not a complaint'),
+      : (r?.is_complaint !== false && evQuote && !usesComplaintWord(evQuote)
+        ? 'the sentence it relies on doesn’t use the word “complaint”, so no complaint has been asked for yet'
+        : str(r?.not_complaint_why, 300) || (r?.is_complaint !== false ? 'no email shows a formal complaint being made' : 'not a complaint')),
     complaint_evidence: isComplaint ? { quote: evQuote, date: evDate } : null,
     org_name: str(r?.org_name, 200),
     org_type: ORG_TYPES.includes(r?.org_type) ? r.org_type : 'other',

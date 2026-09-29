@@ -746,6 +746,25 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — a complaint is made only by an email that uses the word "complaint"
+- **Greenco's rule** (the owner's, and important): an email or letter makes
+  a complaint only when it USES THE WORD "complaint" / "complain" to make one
+  or ask for one to be raised (or goes through their complaints form). A
+  refund request, a dispute or an unhappy email without it is not one, and
+  the complaint's clock (deadlines, the ombudsman's wait and time limit)
+  starts only from the email that asks for the complaint.
+- Every AI reading of "was a complaint made, and when" says so (the Log
+  form / import reading `IMPORT_SYSTEM`, the full import and re-check reading
+  in `complaintReconstruct.js`, `new_complaint` in `emailAnalysis.js`), and it
+  is **held in code**, not left to the AI: `complaintRules.js#usesComplaintWord`
+  / `holdToComplaintWord` (pure, tested) require the quoted sentence
+  (`complaint_evidence`) to use the word, and `raised_on` is that sentence's
+  date; `normaliseReconstruction` does the same for imports and re-checks. A
+  formal complaint sent from the page without the word is refused (400).
+- Complaints already on file are not changed by this. A re-check (only ever
+  started by a person) may now ASK about one whose emails never used the word
+  (the usual "no formal complaint" question); it never changes its dates.
+
 ### 2026-09-29 — a complaint logged before it was sent: the system drafts the complaint email
 - **The Log form asks "Has this complaint been sent to them yet?"** and
   assumes **not yet** (a complaint brought in by an import, or started from an

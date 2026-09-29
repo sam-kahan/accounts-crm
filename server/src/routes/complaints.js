@@ -12,7 +12,7 @@ import { todayISO, londonDateOf } from '../lib/dates.js';
 import { plural } from '../lib/words.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom, awaitingFirstEmail } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom, awaitingFirstEmail, usesComplaintWord } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
@@ -2521,6 +2521,12 @@ router.post(
     };
     if ((await query(formalGuard.guard.sql, formalGuard.guard.params)).rows[0]) throw new HttpError(409, formalGuard.refusal);
     if (d.send) {
+      // The complaint starts from this email, so it has to ask for one in so
+      // many words: without the word it is a request, and their clock wouldn't
+      // start (usesComplaintWord, Greenco's rule).
+      if (!usesComplaintWord(`${d.send.subject}\n${d.send.body}`)) {
+        throw new HttpError(400, 'The email doesn’t use the word “complaint”, so it doesn’t make one: say that this is a formal complaint (for example “I am writing to make a formal complaint…”) before sending.');
+      }
       if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
       const to = parseRecipients(d.send.to);
       const cc = parseRecipients(d.send.cc);

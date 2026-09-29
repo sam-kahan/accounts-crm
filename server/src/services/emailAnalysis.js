@@ -86,6 +86,9 @@ Work out, from the evidence only:
   and final bill issued"), else null.
 - new_complaint: true only if this is Greenco MAKING a new formal complaint to an organisation
   (its first complaint email/letter about the matter), not a reply within a complaint already made.
+  It must USE THE WORD "complaint" (or "complain") to make one or ask for one to be raised: without
+  the word it is a request or a dispute, not a complaint (Greenco's rule; the clock starts only from
+  the email that asks for the complaint).
 - confidence: "high" only if the kind, the author and the date are all unambiguous; otherwise
   "medium" or "low".
 If you are also given a list of open complaints, pick the one this email is about ("complaint_id"),

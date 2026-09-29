@@ -379,6 +379,40 @@ export function awaitingFirstEmail(c) {
   return c.stage === 'stage_1' && !c.acknowledged_on && !c.responded_on && !c.final_response_on;
 }
 
+// Greenco's rule: a complaint is made only by an email or letter that USES
+// THE WORD — making a complaint, or asking for one to be opened, logged or
+// raised ("we wish to make a formal complaint", "I am writing to complain",
+// their complaints form). However unhappy an email is, without the word it is
+// a request or a dispute, and the complaint's clock (every deadline, the
+// ombudsman's wait and time limit) starts only from the email that asks for
+// the complaint. Checked in code against the sentence the AI quotes, never
+// left to the AI alone.
+export const COMPLAINT_WORD = /\bcomplain(?:t|ts|ing|ed|s)?\b/i;
+export function usesComplaintWord(text) {
+  return COMPLAINT_WORD.test(String(text || ''));
+}
+
+// The AI's reading of whether (and when) a complaint was made, held to that
+// rule: is_complaint stands only with a quoted sentence that uses the word,
+// and the complaint was made on that sentence's date.
+export function holdToComplaintWord(r) {
+  if (!r || typeof r !== 'object' || r.is_complaint === false) return r;
+  const quote = typeof r.complaint_evidence?.quote === 'string' ? r.complaint_evidence.quote.trim() : '';
+  if (!usesComplaintWord(quote)) {
+    const why = quote
+      ? 'the sentence it relies on doesn’t use the word “complaint”, so no complaint has been asked for yet'
+      : 'no email or letter asks for a complaint in so many words (the word “complaint”), so none has been made yet';
+    return {
+      ...r, is_complaint: false, complaint_evidence: null, not_complaint_why: why,
+      raised_on: null, acknowledged_on: null, responded_on: null, stage: 'stage_1',
+      notes: `Not a formal complaint yet: ${why}.${r.notes ? ` ${r.notes}` : ''}`,
+    };
+  }
+  const date = typeof r.complaint_evidence?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.complaint_evidence.date)
+    ? r.complaint_evidence.date : null;
+  return { ...r, raised_on: date || r.raised_on || null };
+}
+
 // A value for a sentence: an ISO date as ukDate, anything else unchanged.
 export function readable(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? ukDate(v) : v;
