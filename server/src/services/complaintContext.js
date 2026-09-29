@@ -142,6 +142,17 @@ export async function decorateMany(rows) {
         c.ai_review = composeByOrg(c.ai_review, tracks);
       }
     }
+    // The emails show no formal complaint was ever made (a re-check's
+    // question, unanswered): the next step is to make one, never Stage 2 or
+    // a chaser of a complaint that doesn't exist.
+    if (c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered && c.state === 'open') {
+      const h = 'No formal complaint has been made yet: raise one under their complaints procedure ' +
+        '(“Raise it as a formal complaint…”, at the top), or, if one was made, press “It is a complaint: keep it”.';
+      c.nextAction = h;
+      if (c.ai_review) {
+        c.ai_review = { ...c.ai_review, headline: h, recommended_action: h, email_now: false, next_action: null, email_step: null, refer_step: false };
+      }
+    }
     return c;
   });
 }

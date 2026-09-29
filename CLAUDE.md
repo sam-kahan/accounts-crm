@@ -739,6 +739,19 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — raise it as a formal complaint
+- When the emails show no formal complaint was made (`complaint_doubt`
+  'not_complaint'), the complaint offers **Raise it as a formal complaint…**:
+  the AI drafts it under their procedure (`POST /:id/formal/draft`, one
+  call, never mentions Stage 2 or the ombudsman), sent from here in the
+  background (`complaint_outbox.then_formal`, migration `044`) or recorded as
+  sent from Outlook (`POST /:id/formal/raise`). Once it has gone,
+  `startFormalComplaint` starts the complaint from that day: Stage 1, dates
+  cleared, deadlines and the ombudsman clock from then, the question
+  cleared, and a "raised" timeline entry saying what it replaced. Until the
+  question is answered the next step says to raise it (decorateMany), never
+  Stage 2.
+
 ### 2026-09-29 — the ombudsman register; one account, one complaint
 - **Ombudsmen page** (Complaints → Ombudsmen; migrations `042` table +
   `organisations.ombudsman_id`, `043` seed): one record per scheme — when it

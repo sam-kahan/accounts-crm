@@ -226,6 +226,7 @@ export default function ComplaintDetail() {
   const [catchingUp, setCatchingUp] = useState(null);
   const [answering, setAnswering] = useState(null);
   const [combining, setCombining] = useState(null);
+  const [formalOpen, setFormalOpen] = useState(false);
 
   // Timers started by a button (watching a search or a re-check finish) are
   // stopped when the page is left or another complaint is opened, so one
@@ -272,7 +273,10 @@ export default function ComplaintDetail() {
           // of the Stage 2 request): said either way.
           const stageOf = (x) => [x.stage, ...(x.parties || []).map((p) => p.stage)].join('|');
           const esc = done.find((o) => o.then_escalate) || stageOf(fresh) !== stageOf(c);
-          setMsg(sup
+          const formal = done.find((o) => o.then_formal);
+          setMsg(formal
+            ? 'Sent: the formal complaint has been made. This complaint now runs from today (Stage 1), with its deadlines from today.'
+            : sup
             ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
             : esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
         }
@@ -929,11 +933,16 @@ export default function ComplaintDetail() {
                 <strong>⚠ The emails don’t show a formal complaint being made</strong> ({q.why}). It may have been imported
                 from a query or a disputed bill. Until this is answered, it won’t be treated as ready for the ombudsman.
                 <div className="btn-row" style={{ marginTop: 8 }}>
+                  {c.state === 'open' && (
+                    <button className="btn-primary btn-sm" disabled={answering !== null} onClick={() => setFormalOpen(true)}>
+                      Raise it as a formal complaint…
+                    </button>
+                  )}
                   <button className="btn-sm" disabled={answering !== null}
                     onClick={() => answer('is_complaint', 'Keep it as a complaint? Only if a formal complaint really was made to them.')}>
                     {answering === 'is_complaint' ? 'Saving…' : 'It is a complaint: keep it'}
                   </button>
-                  <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>If it isn’t, use Delete at the top.</span>
+                  <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>If there’s nothing to complain about, use Delete at the top.</span>
                 </div>
               </>
             ) : (
@@ -1952,6 +1961,14 @@ export default function ComplaintDetail() {
           onDone={async (msg2) => { setSupplierFor(null); await load(); setMsg(msg2); }}
         />
       )}
+      {formalOpen && (
+        <FormalComplaintModal
+          c={c}
+          aiEnabled={aiEnabled}
+          onClose={() => setFormalOpen(false)}
+          onDone={async (msg2) => { setFormalOpen(false); await load(); setMsg(msg2); }}
+        />
+      )}
 
       {partyForm && (
         <PartyModal
@@ -2421,6 +2438,101 @@ function EmailSearch({ s, busy, onSearch }) {
 // it, then send it from here (copied to this complaint's address and
 // utilities@) or say it went from Outlook. Either way the supplier joins this
 // complaint as a further organisation, dated the day it was sent.
+// Making it a formal complaint, under their complaints procedure, when the
+// emails show none was made. The AI drafts it from everything on file; once
+// it has gone (from here, or from Outlook on a date) the complaint starts
+// from that day: Stage 1, deadlines and the ombudsman clock from then.
+function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
+  const { user: me } = useAuth();
+  const [draft, setDraft] = useState(null); // { to, subject, body, caution }
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [sentOn, setSentOn] = useState(todayISO());
+  async function makeDraft() {
+    setBusy('draft'); setError(null);
+    try {
+      const d = await api.complaints.formalDraft(c.id);
+      setDraft({ ...d, body: signEmail(d.body, me), to: d.to || c.org_email || '' });
+    } catch (e) { setError(e.message); } finally { setBusy(null); }
+  }
+  async function sendNow() {
+    if (!confirm(`Send the formal complaint to ${draft.to}? Once it has gone, this complaint starts from today: Stage 1, with its deadlines from today.`)) return;
+    setBusy('send'); setError(null);
+    try {
+      await api.complaints.formalRaise(c.id, { send: { to: draft.to, subject: draft.subject, body: draft.body } });
+      await onDone('Sending the formal complaint now. Once it has gone, the complaint starts from today (Stage 1); you can carry on.');
+    } catch (e) { setError(e.message); setBusy(null); }
+  }
+  async function sentFromOutlook() {
+    if (!sentOn || sentOn > todayISO()) { setError('Enter the date it was sent (not in the future).'); return; }
+    if (!confirm(`Record the formal complaint as sent on ${formatDate(sentOn)}? The complaint then starts from that day: Stage 1, with its deadlines from then.`)) return;
+    setBusy('outlook'); setError(null);
+    try {
+      await api.complaints.formalRaise(c.id, { sent_on: sentOn });
+      await onDone(`Recorded: the formal complaint was made on ${formatDate(sentOn)}, and its deadlines run from then.`);
+    } catch (e) { setError(e.message); setBusy(null); }
+  }
+  return (
+    <Modal title={`Raise it as a formal complaint with ${c.org_name}`} onClose={onClose}>
+      {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        The emails so far don’t make a formal complaint, so {c.org_name} has no complaint to answer and nothing can
+        go to the ombudsman. This sends one under their complaints procedure. Once it has gone, this complaint starts
+        from that day (Stage 1), and the earlier emails stay on it as the background.
+      </p>
+      {!draft ? (
+        <div className="btn-row" style={{ marginBottom: 12 }}>
+          {aiEnabled && (
+            <button className="btn-primary" disabled={Boolean(busy)} onClick={makeDraft}>
+              {busy === 'draft' ? 'Drafting from the emails…' : 'Draft the formal complaint'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <label className="field">
+            <span className="lbl">To *</span>
+            <input value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} placeholder="their complaints address" />
+            {!draft.to && <span className="muted" style={{ fontSize: 12 }}>Their complaints address isn’t saved: enter it (and save it on the organisation for next time).</span>}
+          </label>
+          <label className="field">
+            <span className="lbl">Subject *</span>
+            <input value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
+          </label>
+          <label className="field">
+            <span className="lbl">Message * (check every fact and date before sending)</span>
+            <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          </label>
+          {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+            Copied in automatically: {c.email_address}{c.external_cc?.length ? `, ${c.external_cc.join(', ')}` : ''}.
+          </div>
+          <div className="btn-row" style={{ marginBottom: 12 }}>
+            <button className="btn-primary" disabled={Boolean(busy) || !draft.to || !draft.subject || !draft.body} onClick={sendNow}>
+              {busy === 'send' ? 'Sending…' : 'Send the formal complaint'}
+            </button>
+            <button className="btn" onClick={() => navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`).catch(() => {})}>
+              Copy it (to send from Outlook)
+            </button>
+          </div>
+        </>
+      )}
+      <details>
+        <summary style={{ cursor: 'pointer', fontSize: 13 }}>Already sent it from Outlook?</summary>
+        <div className="btn-row" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+          <label className="field" style={{ margin: 0, maxWidth: 180 }}>
+            <span className="lbl" style={{ fontSize: 12 }}>Date it was sent</span>
+            <input type="date" value={sentOn} max={todayISO()} onChange={(e) => setSentOn(e.target.value)} />
+          </label>
+          <button className="btn btn-sm" disabled={Boolean(busy)} onClick={sentFromOutlook}>
+            {busy === 'outlook' ? 'Recording…' : 'Record it as the formal complaint'}
+          </button>
+        </div>
+      </details>
+    </Modal>
+  );
+}
+
 function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
   const { user: me } = useAuth();
   const [orgs, setOrgs] = useState([]);

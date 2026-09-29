@@ -313,6 +313,9 @@ export const api = {
       }),
     // Raise it with the supplier a debt collector is acting for: an AI draft,
     // then send it from here (or record it sent from Outlook) and join them on.
+    // Making it a formal complaint (the emails show none was made): the AI's draft, then sent or recorded.
+    formalDraft: (id) => request(`/complaints/${id}/formal/draft`, { method: 'POST' }),
+    formalRaise: (id, data) => request(`/complaints/${id}/formal/raise`, { method: 'POST', body: JSON.stringify(data) }),
     supplierDraft: (id, data) =>
       request(`/complaints/${id}/supplier/draft`, { method: 'POST', body: JSON.stringify(data) }),
     supplierRaise: (id, data) =>

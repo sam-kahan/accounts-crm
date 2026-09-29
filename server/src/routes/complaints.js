@@ -381,6 +381,10 @@ async function afterSent(o, messageId) {
       scheduleReview(o.complaint_id);
       return;
     }
+    if (o.then_formal) {
+      await startFormalComplaint(o.complaint_id, sentOn, o.sent_by, { subject: o.subject, fromHere: true });
+      return;
+    }
     // The Stage 2 request moves the complaint on whichever button sent it:
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
@@ -1084,7 +1088,7 @@ router.get(
     // Copied in on every email sent from here (utilities@), so the page can say so.
     // Emails still going out, or that failed, shown on the complaint.
     const outbox = (await query(
-      `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
+      `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_formal, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, external_cc: config.smtp.externalCc });
@@ -1817,6 +1821,111 @@ router.post(
       body: ensureSignOff(r.email?.body || ''),
       caution: r.caution || null,
     });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Raising it as a FORMAL complaint, when the emails show none was ever made
+// (complaint_doubt 'not_complaint': a dispute or a query that never became a
+// complaint). The AI drafts the formal complaint under their procedure (one
+// call); sent from here (in the background) or from Outlook, the complaint is
+// then started from that day: Stage 1, every deadline and the ombudsman clock
+// running from the formal complaint, never from the earlier emails.
+// ---------------------------------------------------------------------------
+async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere = false } = {}) {
+  const before = (await query('SELECT raised_on, stage FROM complaints WHERE id = $1', [id])).rows[0];
+  if (!before) return;
+  await query(
+    `UPDATE complaints
+        SET raised_on = $2, stage = 'stage_1', stage_started_on = $2, acknowledged_on = NULL,
+            responded_on = NULL, final_response_on = NULL, response_due_manual = false,
+            channel = 'email', complaint_doubt = NULL
+      WHERE id = $1`,
+    [id, sentOn],
+  );
+  await recomputeDeadlines(id);
+  await query(
+    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'raised',$3,$4)`,
+    [id, sentOn,
+      `Formal complaint made${subject ? ` ("${subject}")` : ''}, ${fromHere ? 'sent from here' : 'sent from Outlook'}. ` +
+      `Its deadlines, and when it can go to the ombudsman, now run from ${ukDate(sentOn)}; the earlier emails are the background ` +
+      `that led to it (it had been recorded as made on ${ukDate(before.raised_on)}, at ${String(before.stage).replace('_', ' ')}).`,
+      by],
+  );
+  scheduleReview(id);
+}
+
+router.post(
+  '/:id/formal/draft',
+  asyncHandler(async (req, res) => {
+    if (!config.anthropic.enabled) throw new HttpError(503, 'The AI isn’t configured, so the complaint can’t be drafted.');
+    const ctx = await gatherContext(req.params.id, undefined, { files: 2 });
+    const c = ctx.complaint;
+    const days = c.rule?.defaulted?.includes('stage1Days') ? null : c.rule?.stage1Days;
+    const r = await assistComplaint({
+      ...ctx,
+      feature: 'Formal complaint draft',
+      instruction:
+        `The emails show a dispute with ${c.org_name} that was never made into a FORMAL complaint. Draft the email ` +
+        `that makes it one: a formal complaint to ${c.org_name} under their complaints procedure` +
+        `${c.rule?.procedureRef ? ` (${c.rule.procedureRef})` : ''}. It must: say plainly in the first lines that this is a ` +
+        'formal complaint and ask them to log it under their complaints procedure; quote the account number(s), the ' +
+        'property and any reference of theirs; set out, with dates from the emails and documents, what the problem is, ' +
+        'what Greenco has already asked for and what they have (or have not) done; say clearly what Greenco wants ' +
+        'done to put it right; and ask them to acknowledge the complaint, give their complaint reference and respond ' +
+        (days ? `within ${days} working days, as their procedure sets out. ` : 'within the time their complaints procedure sets out. ') +
+        'Do NOT say it has already been raised as a complaint, and do not ask for Stage 2 or mention the ombudsman. ' +
+        'Firm, polite, UK business English, no long dashes, UK dates. Use only facts in the context; put [square ' +
+        'brackets] only where a fact is genuinely unknown. In "email" give the subject and the full body, greeting to ' +
+        'sign-off (signed off with the [Name] and [Job title] placeholders, as always).',
+    });
+    res.json({
+      to: c.org_email || null,
+      subject: r.email?.subject || '',
+      body: ensureSignOff(r.email?.body || ''),
+      caution: r.caution || null,
+    });
+  }),
+);
+
+const formalRaiseInput = z.object({
+  send: z.object({
+    to: z.string().min(3),
+    cc: z.string().optional().nullable(),
+    subject: z.string().min(1),
+    body: z.string().min(1),
+  }).optional().nullable(),
+  sent_on: isoDate.optional().nullable(),
+});
+router.post(
+  '/:id/formal/raise',
+  asyncHandler(async (req, res) => {
+    const d = parse(formalRaiseInput, req.body);
+    if (!d.send && !d.sent_on) throw new HttpError(400, 'Send the complaint from here, or give the date it was sent.');
+    const c = await decoratedById(req.params.id);
+    if (c.state !== 'open') throw new HttpError(409, 'This complaint is closed.');
+    if (d.send) {
+      if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
+      const waiting = (await query(
+        `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_formal AND status <> 'sent'`, [c.id],
+      )).rows[0];
+      if (waiting) throw new HttpError(409, 'The formal complaint is already being sent (or failed and is waiting) on this complaint.');
+      const to = parseRecipients(d.send.to);
+      const cc = parseRecipients(d.send.cc);
+      if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
+      if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
+      for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
+      const out = (await query(
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal)
+         VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req)],
+      )).rows[0];
+      setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+      return res.status(202).json({ queued: true, outbox_id: out.id });
+    }
+    if (d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');
+    await startFormalComplaint(c.id, d.sent_on, who(req), { fromHere: false });
+    res.status(201).json(await decoratedById(c.id));
   }),
 );
 
