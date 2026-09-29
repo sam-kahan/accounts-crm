@@ -157,6 +157,18 @@ export default function ComplaintDetail() {
   const [referral, setReferral] = useState(null);
   const [referralBusy, setReferralBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Long lists show their latest few until asked for the rest, so the page
+  // (a phone's especially) isn't thousands of pixels of old emails.
+  const [showAll, setShowAll] = useState({});
+  const LIMIT = { docs: 5, emails: 6, events: 10 };
+  const firstOf = (key, list) => (showAll[key] ? list : list.slice(0, LIMIT[key]));
+  const moreButton = (key, list, what) => (list.length > LIMIT[key] ? (
+    <div style={{ padding: '10px 16px' }}>
+      <button className="btn btn-sm" onClick={() => setShowAll((x) => ({ ...x, [key]: !x[key] }))}>
+        {showAll[key] ? `Show the latest ${LIMIT[key]} only` : `Show all ${list.length} ${what}`}
+      </button>
+    </div>
+  ) : null);
   // A dated action (acknowledged / response / escalate / resolved) being recorded.
   const [action, setAction] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -1204,7 +1216,7 @@ export default function ComplaintDetail() {
         {c.attachments?.length ? (
           <table>
             <tbody>
-              {c.attachments.map((a) => (
+              {firstOf('docs', c.attachments).map((a) => (
                 <tr key={a.id}>
                   <td>
                     <a href={api.complaints.attachmentUrl(a.id)} target="_blank" rel="noreferrer">
@@ -1237,6 +1249,7 @@ export default function ComplaintDetail() {
             assistant.
           </div>
         )}
+        {moreButton('docs', c.attachments || [], 'documents')}
       </div>
 
       {/* Emails */}
@@ -1270,7 +1283,7 @@ export default function ComplaintDetail() {
         {c.emails?.length ? (
           <table>
             <tbody>
-              {c.emails.map((em) => (
+              {firstOf('emails', c.emails).map((em) => (
                 <tr key={em.id}>
                   <td className="due" style={{ width: 120 }}>
                     {formatDate(londonDay(em.received_at))}
@@ -1325,6 +1338,7 @@ export default function ComplaintDetail() {
         ) : (
           <div className="empty">No emails logged yet.</div>
         )}
+        {moreButton('emails', c.emails || [], 'emails')}
       </div>
 
       {/* Timeline */}
@@ -1361,7 +1375,7 @@ export default function ComplaintDetail() {
           {c.events?.length ? (
             <table style={{ marginTop: 8 }}>
               <tbody>
-                {c.events.map((e) => (
+                {firstOf('events', c.events).map((e) => (
                   <tr key={e.id}>
                     <td className="due" style={{ width: 120 }}>{formatDate(e.event_date)}</td>
                     <td style={{ width: 150 }}>
@@ -1383,6 +1397,7 @@ export default function ComplaintDetail() {
           ) : (
             <div className="empty">No events yet.</div>
           )}
+          {moreButton('events', c.events || [], 'entries')}
         </div>
       </div>
 
@@ -1707,7 +1722,7 @@ function ProcedureCard({ c, title, head }) {
         {p?.procedure_ref && <span className="badge navy">{p.procedure_ref}</span>}
       </div>
       <div className="card-body" style={{ paddingBottom: 0 }}>{head}{trust}</div>
-      <table>
+      <table className="no-stack steps-table">
         <tbody>
           {(c.steps || []).map((s) => {
             const [label, tone] = STEP_STATE[s.state] || [s.state, 'grey'];

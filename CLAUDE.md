@@ -79,7 +79,11 @@ From the Greenco logo — use these, don't invent colours:
     card's title, so put the thing a row is ABOUT first. Form fields are 16px
     there (smaller and an iPhone zooms in on every tap). Long, rarely-needed
     lists fold away behind a one-line summary (Tidy up) so the main list is
-    on the first screen.
+    on the first screen. A table with no headings isn't stacked; give it its
+    own phone rule if it needs one (the procedure checklist, `.steps-table`:
+    step, date and state on one line, the explanation under it). On the
+    complaint page, documents, emails and the timeline show their latest 5 /
+    6 / 10 with "Show all N" (`firstOf` / `moreButton`).
   - **PWA**: `manifest.webmanifest` + `sw.js` (network-first with an offline
     shell). Icons: `favicon-green-*` (`any`), `icon-maskable-{192,512}` (safe-zone
     padded on navy), `apple-touch-icon.png` (180×180 opaque). A new build's
@@ -120,10 +124,12 @@ From the Greenco logo — use these, don't invent colours:
   - Staff are invited by email (`routes/users.js` → `sendInviteEmail`): a
     password is never set by an administrator, only by the person themselves.
     Leavers are **deactivated, not deleted**, so their work stays attributable;
-    delete is only allowed for an invitation that was never taken up
-    (`invited_at` set, `last_login_at` null). "No login recorded" is NOT that
-    test — accounts predating this feature have none either, and deleting one
-    would destroy a colleague's account rather than tidy away a mistake.
+    delete is only allowed for an invitation that was never taken up: the
+    account was **created by invitation** (`created_by_invite`) and the person
+    never set a password or signed in (`password_set_at`, `last_login_at`
+    null) — `removable` on each user is that test. "No login recorded" is NOT
+    it (accounts predating staff accounts have none either), and nor is
+    `invited_at` (any account can be sent a link).
 - Manage users in the app: **Admin → Staff & access**. The script
   `node server/src/scripts/create-user.mjs <email> [name]` still exists for
   bootstrapping the first administrator (re-run to reset a password). Scripts that hit the API (bulk-import) log in
