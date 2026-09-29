@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
-import { trackOpen } from './complaintRules.js';
+import { trackOpen, awaitingFirstEmail } from './complaintRules.js';
 import { track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
@@ -268,6 +268,13 @@ export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', 
   // AI review still reads it. Only a LOW-confidence reading, or anything that
   // could be an acknowledgement or a response, waits for a person.
   const routine = a.kind !== 'our_email' && !couldChangeDate(a, text);
+  // Not sent to them yet: nothing from them can be their acknowledgement or
+  // response to it (it may answer an earlier request). The clock starts when
+  // the complaint is sent from here, so it waits for a person, never moving a
+  // date by itself.
+  if (awaitingFirstEmail(complaint) && a.kind !== 'our_email' && !routine) {
+    return { auto: false, reason: 'The complaint hasn’t been sent to them yet, so this can’t be their answer to it' };
+  }
   // Our own email (a CC'd copy of what we sent) is filed as correspondence
   // unless the AI was unsure; nothing else is filed without high confidence —
   // an uncertain "not from them" could be their real acknowledgement.

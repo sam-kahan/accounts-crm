@@ -182,3 +182,11 @@ test('planFromAnalysis: an unplaced acknowledgement or response on a two-organis
   const routine = { kind: 'other', confidence: 'high', from_organisation: true, sent_on: '2026-09-10', summary: 'Please send a meter reading' };
   assert.equal(planFromAnalysis(main, routine, { today: '2026-09-29', soleTrack: false }).auto, true);
 });
+
+test('not sent to them yet: their acknowledgement waits for a person, never dates the complaint', () => {
+  const plan = planFromAnalysis(complaint({ not_sent_yet: true }), analysis(), { today: TODAY });
+  assert.equal(plan.auto, false);
+  assert.match(plan.reason, /hasn’t been sent to them yet/);
+  // Once it has gone (the flag cleared), the same email is recorded as usual.
+  assert.equal(planFromAnalysis(complaint({ not_sent_yet: false }), analysis(), { today: TODAY }).auto, true);
+});

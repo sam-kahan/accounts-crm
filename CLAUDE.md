@@ -784,7 +784,9 @@ the page says how far each date can be trusted.
   them yet** (`status: 'not_sent'`, nothing to chase), `procedureSteps` has no
   dates (they would run from the day it was logged), no referral opens, and the
   morning email lists it as "Complaint NOT SENT YET" (never overdue). The page
-  offers **Draft the complaint email…**.
+  offers **Draft the complaint email…**. An email from them meanwhile (an
+  answer to an earlier request, forwarded in) never dates it by itself
+  (`planFromAnalysis` waits for a person): the clock starts when it is sent.
 - That is the formal-complaint draft and send (`/:id/formal/draft`,
   `/:id/formal/raise`, `FormalComplaintModal`) with its own wording: the draft
   reads the documents in full (one call, pressed by a person; an earlier email
