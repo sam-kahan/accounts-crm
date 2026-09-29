@@ -572,7 +572,9 @@ export async function recheckStatus() {
   return s;
 }
 
-export async function startRecheck({ by, force = false }) {
+// `onlyNever`: just the open complaints never re-checked (added since the
+// last run, or whose re-check failed), one AI read each.
+export async function startRecheck({ by, force = false, onlyNever = false }) {
   if (!config.anthropic.enabled) {
     const e = new Error('The AI isn’t configured (ANTHROPIC_API_KEY), so the emails can’t be read.');
     e.status = 503;
@@ -590,7 +592,7 @@ export async function startRecheck({ by, force = false }) {
   let state;
   try {
     ids = (await query(
-      `SELECT id FROM complaints WHERE state = 'open' ORDER BY imported DESC, raised_on`,
+      `SELECT id FROM complaints WHERE state = 'open' ${onlyNever ? 'AND rechecked_at IS NULL' : ''} ORDER BY imported DESC, raised_on`,
     )).rows.map((r) => r.id);
     state = {
       status: 'running', by: by || null, started_at: new Date().toISOString(), finished_at: null,

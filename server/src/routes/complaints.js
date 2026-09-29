@@ -956,7 +956,7 @@ router.post(
   '/recheck',
   asyncHandler(async (req, res) => {
     try {
-      res.status(202).json(await startRecheck({ by: who(req), force: Boolean(req.body?.force) }));
+      res.status(202).json(await startRecheck({ by: who(req), force: Boolean(req.body?.force), onlyNever: Boolean(req.body?.only_never) }));
     } catch (err) {
       throw new HttpError(err.status || 500, err.message);
     }

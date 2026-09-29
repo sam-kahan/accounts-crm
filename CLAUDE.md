@@ -803,6 +803,9 @@ the page says how far each date can be trusted.
   subject, and why: its re-check failed, with the reason, or it was added
   since the last run), listed in the Re-check card with links. A failed
   re-check sets no `rechecked_at`, so the count alone couldn't be acted on.
+  Up to three are named on the card's folded line itself, and **Re-check the
+  N never re-checked** runs just those (`POST /complaints/recheck`
+  `{only_never: true}` → `startRecheck({ onlyNever })`, one AI read each).
 - Checklist wording: "the standard for a debt collector, set by the FCA;
   their own procedure hasn't been researched yet" (no brackets in
   brackets), and a referral date that has passed but is held shows

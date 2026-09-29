@@ -335,7 +335,7 @@ export const api = {
       request(`/complaints/${id}/resolution-suggestion/dismiss`, { method: 'POST', body: JSON.stringify({ note: note || null }) }),
     // Re-check complaints against their emails: every open one, or one now.
     recheckStatus: () => request('/complaints/recheck'),
-    recheckAll: (force = false) => request('/complaints/recheck', { method: 'POST', body: JSON.stringify({ force }) }),
+    recheckAll: (force = false, onlyNever = false) => request('/complaints/recheck', { method: 'POST', body: JSON.stringify({ force, only_never: onlyNever }) }),
     recheck: (id) => request(`/complaints/${id}/recheck`, { method: 'POST' }),
     undoRecheck: (id) => request(`/complaints/${id}/recheck/undo`, { method: 'POST' }),
     // Emails that bounced, not yet looked into; and saying one has been.

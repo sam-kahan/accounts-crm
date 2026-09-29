@@ -28,21 +28,23 @@ export default function RecheckAll({ onChanged }) {
   if (!info) return err ? <div className="inline-note warn" style={{ marginBottom: 20 }}>{err}</div> : null;
   const run = info.run;
 
-  async function start(force) {
-    const n = info.open;
+  async function start(force, onlyNever = false) {
+    const n = onlyNever ? info.never_rechecked : info.open;
     const msg =
-      `Re-check all ${n} open complaint${n === 1 ? '' : 's'}?\n\n` +
+      `Re-check ${onlyNever ? (n === 1 ? 'the complaint never re-checked' : `the ${n} complaints never re-checked`) : `all ${n} open complaint${n === 1 ? '' : 's'}`}?\n\n` +
       'For each one: search the mailboxes for every account number and reference on it, read all its ' +
       'emails, and move it to the stage they show. Anything changed is noted on its timeline, can be ' +
       'undone, and is marked To check.\n\n' +
-      (force
-        ? 'Every complaint is read again, even with no new emails (one AI read each).'
-        : 'Complaints with no new emails since their last re-check are not read again.');
+      (onlyNever
+        ? `${n === 1 ? 'It is' : 'Each is'} read once (one AI read each).`
+        : force
+          ? 'Every complaint is read again, even with no new emails (one AI read each).'
+          : 'Complaints with no new emails since their last re-check are not read again.');
     if (!confirm(msg)) return;
     setBusy(true);
     setErr(null);
     try {
-      await api.complaints.recheckAll(force);
+      await api.complaints.recheckAll(force, onlyNever);
       await load();
     } catch (e) {
       setErr(e.message);
@@ -61,6 +63,14 @@ export default function RecheckAll({ onChanged }) {
         {running && <span className="badge amber" style={{ marginLeft: 8 }}>Running: {run.done} of {run.total}</span>}
         {!running && info.never_rechecked > 0 && (
           <span className="badge amber" style={{ marginLeft: 8 }}>{info.never_rechecked} never re-checked</span>
+        )}
+        {/* Which, right here: the count alone can't be acted on. */}
+        {!running && info.never?.length > 0 && info.never.length <= 3 && (
+          <span style={{ marginLeft: 8, fontWeight: 400, fontSize: 13 }}>
+            {info.never.map((c, i) => (
+              <span key={c.id}>{i ? ', ' : ''}<Link to={`/complaints/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.ref_code}</Link> {c.org_name}</span>
+            ))}
+          </span>
         )}
       </summary>
       <div className="card-body">
@@ -91,15 +101,19 @@ export default function RecheckAll({ onChanged }) {
               ))}
             </ul>
             <span style={{ fontSize: 12 }}>
-              To re-check {info.never.length === 1 ? 'it' : 'them'}, press Re-check all below: only complaints
-              with something new are read (one AI read each), so the ones already done cost nothing. Or open
-              {info.never.length === 1 ? ' it' : ' one'} and press “Re-check &amp; update next steps”.
+              Press “Re-check the {info.never.length === 1 ? 'one' : info.never_rechecked} never re-checked” below
+              (one AI read each), or open {info.never.length === 1 ? 'it' : 'one'} and press “Re-check &amp; update next steps”.
             </span>
           </div>
         )}
         {err && <div className="inline-note warn" style={{ marginBottom: 8 }}>{err}</div>}
         <div className="btn-row" style={{ marginBottom: 10 }}>
-          <button className="btn-primary btn-sm" disabled={busy || running || !info.ai || !info.open} onClick={() => start(false)}>
+          {info.never_rechecked > 0 && (
+            <button className="btn-primary btn-sm" disabled={busy || running || !info.ai} onClick={() => start(false, true)}>
+              {running ? 'Re-checking…' : info.never_rechecked === 1 ? 'Re-check the one never re-checked' : `Re-check the ${info.never_rechecked} never re-checked`}
+            </button>
+          )}
+          <button className={info.never_rechecked > 0 ? 'btn btn-sm' : 'btn-primary btn-sm'} disabled={busy || running || !info.ai || !info.open} onClick={() => start(false)}>
             {running ? 'Re-checking…' : `Re-check all ${info.open} open complaint${info.open === 1 ? '' : 's'}`}
           </button>
           {run && !running && (
