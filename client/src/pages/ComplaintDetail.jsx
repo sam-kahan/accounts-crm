@@ -716,7 +716,9 @@ export default function ComplaintDetail() {
     if (c.ai_review_current && own?.email?.body && own.email_step === 'stage2_request') return own.email;
     const accounts = (c.account_numbers || []).join(', ');
     const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
-    const days = t.rule?.stage2Days;
+    // Quoted as theirs only when their procedure states it: a standard figure
+    // filled in for them is never passed off as their rule.
+    const days = t.rule?.defaulted?.includes('stage2Days') ? null : t.rule?.stage2Days;
     return {
       subject: `Our complaint of ${formatDate(t.raised_on)}${about ? ` (${about})` : ''}: request for Stage 2 review [${c.ref_code}]`,
       body:
