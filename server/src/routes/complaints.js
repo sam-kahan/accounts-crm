@@ -26,6 +26,7 @@ import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../service
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
+import { lookFrom, nextCheckpoint } from '../services/mailCheckpoint.js';
 import {
   ingestEmails,
   listComplaintEmails,
@@ -179,7 +180,15 @@ async function fetchNow(res) {
     // 1. The catch-all: complaint addresses and the general inbox.
     let r = { fetched: 0, inserted: 0, matched: 0, ids: [] };
     try {
-      r = await ingestEmails(await fetchMailboxMessages(), { mailbox: config.ms.mailbox || null });
+      // From where the last look got to (the first look: the lookback window).
+      const checkpoint = await getSetting('catchall_since');
+      const lookStarted = new Date();
+      const got = await fetchMailboxMessages(lookFrom(checkpoint, (config.ms.lookbackDays || 14) * 86400000));
+      r = await ingestEmails(got.items, { mailbox: config.ms.mailbox || null });
+      errors.push(...(r.errors || []).map((e) => `catch-all: ${e}`));
+      const next = nextCheckpoint({ started: lookStarted, complete: got.complete && !r.stoppedAt, readTo: got.readTo, stoppedAt: r.stoppedAt });
+      if (next && config.ms.enabled) await setSetting('catchall_since', next);
+      if (!got.complete && !r.stoppedAt) errors.push('catch-all: more new mail than one check reads; the rest is read next time');
     } catch (err) {
       errors.push(`catch-all: ${err.message}`);
     }

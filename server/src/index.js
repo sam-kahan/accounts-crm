@@ -61,7 +61,10 @@ app.use(
   }),
 );
 
-app.use(morgan('dev'));
+// The request log never carries a key: the cron and bounce webhook keys can
+// ride in the query string (?key=…), and the journal is not a secret store.
+morgan.token('safe-url', (req) => String(req.originalUrl || req.url).replace(/([?&](?:key|token)=)[^&]*/gi, '$1[hidden]'));
+app.use(morgan(':method :safe-url :status :response-time ms - :res[content-length]'));
 app.use(express.json({ limit: '1mb' }));
 
 // A generous global rate limit as a blunt abuse backstop (per IP). Real login

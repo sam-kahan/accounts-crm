@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { fetchMailboxSince, fetchMessageText } from './graphMail.js';
 import { bounceFromMailbox } from './bounces.js';
 import { storeEmail } from './emailIngest.js';
+import { lookFrom, nextCheckpoint, passOverStuck, STUCK_TRIES } from './mailCheckpoint.js';
 import { getSetting, setSetting, watchedMailboxes } from './settings.js';
 import { postcodeOf, PARTY_COLS } from './orgMatch.js';
 import { buildNumberIndex, complaintsQuoted } from './numberMatch.js';
@@ -134,13 +135,12 @@ export async function watchMailboxes() {
   for (const mb of mailboxes) {
     // Overlap each look by an hour (storing is de-duplicated, and mail can land
     // late); a mailbox watched for the first time starts from the day before.
-    const from = since[mb]
-      ? new Date(new Date(since[mb]).getTime() - 3600000)
-      : new Date(Date.now() - 86400000);
+    const from = lookFrom(since[mb], 86400000);
     const started = new Date();
     try {
       const { items: mail, complete, readTo } = await fetchMailboxSince(mb, from);
       fetched += mail.length;
+      let stoppedAt = null;
       for (const e of mail) {
         // A bounce is flagged for a person to look into, never filed.
         try {
@@ -150,17 +150,26 @@ export async function watchMailboxes() {
         }
         const route = routeWatchedEmail(e, ctx);
         if (!route) continue;
-        const id = await storeEmail(e, { complaintId: route.complaintId, method: route.method, mailbox: mb });
-        if (id) ids.push(id);
+        try {
+          const id = await storeEmail(e, { complaintId: route.complaintId, method: route.method, mailbox: mb });
+          if (id) ids.push(id);
+        } catch (err) {
+          // Stop here so nothing after it is skipped by the checkpoint; one
+          // that fails three checks running is passed over and said.
+          if (await passOverStuck(mb, e)) {
+            errors.push(`${mb}: an email ("${String(e.subject || '').slice(0, 80)}") couldn't be stored after ${STUCK_TRIES} checks and was passed over: ${err.message}`);
+            continue;
+          }
+          errors.push(`${mb}: an email couldn't be stored (${err.message}); tried again next check`);
+          stoppedAt = e.receivedAt;
+          break;
+        }
       }
-      // Only move on once the whole window was read; a busy spell read in
-      // part is read again next time (storing is de-duplicated).
-      if (complete) since[mb] = started.toISOString();
-      else if (readTo) {
-        // Read oldest first: carry on from the last one read next time.
-        since[mb] = new Date(readTo.getTime() + 3600000).toISOString(); // (the next look steps back an hour)
-        errors.push(`${mb}: more new mail than one check reads; the rest is read next time`);
-      } else errors.push(`${mb}: more new mail than one check reads; the rest is read next time`);
+      // Only move on past what was dealt with; a busy spell read in part is
+      // carried on from the last one read (storing is de-duplicated).
+      const next = nextCheckpoint({ started, complete: complete && !stoppedAt, readTo, stoppedAt });
+      if (next) since[mb] = next;
+      if (!complete && !stoppedAt) errors.push(`${mb}: more new mail than one check reads; the rest is read next time`);
     } catch (err) {
       errors.push(`${mb}: ${err.message}`);
     }

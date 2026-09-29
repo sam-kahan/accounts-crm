@@ -41,12 +41,16 @@ async function getAppToken() {
   return cachedToken.value;
 }
 
+// A NUL character (it does turn up in mail) can't be stored in Postgres text
+// and would make an email impossible to keep: dropped wherever text is read.
+const text = (v) => (typeof v === 'string' ? v.replace(/\u0000/g, '') : v);
+
 function normalise(m) {
   return {
     graphId: m.id,
     messageId: m.internetMessageId ?? m.id,
-    subject: m.subject ?? null,
-    senderName: m.from?.emailAddress?.name ?? null,
+    subject: text(m.subject) ?? null,
+    senderName: text(m.from?.emailAddress?.name) ?? null,
     senderEmail: m.from?.emailAddress?.address ?? null,
     toAddresses: [
       ...(m.toRecipients ?? []),
@@ -55,7 +59,7 @@ function normalise(m) {
     ]
       .map((r) => r.emailAddress?.address ?? '')
       .filter(Boolean),
-    bodyPreview: m.bodyPreview ?? null,
+    bodyPreview: text(m.bodyPreview) ?? null,
     receivedAt: m.receivedDateTime ? new Date(m.receivedDateTime) : new Date(),
     sentAt: m.sentDateTime ? new Date(m.sentDateTime) : null,
     conversationId: m.conversationId ?? null,
@@ -131,7 +135,9 @@ export async function fetchMailboxSince(mailbox, since, maxPages = 40) {
 const undatedCache = new Map();
 export async function searchMailbox(mailbox, phrase, { from = null, to = null, max = 1000 } = {}) {
   if (!config.ms.enabled) return [];
-  const words = String(phrase || '').replace(/["\\()]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  // Characters Outlook's search reads as syntax (a "Ref:123" would be taken
+  // as a property restriction and refused) are spaces: the words are ANDed.
+  const words = String(phrase || '').replace(/["\\():*<>=]/g, ' ').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return [];
   const day = (d) => new Date(d).toISOString().slice(0, 10);
   const dated = [words.join(' AND '), from && `received>=${day(from)}`, to && `received<${day(to)}`]
@@ -176,19 +182,20 @@ export async function fetchConversation(mailbox, conversationId) {
   for (let page = 0; page < 20 && url; page += 1) {
     const json = await graphGet(url, { Prefer: 'outlook.body-content-type="text"' });
     for (const m of json.value ?? []) {
-      if (!m.isDraft) out.push({ ...normalise(m), bodyText: (m.body?.content || '').slice(0, 100000) });
+      if (!m.isDraft) out.push({ ...normalise(m), bodyText: text(m.body?.content || '').slice(0, 100000) });
     }
     url = json['@odata.nextLink'] || null;
   }
   return out.sort((a, b) => a.receivedAt - b.receivedAt);
 }
 
-export async function fetchMailboxMessages() {
-  if (!config.ms.enabled) return devEmails();
-  // The catch-all is a firehose, so pull everything within a lookback window
-  // and follow every page (capped), so nothing in the window is dropped.
-  const since = new Date(Date.now() - (config.ms.lookbackDays || 14) * 86400000);
-  return (await fetchMailboxSince(config.ms.mailbox, since)).items;
+// The catch-all is a firehose: read from `since` (the caller's checkpoint),
+// oldest first, so a window too big for one look is worked through in order
+// rather than the same oldest mail being read every time and new complaint
+// mail waiting days behind it.
+export async function fetchMailboxMessages(since) {
+  if (!config.ms.enabled) return { items: devEmails(), complete: true, readTo: null };
+  return fetchMailboxSince(config.ms.mailbox, since);
 }
 
 // The whole of one email: its text and its file attachments. Fetched only for
@@ -209,7 +216,7 @@ export async function fetchMessageText(graphId, mailbox = config.ms.mailbox) {
     `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(graphId)}?$select=body`,
     { Prefer: 'outlook.body-content-type="text"' },
   );
-  return (msg.body?.content || '').slice(0, 50000);
+  return text(msg.body?.content || '').slice(0, 50000);
 }
 
 export async function fetchMessageDetail(graphId, fallback = {}, mailbox = config.ms.mailbox) {
@@ -232,21 +239,29 @@ export async function fetchMessageDetail(graphId, fallback = {}, mailbox = confi
     base = `${messagesUrl(mailbox || config.ms.mailbox)}/${encodeURIComponent(id)}`;
     msg = await graphGet(`${base}?$select=body`, { Prefer: 'outlook.body-content-type="text"' });
   }
-  const bodyText = (msg.body?.content || '').slice(0, 100000);
+  const bodyText = text(msg.body?.content || '').slice(0, 100000);
 
   const attachments = [];
   const skipped = [];
-  const list = await graphGet(`${base}/attachments`);
+  // Listed without their contents, so an attachment over the cap is never
+  // downloaded (or held in memory) just to be skipped; the ones kept are
+  // fetched one at a time.
+  const list = await graphGet(`${base}/attachments?$select=id,name,size,contentType,isInline`);
   for (const a of list.value ?? []) {
     if (a['@odata.type'] !== '#microsoft.graph.fileAttachment' || a.isInline) continue;
-    if (attachments.length >= MAX_ATTACHMENTS || (a.size || 0) > MAX_ATTACHMENT_BYTES || !a.contentBytes) {
+    if (attachments.length >= MAX_ATTACHMENTS || (a.size || 0) > MAX_ATTACHMENT_BYTES) {
+      skipped.push(a.name || 'attachment');
+      continue;
+    }
+    const full = await graphGet(`${base}/attachments/${encodeURIComponent(a.id)}`);
+    if (!full.contentBytes) {
       skipped.push(a.name || 'attachment');
       continue;
     }
     attachments.push({
       filename: a.name || 'attachment',
       mimetype: a.contentType || 'application/octet-stream',
-      buffer: Buffer.from(a.contentBytes, 'base64'),
+      buffer: Buffer.from(full.contentBytes, 'base64'),
     });
   }
   return { bodyText, attachments, skipped };

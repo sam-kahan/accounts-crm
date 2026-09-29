@@ -1,6 +1,7 @@
 import { query, pool } from '../db/pool.js';
 import { complaintEmailAddress, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
+import { passOverStuck, STUCK_TRIES } from './mailCheckpoint.js';
 
 // ---------------------------------------------------------------------------
 // Email-to-complaint ingestion. The mailbox we poll is a shared, domain-wide
@@ -57,6 +58,8 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
   let matched = 0;
   const ids = [];
 
+  const errors = [];
+  let stoppedAt = null;
   for (const e of emails) {
     // A bounce is flagged for a person to look into, never filed.
     try {
@@ -71,11 +74,22 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
     // rest of the mailbox (spam / other teams' mail) is left untouched.
     if (!m.complaintId && m.method !== 'inbox') continue;
     matched += 1;
-    const id = await storeEmail(e, { complaintId: m.complaintId, method: m.method, mailbox });
-    if (id) ids.push(id);
+    try {
+      const id = await storeEmail(e, { complaintId: m.complaintId, method: m.method, mailbox });
+      if (id) ids.push(id);
+    } catch (err) {
+      // Stop here, so the checkpoint doesn't move past it, unless it has
+      // failed three looks running (then it is passed over and said).
+      if (!mailbox || !(await passOverStuck(mailbox, e))) {
+        errors.push(`an email couldn't be stored (${err.message}); tried again next check`);
+        stoppedAt = e.receivedAt;
+        break;
+      }
+      errors.push(`an email ("${String(e.subject || '').slice(0, 80)}") couldn't be stored after ${STUCK_TRIES} checks and was passed over: ${err.message}`);
+    }
   }
 
-  return { fetched: emails.length, inserted: ids.length, matched, ids };
+  return { fetched: emails.length, inserted: ids.length, matched, ids, errors, stoppedAt };
 }
 
 // Store one email, once: the same message copied to two mailboxes we read

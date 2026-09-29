@@ -150,7 +150,12 @@ function threadText(msgs) {
 
 async function backfillCandidate(k) {
   let found = [];
-  const msgs = await fetchConversation(k.mailbox, k.conversation_id).catch(() => []);
+  // A thread that can't be fetched just now is read next time, not from its
+  // summary once and never again (automatic import waits for this reading).
+  const msgs = await fetchConversation(k.mailbox, k.conversation_id).catch((err) => {
+    if (err.status === 404) return []; // gone: its summary is all there is
+    throw err;
+  });
   const text = msgs.length ? threadText(msgs) : `${k.subject || ''}\n${k.extracted?.summary || ''}`;
   found = await readAccountNumbers(text);
   const merged = cleanAccountNumbers([...(k.extracted?.account_numbers || []), ...found]);
@@ -232,18 +237,30 @@ const quotes = (msgs, key) => {
   return msgs.some((m) => quotesNumber(`${m.subject || ''}\n${m.bodyText || m.bodyPreview || ''}`, re));
 };
 
+const SEARCH_MAX = 400;
+const MAX_THREADS = 60;
 async function searchOne(c, number, mailboxes) {
   const { searchMailbox } = await import('./graphMail.js');
   const { storeEmail } = await import('./emailIngest.js');
   const { processHistoricalEmail } = await import('./complaintEmailProcessor.js');
   const key = keyOf(number);
-  const terms = [...new Set([key, String(number).replace(/\s+/g, '')])];
-  const convs = new Map(); // conversationId -> mailbox
+  // As written too: "850 123 456" is three words to Outlook's search, so the
+  // squashed forms never find an email that spaces it (each hit is checked
+  // below for the number itself).
+  const terms = [...new Set([key, String(number).replace(/\s+/g, ''), String(number).trim().replace(/\s+/g, ' ')])];
+  const convs = new Map(); // conversationId -> { mb, shows: the number is in its subject or preview }
+  let hitMax = false;
   for (const mb of mailboxes) {
     for (const term of terms) {
       try {
-        for (const m of await searchMailbox(mb, term, { max: 200 })) {
-          if (m.conversationId && !convs.has(m.conversationId)) convs.set(m.conversationId, mb);
+        const hits = await searchMailbox(mb, term, { max: SEARCH_MAX });
+        if (hits.length >= SEARCH_MAX) hitMax = true;
+        for (const m of hits) {
+          if (!m.conversationId) continue;
+          const shows = quotesNumber(`${m.subject || ''}\n${m.bodyPreview || ''}`, numberPattern(key));
+          const had = convs.get(m.conversationId);
+          if (!had) convs.set(m.conversationId, { mb, shows });
+          else if (shows && !had.shows) had.shows = true;
         }
       } catch (err) {
         if (err.status !== 403 && err.status !== 404) throw err; // no access to that mailbox: skip it
@@ -252,8 +269,20 @@ async function searchOne(c, number, mailboxes) {
   }
   let added = 0;
   let threads = 0;
-  for (const [conv, mb] of [...convs].slice(0, 40)) {
-    const msgs = await fetchConversation(mb, conv).catch(() => []);
+  // A number every bill quotes can match hundreds of threads: those whose
+  // subject or preview shows the number itself are read first (then newest
+  // first, as the search returns them), and a search that had more than it
+  // reads says so rather than "no further emails".
+  const ranked = [...convs].sort((a, b) => Number(b[1].shows) - Number(a[1].shows));
+  const cut = ranked.length > MAX_THREADS || hitMax;
+  for (const [conv, { mb }] of ranked.slice(0, MAX_THREADS)) {
+    let msgs;
+    try {
+      msgs = await fetchConversation(mb, conv);
+    } catch (err) {
+      if (err.status === 404) continue; // gone since the search
+      throw err; // not read: this number is searched again next time
+    }
     if (!msgs.length || !quotes(msgs, key)) continue; // doesn't really quote it
     let here = 0;
     for (const m of msgs.slice(0, 60)) {
@@ -279,7 +308,7 @@ async function searchOne(c, number, mailboxes) {
     }
     if (here) { added += here; threads += 1; }
   }
-  return { added, threads };
+  return { added, threads, cut, looked: Math.min(ranked.length, MAX_THREADS), found: ranked.length };
 }
 
 // Every number an email about this complaint could quote: its account numbers,
@@ -351,9 +380,12 @@ export async function searchComplaintEmails(c, { all = false, mailboxes = null, 
       const r = await searchOne(c, t.value, boxes);
       added += r.added;
       searchedKeys.push(t.key);
+      const more = r.cut
+        ? ` (it is in a great many emails: the ${r.looked} threads most likely to be about this complaint were read, not all of them; forward any that is missing to the complaint's address)`
+        : '';
       notes.push(r.added
-        ? `${r.added} email${r.added === 1 ? '' : 's'} in ${r.threads} thread${r.threads === 1 ? '' : 's'} quoting ${t.kind} ${t.value}`
-        : `no further emails quoting ${t.kind} ${t.value}`);
+        ? `${r.added} email${r.added === 1 ? '' : 's'} in ${r.threads} thread${r.threads === 1 ? '' : 's'} quoting ${t.kind} ${t.value}${more}`
+        : `no further emails quoting ${t.kind} ${t.value}${more}`);
     } catch (err) {
       ok = false; // that one is tried again next time
       console.error(`[complaints] searching for ${t.kind} ${t.value} (${c.ref_code}):`, err.message);

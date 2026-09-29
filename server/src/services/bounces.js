@@ -89,21 +89,31 @@ function reasonOf(body) {
 
 // The complaint the bounced email was about — only when that is certain: an
 // email of ours on a complaint went to that address (sent from the CRM, or
-// sent from Outlook and copied to a mailbox we read), the one with the
-// bounced subject first, else the latest. An organisation's address alone
-// is NOT enough (it may have several complaints open), so otherwise none:
-// the bounce still shows on every complaint that uses the address.
+// sent from Outlook and copied to a mailbox we read) with the bounced subject;
+// failing a subject match (a bounce that doesn't give one), only when ONE
+// complaint has emailed that address. An organisation's address is often on
+// several complaints, and a bounce linked to the wrong one tells the wrong
+// people; otherwise none, and the bounce still shows on every complaint that
+// uses the address.
 async function complaintFor(address, subject) {
   const { rows } = await query(
-    `SELECT complaint_id FROM complaint_emails
+    `SELECT complaint_id, subject FROM complaint_emails
       WHERE complaint_id IS NOT NULL
-        AND (direction = 'outbound' OR lower(sender_email) LIKE '%@' || $3)
+        AND (direction = 'outbound' OR lower(sender_email) LIKE '%@' || $2)
         AND $1 = ANY (SELECT lower(x) FROM unnest(to_addresses) x)
-      ORDER BY (subject IS NOT NULL AND $2::text IS NOT NULL AND position(lower(subject) in lower($2::text)) > 0) DESC,
-               received_at DESC LIMIT 1`,
-    [address, subject || null, String(config.complaintEmail.domain || '').toLowerCase()],
+      ORDER BY received_at DESC`,
+    [address, String(config.complaintEmail.domain || '').toLowerCase()],
   );
-  return rows[0]?.complaint_id || null;
+  const want = String(subject || '').trim().toLowerCase();
+  if (want) {
+    const hit = rows.find((r) => {
+      const sub = String(r.subject || '').trim().toLowerCase();
+      return sub && want.includes(sub);
+    });
+    if (hit) return hit.complaint_id;
+  }
+  const ids = [...new Set(rows.map((r) => r.complaint_id))];
+  return ids.length === 1 ? ids[0] : null;
 }
 
 // Record a bounce (once per bounce message and address). Returns the ids stored.
@@ -134,12 +144,15 @@ export async function recordBounce({ addresses, reason, source, sourceRef = null
 // A message read from a mailbox: if it is a bounce, record it and say so (so
 // the caller doesn't also treat it as a complaint email). The preview often
 // stops before the address, so the full text is fetched for a bounce only.
+// Bounces seen and found unrelated to complaints (per server run).
+const ignoredBounces = new Set();
 export async function bounceFromMailbox(e, mailbox, fetchText) {
   const ourDomain = config.complaintEmail.domain;
   let b = readBounce(e, { ourDomain, full: Boolean(e.bodyText) });
   if (!b) return false;
   const sourceRef = `${mailbox || ''}:${e.messageId || e.graphId}`;
   // Read before (each check looks back over the last while): already on file.
+  if (ignoredBounces.has(sourceRef)) return true;
   const seen = await query(`SELECT 1 FROM email_bounces WHERE source = 'mailbox' AND source_ref = $1 LIMIT 1`, [sourceRef]);
   if (seen.rows.length) return true;
   if ((!b.addresses.length || b.unconfirmed) && fetchText && !e.bodyText) {
@@ -160,7 +173,10 @@ export async function bounceFromMailbox(e, mailbox, fetchText) {
   for (const a of b.addresses) if (await addressRelated(a)) related.push(a);
   const aboutComplaint = /\bGC-C-[A-Z0-9]{6}\b|complain/i.test(`${subject} ${e.bodyText || e.bodyPreview || ''}`);
   if (!related.length && !(b.addresses.length === 0 && aboutComplaint)) {
-    // A bounce all the same: not filed as a complaint email, just not flagged.
+    // A bounce all the same: not filed as a complaint email, just not flagged
+    // (and not fetched again by the next check's overlap).
+    ignoredBounces.add(sourceRef);
+    if (ignoredBounces.size > 5000) ignoredBounces.clear();
     return true;
   }
   await recordBounce({

@@ -39,7 +39,10 @@ router.post(
       if (!b) continue;
       const ids = await recordBounce({
         addresses: [b.address], reason: b.reason, source: 'smtp2go',
-        sourceRef: b.ref || `${b.address}:${p?.sendtime || p?.time || p?.timestamp || ''}`, subject: b.subject,
+        // Without the event's own id or time there is nothing that says two
+        // events are the same one: no key, so a later bounce to the same
+        // address (after someone looked into the first) is never swallowed.
+        sourceRef: b.ref || ((p?.sendtime || p?.time || p?.timestamp) ? `${b.address}:${p.sendtime || p.time || p.timestamp}` : null), subject: b.subject,
       });
       flagged += ids.length;
     }

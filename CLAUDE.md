@@ -746,6 +746,37 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the mailbox watcher and searches
+- **The catch-all has a checkpoint** (`app_settings.catchall_since`,
+  `services/mailCheckpoint.js`, shared with the watched mailboxes): each check
+  carries on from where the last got to, oldest first. It re-read the oldest
+  2,000 of a 14-day window every time, so new complaint mail on a busy
+  catch-all waited days behind it.
+- **One email that can't be stored no longer stops a mailbox**: the look
+  stops there (the checkpoint never passes it), tries it again next check,
+  and after three checks passes over it with the reason in the check's
+  errors (`passOverStuck`, `app_settings.mail_stuck`). NUL characters, which
+  Postgres refuses in text, are dropped as mail is read (`graphMail.js#text`).
+- **The account/reference search is honest about what it read**: hits whose
+  subject or preview shows the number are read first, up to 60 threads of
+  400 results; a number in more says so on the timeline instead of "no
+  further emails". A thread that can't be fetched fails that number (tried
+  again later) instead of counting as "doesn't quote it". Numbers are also
+  searched as written ("850 123 456"), and characters Outlook's search reads
+  as syntax (`: * < > =`) are spaces, so a "Ref:123" no longer fails for
+  ever. A found thread's account numbers are read again next time when its
+  emails couldn't be fetched, not from its summary once and never again.
+- **A bounce is linked to a complaint only when certain**: the bounced
+  subject matches one of our emails to that address, or only one complaint
+  ever emailed it (`bounces.js#complaintFor`); it used to fall back to the
+  latest. An SMTP2GO event with no id or time has no de-duplication key (a
+  later bounce to the same address is recorded); an unrelated bounce isn't
+  fetched again each check.
+- **Keys never reach the request log**: `?key=` / `?token=` are shown as
+  `[hidden]` (morgan `safe-url`).
+- Attachments are listed without their contents and only the ones kept are
+  downloaded (one over the cap was downloaded just to be skipped).
+
 ### 2026-09-29 — fixes from a review of the past-complaints import
 - **A date the full reading dropped stays dropped**: import takes its dates
   from the full reading alone when there is one (`dateOf` in
