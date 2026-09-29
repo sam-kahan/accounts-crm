@@ -66,6 +66,12 @@ Return ONLY a single JSON object (no prose, no markdown fences) with exactly the
   "caution": string|null                 // anything to verify, or null
 }`;
 
+// A date as a letter writes it: "1 September 2026".
+function letterDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return iso;
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
 export function extractJson(text) {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -94,9 +100,10 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
     `THIS IS ALREADY A FORMAL COMPLAINT: it was made to ${complaint.org_name} on ${complaint.raised_on} and is now at ` +
       `${stageWords[complaint.stage] || complaint.stage}. Never write that Greenco is making, raising or opening a ` +
       'complaint, never ask them to log it as one, and never threaten to "raise a complaint" if things are not put ' +
-      `right. Refer to it as "our complaint of ${complaint.raised_on}" (with their reference where known), and when ` +
+      `right. Refer to it as "our complaint of ${letterDate(complaint.raised_on)}" (with their reference where known), and when ` +
       'escalating, name the next step in THEIR procedure (for example asking for the Stage 2 / complaints manager ' +
-      'review, or referral to the ombudsman once allowed).',
+      'review, or referral to the ombudsman once allowed). In anything written to them, write dates the UK way ' +
+      '("1 September 2026"), never as 2026-09-01.',
   );
   lines.push('');
   lines.push(`Organisation: ${complaint.org_name} (${rule.label})`);
