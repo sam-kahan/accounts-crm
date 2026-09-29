@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { guardReview, recommendsChasing, nextDueFromThem } from '../src/services/reviewGuard.js';
+import { guardReview, recommendsChasing, nextDueFromThem, chaseHeldUntil } from '../src/services/reviewGuard.js';
 
 const TODAY = '2026-09-28';
 const chase = {
@@ -206,6 +206,22 @@ test('the Stage 2 detector never takes a chaser, a condition or a refusal for th
   assert.equal(isStage2Request({ subject: 'x', body: 'We wish to escalate our complaint to Stage 2 of your procedure.' }), true);
 });
 
+test('a chaser that also asks for Stage 2 is the request: saying what they have not done is a reason, not a condition', () => {
+  const yes = [
+    { subject: 'Overdue Stage 1 response and request for Stage 2 review', body: 'As you have not yet responded to our complaint within the timescale in your procedure, we request that it is escalated to Stage 2.' },
+    { subject: 'Chasing our complaint', body: 'We have still not received your Stage 1 response, so please escalate our complaint to Stage 2 of your procedure.' },
+    { subject: 'x', body: 'No response has been received. We therefore ask that the complaint is passed to Stage 2 for review.' },
+  ];
+  for (const e of yes) assert.equal(isStage2Request(e), true, e.body);
+  const no = [
+    { subject: 'x', body: 'If you have not responded by Friday, please escalate our complaint to Stage 2.' },
+    { subject: 'x', body: 'Should you not reply by 5 Oct, please escalate our complaint to Stage 2.' },
+    { subject: 'x', body: 'We have not received a response; please do not escalate our complaint to Stage 2 yet.' },
+    { subject: 'x', body: 'Before we request a Stage 2 review, please let us have your Stage 1 response.' },
+  ];
+  for (const e of no) assert.equal(isStage2Request(e), false, e.body);
+});
+
 test('an overdue Stage 2 answer is chased, not waited for, when the review repeats the request', () => {
   const r = guardReview(
     { headline: 'Ask for Stage 2.', email: { subject: 'x', body: 'Please escalate our complaint to Stage 2.' }, email_now: true },
@@ -232,4 +248,19 @@ test('"sent it from Outlook" on the main organisation\'s step counts for the mai
     ourDomain: 'greenco.co.uk',
   });
   assert.equal(m.get('main').lastSentOn, '2026-09-30');
+});
+
+test('chaseHeldUntil: overdue but just written to is "wait", by the same rule as the next step', () => {
+  // Wrote to them Tue 29 Sep, no reply: held for 5 working days, to Tue 6 Oct.
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', today: '2026-09-29' }), '2026-10-06');
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', today: '2026-10-05' }), '2026-10-06');
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', today: '2026-10-06' }), null);
+  // Written lately even though they replied since: still given the gap.
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', lastTheirsOn: '2026-09-30', today: '2026-10-01' }), '2026-10-06');
+  // They replied after our last email, long enough ago: chase now.
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-15', lastTheirsOn: '2026-09-18', today: '2026-09-29' }), null);
+  // Never written to: nothing holds it.
+  assert.equal(chaseHeldUntil({ lastSentOn: null, today: '2026-09-29' }), null);
+  // Greenco wrote last and their own deadline is later: held to that.
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', nextDue: { date: '2026-10-09' }, today: '2026-10-07' }), '2026-10-09');
 });

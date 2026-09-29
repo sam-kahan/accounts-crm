@@ -207,7 +207,13 @@ router.get(
       const { rows } = await query(
         `SELECT * FROM complaints WHERE state = 'open'`,
       );
-      const chasing = (await decorateMany(rows)).filter((c) => c.any_needs_chasing).length;
+      const decorated = await decorateMany(rows);
+      // Overdue and not just written to (chase_now): the same rule the next
+      // step uses, so the tile never counts one whose step is to wait.
+      const chasing = decorated.filter((c) => c.any_chase_now).length;
+      // Against an organisation whose own procedure hasn't been researched
+      // (usually set up by an import): its dates are only the standard ones.
+      const unresearched = decorated.filter((c) => c.unresearched_orgs.length).length;
       const waiting = (
         await query(
           `SELECT count(*)::int AS n FROM complaint_emails
@@ -217,7 +223,7 @@ router.get(
       const toCheck = (await query('SELECT count(*)::int AS n FROM complaints WHERE needs_check')).rows[0].n;
       const bounced = (await query('SELECT count(*)::int AS n FROM email_bounces WHERE resolved_at IS NULL')).rows[0].n;
       const looksResolved = rows.filter((c) => c.resolution_suggested).length;
-      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced, looks_resolved: looksResolved };
+      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced, looks_resolved: looksResolved, unresearched };
     }
 
     res.json({

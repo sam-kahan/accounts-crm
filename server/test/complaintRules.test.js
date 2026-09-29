@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  procedureOnFile,
   addWorkingDays,
   workingDaysUntil,
   computeResponseDue,
@@ -281,4 +282,13 @@ test('a standard figure filled in on the form never replaces the standard rule (
   const own = effectiveRule({ ...org, procedure_sources: { stage1_response_days: 'document' } }, 'debt_collector');
   assert.equal(own.stage1Weeks, null);
   assert.equal(own.stage1Days, 40);
+});
+
+test('procedureOnFile: only an organisation whose own procedure has been found out', () => {
+  assert.equal(procedureOnFile(null), false); // not linked to a saved organisation
+  assert.equal(procedureOnFile({ research_status: 'none' }), false); // set up by an import, name only
+  assert.equal(procedureOnFile({ research_status: 'researched' }), true);
+  assert.equal(procedureOnFile({ research_status: 'document' }), true);
+  assert.equal(procedureOnFile({ research_status: 'manual' }), true);
+  assert.equal(procedureOnFile({ research_status: 'none', verified_at: '2026-09-01T10:00:00Z' }), true); // a person checked it
 });

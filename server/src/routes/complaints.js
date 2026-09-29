@@ -6,10 +6,10 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
-import { recheckComplaint, undoRecheck, startRecheck, recheckStatus } from '../services/complaintRecheck.js';
+import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
@@ -17,7 +17,7 @@ import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
-import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, PARTY_COLS } from '../services/orgMatch.js';
+import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
@@ -93,7 +93,7 @@ async function settleOverall(complaintId) {
 async function decoratedById(id) {
   const c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
   if (!c) throw new HttpError(404, 'Complaint not found');
-  return decorate(c);
+  return decorate({ ...c, recheck_progress: recheckProgressOf(c) });
 }
 
 
@@ -572,8 +572,9 @@ router.post(
     // One chaser per organisation that needs chasing: with more than one on a
     // complaint, each is chased under its own procedure and reference.
     const due = decorated.flatMap((c) => [
-      ...(c.needs_chasing ? [{ c, t: c }] : []),
-      ...(c.parties || []).filter((p) => p.needs_chasing).map((p) => ({ c, t: p })),
+      // Not one Greenco has just written to (its next step is to wait).
+      ...(c.chase_now ? [{ c, t: c }] : []),
+      ...(c.parties || []).filter((p) => p.chase_now).map((p) => ({ c, t: p })),
     ]).slice(0, 12);
 
     const drafts = [];
@@ -675,8 +676,8 @@ router.get(
     const decorated = await decorateMany(open);
 
     // Any organisation on it needing chasing puts the complaint in the list.
-    const overdue = decorated.filter((c) => c.any_needs_chasing);
-    const awaiting = decorated.filter((c) => !c.any_needs_chasing);
+    const overdue = decorated.filter((c) => c.any_chase_now);
+    const awaiting = decorated.filter((c) => !c.any_chase_now);
 
     const counts = (
       await query(`
@@ -848,7 +849,7 @@ router.get(
     const complaints = (await query(
       `SELECT c.id, c.ref_code, c.subject, c.org_name, c.organisation_id, c.property, c.raised_on, c.reference, c.our_reference, c.account_numbers, ${PARTY_COLS} FROM complaints c`,
     )).rows;
-    const orgs = (await query('SELECT id, name FROM organisations')).rows;
+    const orgs = (await query('SELECT id, name, research_status, verified_at FROM organisations')).rows;
     // Threads about the same issue are shown (and imported) as one complaint.
     // Rows being brought in are shown as their own group ("Importing…"), so
     // they are neither offered again nor grouped with pending ones.
@@ -877,6 +878,15 @@ router.get(
         error: group.map((c) => c.error).find(Boolean) || null,
         members: group.map((c) => ({ id: c.id, subject: c.subject, first_at: c.first_at, message_count: c.message_count })),
         existing: hit ? { id: hit.id, ref_code: hit.ref_code, subject: hit.subject } : null,
+        // The organisation it would be imported against (matched as the
+        // import matches it), and whether its own procedure is known: if not,
+        // the imported complaint's dates will be the standard ones until it
+        // is researched, and the list warns before it is brought in.
+        org: (() => {
+          if (!merged?.org_name) return null;
+          const o = matchOrgName(orgs, merged.org_name);
+          return { id: o?.id || null, name: o?.name || merged.org_name, on_file: Boolean(o), researched: procedureOnFile(o) };
+        })(),
         auto,
       };
     })));
@@ -1033,7 +1043,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
-    const decorated = await decorate(rows[0]);
+    const decorated = await decorate({ ...rows[0], recheck_progress: recheckProgressOf(rows[0]) });
     const events = await listEvents(req.params.id);
     const emails = await listComplaintEmails(req.params.id);
     const attachments = await listAttachments(req.params.id);
@@ -1763,17 +1773,13 @@ router.post(
   asyncHandler(async (req, res) => {
     if (!config.anthropic.enabled) throw new HttpError(503, 'The AI isn’t configured, so the emails can’t be read.');
     await decoratedById(req.params.id); // 404 now if it doesn't exist
-    // In the background: searching and reading a long history can take longer
-    // than the browser waits. The page watches rechecked_at for it finishing;
-    // a failure is written on the timeline so it is never silent.
-    const by = who(req);
-    recheckComplaint(req.params.id, { by, force: true, review: 'now' }).catch(async (err) => {
-      console.error(`[complaints] re-check ${req.params.id} failed:`, err.message);
-      await query(
-        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
-        [req.params.id, todayISO(), `Re-check against its emails failed: ${String(err.message).slice(0, 300)}. Nothing was changed.`, by],
-      ).catch(() => {});
-    });
+    // In the background, with its progress on the complaint for the page to
+    // follow (recheck_progress); a failure is written on the timeline too.
+    try {
+      await startComplaintRecheck(req.params.id, who(req));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
     res.status(202).json({ started: true });
   }),
 );

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, formatDate } from '../api';
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,13 @@ export default function EmailAutomation({ onChanged }) {
                         <div className="inline-note" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
                           <strong>Already in the system:</strong> {c.existing.ref_code}, {c.existing.subject}.
                           Link its emails there rather than importing it again.
+                        </div>
+                      )}
+                      {!c.existing && c.org && !c.org.researched && (
+                        <div className="inline-note warn" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
+                          <strong>⚠ {c.org.name}’s complaints procedure hasn’t been researched{c.org.on_file ? '' : ' (it isn’t saved yet; importing sets it up with just its name)'}.</strong>{' '}
+                          Imported now, its dates use the standard timescales until it is: research it on the{' '}
+                          <Link to={c.org.id ? `/organisations?open=${c.org.id}` : '/organisations'}>Organisations</Link> page. The complaint stays flagged until then.
                         </div>
                       )}
                       {c.error && c.status !== 'importing' && (

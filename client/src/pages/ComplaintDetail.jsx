@@ -46,6 +46,14 @@ const REVIEWED_AS = {
 // organisation) or one of its further organisations (c.parties). With more
 // than one organisation the title names whose step it is.
 const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name || 'ombudsman'}`);
+// "just now" / "4 min ago" / "2 hours ago", for how long something has been running.
+function sinceText(iso) {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!(mins >= 1)) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+}
 // A further organisation's row carries its complaint's id; the complaint doesn't.
 const partyIdOf = (t) => (t?.complaint_id ? t.id : null);
 const withOrg = (t, multi, title) => (multi ? `${title}: ${t.org_name}` : title);
@@ -237,6 +245,29 @@ export default function ComplaintDetail() {
     }, 3000);
     return () => clearTimeout(t);
   }, [c, sendingNow, pollMiss]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A re-check running in the background (the button, or one started before
+  // a reload): look again every few seconds until the server says how it
+  // ended — done, failed, or cut off by a restart — and say so.
+  const recheckRunning = c?.recheck_progress?.status === 'running';
+  const [recheckMiss, setRecheckMiss] = useState(0);
+  useEffect(() => {
+    if (!recheckRunning) return undefined;
+    const t = setTimeout(() => {
+      api.complaints.get(id).then((fresh) => {
+        setC(fresh);
+        const p = fresh.recheck_progress;
+        if (p?.status === 'running') return;
+        const note = (fresh.events || []).find((e) => /^(Re-check|The re-check|The AI review couldn)/.test(e.note || ''))?.note || '';
+        setMsg(p?.status === 'done'
+          ? (/^The AI review couldn/.test(note) ? note : `${note || 'Re-checked.'} The AI review below has the next steps.`)
+          : p?.status === 'failed' ? `The re-check failed: ${p.error || 'no reason given'}. Nothing was changed; you can press it again.`
+          : /^The re-check was cut off/.test(note) ? note
+          : 'The re-check was cut off by a server restart before it finished. Press Re-check & update next steps again.');
+      }).catch(() => setRecheckMiss((n) => n + 1));
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [c, recheckRunning, recheckMiss]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function retryOutbox(o) {
     try { await api.complaints.retryOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
@@ -792,6 +823,13 @@ export default function ComplaintDetail() {
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+      {recheckRunning && (
+        <div className="inline-note" style={{ marginBottom: 16 }} role="status">
+          <strong>Re-checking:</strong> {c.recheck_progress.step || 'starting'}…
+          {c.recheck_progress.started_at && ` (started ${sinceText(c.recheck_progress.started_at)})`}.
+          {' '}This usually takes a minute or two, longer if another email search is running; you can leave this page and come back.
+        </div>
+      )}
       {(c.outbox || []).map((o) => (
         o.status === 'failed' ? (
           <div key={o.id} className="inline-note warn" style={{ marginBottom: 12 }}>
@@ -832,43 +870,20 @@ export default function ComplaintDetail() {
               + Another organisation
             </button>
             {aiEnabled && (
-              <button className="btn-primary btn-sm" disabled={rechecking}
+              <button className="btn-primary btn-sm" disabled={rechecking || recheckRunning}
                 title="Search your mailboxes by every account number and reference, read all its emails, set its stage and dates from them, and update the AI review's next steps"
                 onClick={async () => {
                   if (!confirm('Re-check this complaint and update its next steps?\n\nIt searches your mailboxes for its account numbers and references, reads every email on it, moves its stage and dates to what the emails show (changes can be undone), then updates the AI review with the next steps. It takes a minute or two.')) return;
                   setRechecking(true);
                   setMsg(null);
-                  const FAILED = /^(Re-check against its emails failed|The AI review couldn’t be updated after the re-check)/;
-                  const failedBefore = (c.events || []).filter((e) => FAILED.test(e.note || '')).length;
                   try {
                     await api.complaints.recheck(id);
-                    setMsg('Re-checking: searching your mailboxes, reading its emails, then updating the next steps. This takes a minute or two; you can stay on this page.');
-                    // Done when the review has been rewritten (or something
-                    // failed, which is written on the timeline). Up to 10 minutes.
-                    let n = 0;
-                    const t = poll(async () => {
-                      n += 1;
-                      try {
-                        const fresh = await api.complaints.get(id);
-                        const failed = (fresh.events || []).filter((e) => FAILED.test(e.note || '')).length > failedBefore;
-                        // Server times only (a PC clock can be off): the
-                        // re-check has finished and the review was written after it.
-                        const reviewed = fresh.rechecked_at && fresh.rechecked_at !== c.rechecked_at &&
-                          fresh.ai_reviewed_at && new Date(fresh.ai_reviewed_at) >= new Date(fresh.rechecked_at);
-                        if (reviewed || failed || n > 120) {
-                          clearInterval(t);
-                          setC(fresh);
-                          setRechecking(false);
-                          const note = (fresh.events || []).find((e) => /^(Re-check|The AI review couldn)/.test(e.note || ''));
-                          setMsg(n > 120
-                            ? 'Still working; the result will appear on the timeline and in the AI review.'
-                            : `${note?.note || 'Re-checked.'}${reviewed ? ' The AI review below has the next steps.' : ''}`);
-                        }
-                      } catch { /* try again next tick */ }
-                    }, 5000);
-                  } catch (e) { setMsg(e.message); setRechecking(false); }
+                    // The page follows it from here (recheck_progress).
+                    await load();
+                  } catch (e) { setMsg(e.message); }
+                  setRechecking(false);
                 }}>
-                {rechecking ? 'Re-checking…' : 'Re-check & update next steps'}
+                {rechecking || recheckRunning ? 'Re-checking…' : 'Re-check & update next steps'}
               </button>
             )}
             <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit details</button>
@@ -1111,6 +1126,23 @@ export default function ComplaintDetail() {
         </div>
       )}
 
+      {/* Their own procedure isn't known yet (typically an organisation an
+          import set up with only a name): every date here is the standard
+          one, so say so before anyone relies on it. */}
+      {c.unresearched_orgs?.length > 0 && (
+        <div className="inline-note warn" style={{ marginBottom: 20 }} role="alert">
+          <strong>⚠ Complaints procedure not researched yet{c.imported ? ' (this complaint was imported before it was)' : ''}.</strong>{' '}
+          {[c, ...(c.parties || [])].filter((t) => t.procedure_missing && c.unresearched_orgs.includes(t.org_name)).map((t, i) => (
+            <span key={t.id}>
+              {i > 0 && ' '}
+              {t.organisation_id
+                ? <>The dates for <Link to={`/organisations?open=${t.organisation_id}`}>{t.org_name}</Link> use the standard timescales for {t.rule?.kind || 'this kind of organisation'}, not their own rules, so they may be wrong.</>
+                : <>{t.org_name} isn’t linked to a saved organisation (use Edit details to link it), so its dates use the standard timescales for {t.rule?.kind || 'this kind of organisation'}.</>}
+            </span>
+          ))}
+          {' '}Research the organisation (or upload their procedure document) on the Organisations page and tick “checked”: this complaint’s dates then update by themselves.
+        </div>
+      )}
       {c.needs_check && (
         <div className="inline-note warn" style={{ marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span>
@@ -1826,6 +1858,17 @@ function ProcedureCard({ c, title, head }) {
         <strong>These dates use general timescales for a {c.rule?.label?.toLowerCase() || 'body like this'}.</strong>{' '}
         Link {c.complaint_id ? `${c.org_name} to its saved organisation (Edit ${c.org_name}’s details)` : 'this complaint to the organisation (Edit details)'} and add their own procedure on the{' '}
         <Link to="/organisations">Organisations</Link> page, so the dates follow their rules.
+      </div>
+    );
+  } else if (c.procedure_missing) {
+    // Saved with only a name (an import sets organisations up like this): no
+    // procedure has been found out, so these are the standard dates.
+    trust = (
+      <div className="inline-note warn" style={{ marginBottom: 12 }}>
+        <strong>Not researched yet.</strong> These dates use the general timescales for{' '}
+        {c.rule?.kind || 'a body like this'}: nobody has looked up {p.name}’s own complaints procedure. Open{' '}
+        <Link to={`/organisations?open=${p.organisation_id}`}>{p.name}</Link>, research it (or upload their
+        procedure document), and tick “checked”.
       </div>
     );
   } else if (p.verified_at) {

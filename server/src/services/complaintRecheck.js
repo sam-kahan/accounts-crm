@@ -5,7 +5,7 @@ import { ukDate, trackOpen } from './complaintRules.js';
 import { overallState } from './complaintParties.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { reconstructComplaint } from './complaintReconstruct.js';
-import { cleanAccountNumbers, dropDigitSlips, slipNote, searchComplaintEmails, withSearchLock } from './accountNumbers.js';
+import { cleanAccountNumbers, dropDigitSlips, slipNote, searchComplaintEmails, withSearchLock, searchRunning } from './accountNumbers.js';
 import { getSetting, setSetting } from './settings.js';
 
 // ---------------------------------------------------------------------------
@@ -171,17 +171,27 @@ async function emailsOf(id) {
   }));
 }
 
-async function search(c, by) {
+// `step` says what it is doing, for the page following a re-check (no-op
+// for the run over every complaint).
+const quiet = async () => {};
+async function search(c, by, step = quiet, opts = { all: true }) {
   if (!config.ms.enabled) return { added: 0 };
-  return withSearchLock(() => searchComplaintEmails(c, { all: true, by }));
+  // Only one email search runs at a time; the background one (after each
+  // 5-minute check, and at start-up) can take several minutes.
+  if (searchRunning()) await step('Waiting for another email search to finish first');
+  return withSearchLock(async () => {
+    await step('Searching your mailboxes for its account numbers and references');
+    return searchComplaintEmails(c, { ...opts, by });
+  });
 }
 
 // Re-check one complaint. Returns what happened, for the run's report.
 // Write the complaint's AI review now (the page's one-press re-check). A
 // failure is put on the timeline rather than lost.
-async function reviewNow(id, by) {
+async function reviewNow(id, by, step = quiet) {
   const { refreshReview, cancelScheduledReview } = await import('./complaintReview.js');
   cancelScheduledReview(id); // e.g. one queued by the email search
+  await step('Writing the next steps (AI review)');
   try {
     await refreshReview(id);
   } catch (err) {
@@ -197,13 +207,13 @@ async function reviewNow(id, by) {
 // straight after, whatever changed, so one press gives the stage AND the next
 // steps. Otherwise (the run over every complaint) it is refreshed only when
 // something moved.
-export async function recheckComplaint(id, { by = RECHECK_BY, force = false, review = 'if_changed' } = {}) {
+export async function recheckComplaint(id, { by = RECHECK_BY, force = false, review = 'if_changed', step = quiet } = {}) {
   let c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
   if (!c) return { id, result: 'failed', text: 'No longer exists' };
   const brief = { id, ref_code: c.ref_code, subject: c.subject, org_name: c.org_name };
 
   // 1. Every email quoting its numbers (no AI).
-  const s1 = await search(c, by);
+  const s1 = await search(c, by, step);
 
   // 2. Nothing new since the last re-check: not read again.
   let sig = await emailSignature(id);
@@ -213,9 +223,10 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
   let msgs = await emailsOf(id);
   if (!msgs.length) {
     await query('UPDATE complaints SET rechecked_at = now(), recheck_signature = $2 WHERE id = $1', [id, sig]);
-    if (review === 'now') await reviewNow(id, by);
+    if (review === 'now') await reviewNow(id, by, step);
     return { ...brief, result: 'unchanged', text: 'No emails on file to read' };
   }
+  await step(`Reading its ${msgs.length} email${msgs.length === 1 ? '' : 's'}`);
   let x = await reconstructComplaint(msgs);
 
   // Account numbers the emails give that weren't on file: kept, and searched
@@ -242,12 +253,11 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
   if (fresh.length) {
     await query('UPDATE complaints SET account_numbers = $2 WHERE id = $1', [id, accounts]);
     c = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
-    const s2 = config.ms.enabled
-      ? await withSearchLock(() => searchComplaintEmails(c, { by }))
-      : { added: 0 };
+    const s2 = await search(c, by, step, {});
     added += s2.added || 0;
     if (s2.added) {
       msgs = await emailsOf(id);
+      await step(`Reading its ${msgs.length} emails, with the ones just found`);
       x = await reconstructComplaint(msgs);
     }
   }
@@ -340,12 +350,102 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
   }
   // Its standing review is refreshed only when something moved (an AI call
   // each; the owner watches the bill).
-  if (review === 'now') await reviewNow(id, by);
+  if (review === 'now') await reviewNow(id, by, step);
   else if (cols.length || added) {
     const { scheduleReview } = await import('./complaintReview.js');
     scheduleReview(id);
   }
   return { ...brief, result: cols.length ? 'changed' : 'unchanged', text, check: plan.differs.length > 0 };
+}
+
+// --- The complaint page's one-press re-check --------------------------------
+// In the background (a long history takes longer than a browser waits), with
+// where it has got to kept in complaints.recheck_progress (migration 040):
+// running with its step, then done, failed or interrupted. The page follows
+// that, so it always learns how the re-check ended, whatever happened.
+const runningHere = new Set();
+// When this server started: only a re-check begun before it can have been cut off.
+const serverStarted = new Date().toISOString();
+
+async function setProgress(id, fields) {
+  await query(
+    `UPDATE complaints SET recheck_progress = COALESCE(recheck_progress, '{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [id, JSON.stringify(fields)],
+  );
+}
+
+// The progress as the page should see it: "running" is only true while this
+// server is doing it; one left running by a server that stopped is shown as
+// interrupted (start-up records it properly: settleInterruptedRechecks).
+export function recheckProgressOf(c) {
+  const p = c?.recheck_progress;
+  if (p?.status === 'running' && !runningHere.has(c.id)) return { ...p, status: 'interrupted' };
+  return p || null;
+}
+
+// Claimed before anything is awaited, so two presses can't start two.
+export async function startComplaintRecheck(id, by) {
+  if (runningHere.has(id)) {
+    const e = new Error('This complaint is already being re-checked.');
+    e.status = 409;
+    throw e;
+  }
+  runningHere.add(id);
+  try {
+    await query('UPDATE complaints SET recheck_progress = $2 WHERE id = $1', [
+      id,
+      JSON.stringify({ status: 'running', step: 'Starting', started_at: new Date().toISOString(), by }),
+    ]);
+  } catch (err) {
+    runningHere.delete(id);
+    throw err;
+  }
+  (async () => {
+    try {
+      await recheckComplaint(id, { by, force: true, review: 'now', step: (step) => setProgress(id, { step }) });
+      await setProgress(id, { status: 'done', step: null, finished_at: new Date().toISOString() });
+    } catch (err) {
+      console.error(`[complaints] re-check ${id} failed:`, err.message);
+      const why = String(err.message).slice(0, 300);
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [id, todayISO(), `Re-check against its emails failed: ${why}. Nothing was changed.`, by],
+      ).catch(() => {});
+      await setProgress(id, { status: 'failed', error: why, finished_at: new Date().toISOString() }).catch(() => {});
+    } finally {
+      runningHere.delete(id);
+    }
+  })();
+}
+
+// At start-up: a re-check the restart cut off (a deploy restarts the server)
+// is marked interrupted, with a timeline note saying how far it got, so
+// neither the page nor anyone reading the complaint later is left guessing.
+// The stage and dates are changed in one transaction, so they either were
+// (it had reached the next steps) or weren't at all.
+export async function settleInterruptedRechecks() {
+  const { rows } = await query(
+    `UPDATE complaints
+        SET recheck_progress = recheck_progress || jsonb_build_object('status', 'interrupted', 'finished_at', now())
+      WHERE recheck_progress->>'status' = 'running'
+        AND COALESCE((recheck_progress->>'started_at')::timestamptz, '-infinity') < $1::timestamptz
+      RETURNING id, recheck_progress->>'step' AS step, recheck_progress->>'by' AS by`,
+    [serverStarted],
+  );
+  for (const r of rows) {
+    const reviewing = /^Writing the next steps/.test(r.step || '');
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [
+        r.id, todayISO(),
+        reviewing
+          ? 'The re-check was cut off by a server restart while it was writing the next steps. Its stage and dates had already been re-checked; press Refresh on the AI review for the next steps.'
+          : `The re-check was cut off by a server restart before it finished (it was at: ${String(r.step || 'starting').toLowerCase()}), so it changed nothing. Press Re-check & update next steps again.`,
+        r.by || RECHECK_BY,
+      ],
+    );
+  }
+  return rows.length;
 }
 
 // Undo what the last re-check changed on a complaint — only while every value

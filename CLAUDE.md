@@ -418,8 +418,8 @@ the page says how far each date can be trusted.
 - **`complaintRules.js` is the whole engine, pure and tested**:
   `computeAckDue`, `computeResponseDue`, `computeOmbudsmanFrom`,
   `computeOmbudsmanDeadline`, `deriveStatus` (adds `ack_overdue` and
-  `needs_chasing` — use `needs_chasing` for "needs chasing" lists, not
-  `status === 'response_overdue'`) and `procedureSteps` (the checklist the page
+  `needs_chasing` — overdue by the dates, not `status === 'response_overdue'`;
+  for "needs chasing" lists and counts use `chase_now`, below) and `procedureSteps` (the checklist the page
   shows). `addMonths` clamps to month end — an overflowing 31 Jan + 1 month
   would state a referral deadline later than the real one.
 - **Stored deadlines are recalculated, never left stale.** `response_due` and
@@ -562,8 +562,10 @@ the page says how far each date can be trusted.
   (reference, raised_on, stage, ack/response/final dates, response_due,
   ombudsman_deadline), read by the same rules engine and re-dated by
   `recomputePartyDeadlines`. `decorate`/`decorateMany` return `parties` (each
-  decorated), `org_names` and `any_needs_chasing` — use `any_needs_chasing` for
-  "needs chasing" lists. The step routes (`/events`, `/escalate`, email
+  decorated), `org_names`, `any_needs_chasing` (overdue) and `any_chase_now`
+  — use `any_chase_now` for "needs chasing" lists: overdue AND not held
+  because Greenco has just written to them (`chase_held_until`, from
+  `reviewGuard.js#chaseHeldUntil`, the same rule the next step is held by). The step routes (`/events`, `/escalate`, email
   review) take `party_id`; `complaint_events.party_id` and
   `complaint_emails.party_id` say whose track an entry is on. **The complaint
   stays open while any track is**: resolving the main track sets its *stage*
@@ -736,6 +738,32 @@ the page says how far each date can be trusted.
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-09-29 — procedure-not-researched warning; re-check never stuck; Stage 2 button; "Need chasing" agrees with the next step
+- **A complaint against an organisation whose procedure hasn't been
+  researched is flagged** (`complaintRules.js#procedureOnFile`: researched,
+  document, typed in, or checked; an import sets one up with only a name).
+  Each track has `procedure_missing`; `unresearched_orgs` lists the open ones.
+  Shown on the complaint page (banner, and the procedure card says "Not
+  researched yet" instead of "details entered"), the list (badge, a warning
+  naming each organisation with a link, a **Not researched** filter, and in
+  Needs attention), the dashboard tile, and on each past complaint found
+  BEFORE it is imported (`org` on `/past/candidates`).
+- **The page's re-check reports its progress** (migration `040`,
+  `complaints.recheck_progress`, `startComplaintRecheck`): the step it is on
+  (including waiting for another email search), then done / failed /
+  interrupted. The page follows it with no time limit, after a reload too;
+  a second press is refused (409). A restart marks one it cut off as
+  interrupted with a timeline note (`settleInterruptedRechecks`). It used to
+  infer the end from the AI review's time, so a restart (every deploy) left
+  it on "Re-checking…".
+- **`isStage2Request` takes a combined chaser and request**: "As you have not
+  responded … we request that it is escalated to Stage 2" is the request.
+  Negatives are read only in the ask itself; before it, only a condition or
+  a future (if / unless / failing / will / should you …) disqualifies.
+- **"Need chasing" leaves out what Greenco has just chased**: `chase_now`
+  (list filter, Needs attention, dashboard count, overdue chaser drafts); the
+  list shows "chased: wait until …" under the overdue status.
 
 ### 2026-09-29 — clearer wording, dates and phone layout
 - **Dashboard Complaints tile** is a short list ("13 need chasing", "9 emails

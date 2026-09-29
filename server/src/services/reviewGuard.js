@@ -62,6 +62,21 @@ export function wantsToSendNow(r) {
   return r.next_action?.type === 'send_email' || Boolean(r.email?.body) || recommendsChasing(r);
 }
 
+// Until when chasing is held because Greenco has written to them: the same
+// rule guardReview holds the advice by (sent in the last
+// CHASE_GAP_WORKING_DAYS, or Greenco wrote last and they still have time),
+// so a list of what "needs chasing" never includes a complaint whose next
+// step says to wait. Null when nothing holds it.
+export function chaseHeldUntil({ lastSentOn, lastTheirsOn, nextDue, today }) {
+  if (!lastSentOn) return null;
+  const day = today || todayISO();
+  let until = addWorkingDays(lastSentOn, CHASE_GAP_WORKING_DAYS);
+  if (nextDue && nextDue.date > until) until = nextDue.date;
+  const ballTheirs = !lastTheirsOn || lastSentOn >= lastTheirsOn;
+  const sentLately = workingDaysSince(lastSentOn, day) < CHASE_GAP_WORKING_DAYS;
+  return sentLately || (ballTheirs && day < until) ? until : null;
+}
+
 // facts: { anyOverdue, nextDue: {date, what} | null, lastSentOn, lastTheirsOn, today }
 //   lastSentOn    the last day Greenco wrote to them (an email sent, a chaser logged)
 //   lastTheirsOn  the last day an email arrived FROM them

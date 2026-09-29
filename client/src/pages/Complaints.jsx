@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { accountOrReference, api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, signEmail } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { accountOrReference, api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, signEmail, plural } from '../api';
 import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import EmailAutomation from '../components/EmailAutomation.jsx';
@@ -477,7 +477,7 @@ export default function Complaints() {
   // ?show=attention (the dashboard's tile) opens the list on that view.
   const [filter, setFilter] = useState(() => {
     const want = new URLSearchParams(window.location.search).get('show');
-    return ['attention', 'open', 'looks_resolved', 'overdue', 'check', 'resolved', 'all'].includes(want) ? want : 'open';
+    return ['attention', 'open', 'looks_resolved', 'overdue', 'check', 'unresearched', 'resolved', 'all'].includes(want) ? want : 'open';
   });
   const [search, setSearch] = useState('');
   const [copiedAccount, setCopiedAccount] = useState(null);
@@ -543,11 +543,22 @@ export default function Complaints() {
 
   // Any organisation on a complaint needing chasing counts (a complaint can be
   // with more than one: the debt collector and the supplier).
-  const overdue = items.filter((c) => c.any_needs_chasing ?? c.needs_chasing);
+  // Overdue AND not just written to: when Greenco has chased lately the next
+  // step is to wait, so it isn't listed as needing chasing (chase_now).
+  const overdue = items.filter((c) => c.any_chase_now);
   // What needs a person: an email says it's resolved, emails waiting to be
   // checked, needs chasing, or created by the system and not yet checked.
+  // Open complaints against an organisation whose own procedure hasn't been
+  // researched (usually set up by an import): their dates are only the
+  // standard ones, so they need a person too.
+  const unresearched = items.filter((c) => c.state === 'open' && c.unresearched_orgs?.length);
   const attention = items.filter((c) => c.state === 'open' &&
-    (c.resolution_suggested || c.new_emails > 0 || (c.any_needs_chasing ?? c.needs_chasing) || c.needs_check));
+    (c.resolution_suggested || c.new_emails > 0 || c.any_chase_now || c.needs_check ||
+      c.unresearched_orgs?.length));
+  // Each such organisation once, to research on the Organisations page.
+  const unresearchedOrgs = [...new Map(unresearched.flatMap((c) => [c, ...(c.parties || [])]
+    .filter((t) => t.procedure_missing && c.unresearched_orgs.includes(t.org_name))
+    .map((t) => [t.organisation_id || `name:${t.org_name}`, { id: t.organisation_id || null, name: t.org_name }]))).values()];
   function copyAccount(a) {
     navigator.clipboard?.writeText(a).catch(() => {});
     setCopiedAccount(a);
@@ -561,6 +572,7 @@ export default function Complaints() {
     filter === 'open' ? open :
     filter === 'resolved' ? items.filter((c) => c.state === 'resolved') :
     filter === 'check' ? items.filter((c) => c.needs_check) :
+    filter === 'unresearched' ? unresearched :
     items;
   // Search across everything a complaint is known by: subject, organisation,
   // property, our reference and theirs. Searching looks in every state, so an
@@ -649,10 +661,29 @@ export default function Complaints() {
         {q && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{shown.length} found, across every state</span>}
       </div>
 
+      {unresearched.length > 0 && (
+        <div className="inline-note warn" style={{ marginBottom: 12 }} role="alert">
+          <strong>⚠ {plural(unresearched.length, 'open complaint is', 'open complaints are')} against{' '}
+          {unresearchedOrgs.length === 1 ? 'an organisation' : 'organisations'} whose complaints procedure hasn’t been researched yet:</strong>{' '}
+          {unresearchedOrgs.map((o, i) => (
+            <span key={o.id || o.name}>
+              {i > 0 && ', '}
+              {o.id ? <Link to={`/organisations?open=${o.id}`}>{o.name}</Link> : <>{o.name} (not linked to a saved organisation)</>}
+            </span>
+          ))}
+          . Their dates use the standard timescales for that kind of organisation, not their own rules, so they may be wrong.
+          Open each organisation and research it (or upload their procedure document), then tick “checked”.{' '}
+          {filter !== 'unresearched' && (
+            <button type="button" className="btn-sm" onClick={() => setFilter('unresearched')}>Show them</button>
+          )}
+        </div>
+      )}
+
       <div className="toolbar flex-between">
         <div className="btn-row">
-          {['attention', 'open', 'looks_resolved', 'overdue', 'check', 'resolved', 'all'].map((f) => (
+          {['attention', 'open', 'looks_resolved', 'overdue', 'check', 'unresearched', 'resolved', 'all'].map((f) => (
             (f === 'check' && !items.some((c) => c.needs_check)) ||
+            (f === 'unresearched' && !unresearched.length) ||
             (f === 'looks_resolved' && !items.some((c) => c.state === 'open' && c.resolution_suggested)) ? null :
             <button
               key={f}
@@ -664,7 +695,8 @@ export default function Complaints() {
                 attention: `Needs attention (${attention.length})`,
                 open: 'Open',
                 looks_resolved: `Looks resolved (${items.filter((c) => c.state === 'open' && c.resolution_suggested).length})`,
-                overdue: 'Need chasing', check: `To check (${items.filter((c) => c.needs_check).length})`, resolved: 'Resolved', all: 'All',
+                overdue: 'Need chasing', check: `To check (${items.filter((c) => c.needs_check).length})`,
+                unresearched: `Not researched (${unresearched.length})`, resolved: 'Resolved', all: 'All',
               }[f]}
             </button>
           ))}
@@ -714,6 +746,12 @@ export default function Complaints() {
                   <td>
                     <strong>{c.subject}</strong>
                     {c.needs_check && <span className="badge amber" style={{ marginLeft: 6 }}>To check</span>}
+                    {c.state === 'open' && c.unresearched_orgs?.length > 0 && (
+                      <span className="badge amber" style={{ marginLeft: 6 }}
+                        title={`${c.unresearched_orgs.join(' and ')}: complaints procedure not researched yet, so these dates are the standard ones`}>
+                        Procedure not researched
+                      </span>
+                    )}
                     {c.state === 'open' && c.resolution_suggested && <span className="badge ok" style={{ marginLeft: 6 }}>Looks resolved: confirm</span>}
                     {c.new_emails > 0 && <span className="badge amber" style={{ marginLeft: 6 }}>{c.new_emails} new email{c.new_emails === 1 ? '' : 's'} to check</span>}
                     {c.state === 'open' && nextStepOf(c) && (
@@ -758,7 +796,15 @@ export default function Complaints() {
                     ))}
                   </td>
                   <td>
-                    {[c, ...(c.parties || [])].map((t) => <div key={t.id}><StatusBadge c={t} /></div>)}
+                    {[c, ...(c.parties || [])].map((t) => (
+                      <div key={t.id}>
+                        <StatusBadge c={t} />
+                        {/* Overdue, but Greenco has just written to them: the step is to wait. */}
+                        {t.chase_held_until && (
+                          <div className="muted" style={{ fontSize: 11 }}>chased: wait until {formatDate(t.chase_held_until)}</div>
+                        )}
+                      </div>
+                    ))}
                   </td>
                 </tr>
               ))}

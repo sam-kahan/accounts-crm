@@ -285,6 +285,19 @@ export function effectiveRule(org, type) {
   return rule;
 }
 
+// Has anyone found out this organisation's own complaints procedure? Yes when
+// their website was researched, their document read, figures typed in, or a
+// person has checked it. No when the complaint isn't linked to a saved
+// organisation, or the organisation was only set up (an import makes one with
+// nothing but a name, and research that fails leaves it the same): its dates
+// are then the standard ones for its type, not their rules, so the complaint
+// is flagged until it is researched.
+export function procedureOnFile(org) {
+  if (!org) return false;
+  if (org.verified_at) return true;
+  return ['researched', 'document', 'manual'].includes(org.research_status);
+}
+
 const stageStart = (c) => c.stage_started_on || c.raised_on;
 
 // Is this organisation's track still running? A complaint with more than one
@@ -653,6 +666,12 @@ const ASKS_FOR_STAGE2 = new RegExp(
 // A sentence that only threatens it, conditions it or turns it down is not
 // the request.
 const NOT_NOW = /\b(?:if|unless|otherwise|will|shall|should|may|might|could|would\s+have\s+to|intend|failing|before|not|no|never|yet)\b|n['’]t\b/i;
+// Before the ask, only a condition or a future makes it not the request. A
+// reason stays a reason: "As you have not responded … we request that it is
+// escalated to Stage 2" IS the request (a combined chaser and request always
+// says what they have not done), so "not", "no" and "yet" are only read in
+// the ask itself ("please do not escalate…").
+const CONDITION_BEFORE = /\b(?:if|unless|otherwise|failing|will|shall|may|might|could|would\s+have\s+to|intend|before|should\s+(?:you|we|they|this|it|the|your|there))\b/i;
 const CHASER_SUBJECT = /\b(?:chas(?:e|er|ing)|reminder|response|reply|follow[-\s]?up)\b/i;
 
 export function isStage2Request(email) {
@@ -663,5 +682,8 @@ export function isStage2Request(email) {
   const own = body.split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
   return own
     .split(/(?<=[.!?])\s+|\n+/)
-    .some((s) => ASKS_FOR_STAGE2.test(s) && !NOT_NOW.test(s));
+    .some((s) => {
+      const m = ASKS_FOR_STAGE2.exec(s);
+      return Boolean(m) && !NOT_NOW.test(s.slice(m.index)) && !CONDITION_BEFORE.test(s.slice(0, m.index));
+    });
 }

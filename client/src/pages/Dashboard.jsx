@@ -195,7 +195,7 @@ export default function Dashboard() {
         )}
         {complaints && (
           <Link
-            to={complaints.chasing || complaints.waiting || complaints.to_check || complaints.bounced || complaints.looks_resolved
+            to={complaints.chasing || complaints.waiting || complaints.to_check || complaints.bounced || complaints.looks_resolved || complaints.unresearched
               ? '/complaints?show=attention' : '/complaints'}
             className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}
           >
@@ -207,6 +207,9 @@ export default function Dashboard() {
               {complaints.to_check > 0 && <div>{plural(complaints.to_check, 'imported complaint')} to check</div>}
               {complaints.bounced > 0 && <div>{plural(complaints.bounced, 'bounced email')} to look into</div>}
               {complaints.looks_resolved > 0 && <div>{plural(complaints.looks_resolved, 'looks', 'look')} resolved</div>}
+              {complaints.unresearched > 0 && (
+                <div>{plural(complaints.unresearched, 'complaint')} on standard dates: organisation not researched</div>
+              )}
             </div>
           </Link>
         )}

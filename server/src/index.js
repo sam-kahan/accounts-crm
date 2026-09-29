@@ -258,6 +258,12 @@ app.listen(config.port, () => {
     .then(({ backfillAttachmentHashes }) => backfillAttachmentHashes({ limit: 5000 }))
     .then((n) => n && console.log(`  Documents hashed: ${n}`))
     .catch((err) => console.error('  Document hashes:', err.message));
+  // A complaint re-check this restart cut off says so (on the page and the
+  // timeline) rather than leaving the page on "Re-checking…".
+  import('./services/complaintRecheck.js')
+    .then(({ settleInterruptedRechecks }) => settleInterruptedRechecks())
+    .then((n) => n && console.log(`  Re-checks cut off by the restart: ${n}`))
+    .catch((err) => console.error('  Interrupted re-checks:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

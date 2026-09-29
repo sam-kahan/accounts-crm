@@ -10,9 +10,10 @@ import {
   effectiveRule,
   trackOpen,
   isStage2Request,
+  procedureOnFile,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
-import { guardReview, nextDueFromThem, guardByOrg, composeByOrg } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
@@ -85,6 +86,19 @@ export async function decorateMany(rows) {
       decorateWithOrg(r, orgOf(r)),
       parties.filter((p) => p.complaint_id === r.id).map((p) => decorateTrack(p, orgOf(p))),
     );
+    // Overdue isn't the same as "chase them now": when Greenco has just
+    // written to them, the next step is to wait (reviewGuard.js), so the
+    // "Need chasing" list and counts use chase_now, and say until when it is
+    // held. The overdue status itself is left as it is: it is still true.
+    const byTrack = contact.get(r.id);
+    for (const t of tracksForReview(c)) {
+      const own = t.key === 'main' ? c : c.parties.find((p) => p.id === t.key);
+      if (!own?.needs_chasing) continue;
+      const k = c.parties.length ? byTrack?.get(t.key) || {} : { lastSentOn: lastSent.get(r.id) || null, lastTheirsOn: lastTheirs.get(r.id) || null };
+      own.chase_held_until = chaseHeldUntil({ lastSentOn: k.lastSentOn || null, lastTheirsOn: k.lastTheirsOn || null, nextDue: nextDueFromThem([own]) });
+    }
+    for (const t of [c, ...c.parties]) t.chase_now = Boolean(t.needs_chasing && !t.chase_held_until);
+    c.any_chase_now = [c, ...c.parties].some((t) => t.chase_now);
     // Never "chase" what isn't due, or straight after writing to them —
     // applied to the review as shown, so one written before this rule (or
     // before the dates moved) can't say otherwise.
@@ -130,6 +144,11 @@ function withParties(c, parties) {
     ...all,
     org_names: [c.org_name, ...parties.map((p) => p.org_name)],
     any_needs_chasing: Boolean(c.needs_chasing || parties.some((p) => p.needs_chasing)),
+    // Organisations still running a part of it whose own procedure nobody
+    // has found out (not researched, no document, nothing entered), so its
+    // dates are the standard ones: typically set up by an import. Flagged on
+    // the page, the list and the dashboard until they are researched.
+    unresearched_orgs: [c, ...parties].filter((t) => t.procedure_missing && trackOpen(t)).map((t) => t.org_name),
     // The review is current when nothing it was written against has moved —
     // on any organisation's track.
     // With more than one organisation it must give each its own step
@@ -159,6 +178,8 @@ function decorateTrack(t, org) {
     org_email: org?.complaints_email || null,
     org_complaints_url: org?.complaints_url || null,
     procedure: procedureOf(org),
+    // Their own procedure isn't known yet: the dates are the standard ones.
+    procedure_missing: !procedureOnFile(org),
   };
 }
 
