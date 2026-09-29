@@ -79,11 +79,26 @@ From the Greenco logo — use these, don't invent colours:
     card's title, so put the thing a row is ABOUT first. Form fields are 16px
     there (smaller and an iPhone zooms in on every tap). Long, rarely-needed
     lists fold away behind a one-line summary (Tidy up) so the main list is
-    on the first screen. A table with no headings isn't stacked; give it its
-    own phone rule if it needs one (the procedure checklist, `.steps-table`:
-    step, date and state on one line, the explanation under it). On the
+    on the first screen. A table with no headings isn't stacked: its cells
+    flow instead (as many to a line as fit, a long one on its own line —
+    one rule, `table:not(:has(th))`, so a new one needs nothing), unless it
+    has its own layout: the procedure checklist `.steps-table` (step, date
+    and state on one line, the explanation under it) and the complaint
+    timeline `.timeline-table` (date and kind, the note under it). On the
     complaint page, documents, emails and the timeline show their latest 5 /
     6 / 10 with "Show all N" (`firstOf` / `moreButton`).
+  - **Wording**: counts say "1 email" / "3 emails", never "email(s)" —
+    `plural()` in `client/src/api.js` and `server/src/lib/words.js` (same
+    rule). Dates people read are UK dates, never `2026-09-30`: `formatDate`
+    on the client; on the server `ukDate()` ("Tue 29 Sep 2026") and
+    `readable()` (an ISO date → `ukDate`, anything else unchanged, for
+    "field: old → new" notes) in `complaintRules.js`. ISO is fine in AI
+    prompts, but the AI is told to write UK dates to organisations.
+  - **Write buttons wait**: anything that saves, sends or rolls a date on is
+    disabled while its request runs and reset in `finally`, and its error is
+    shown where the person is looking (inside an open window, not behind
+    it). Where a second press would do harm the server refuses it too (a
+    status claim, a unique index, or the value the page saw — see key dates).
   - **PWA**: `manifest.webmanifest` + `sw.js` (network-first with an offline
     shell). Icons: `favicon-green-*` (`any`), `icon-maskable-{192,512}` (safe-zone
     padded on navy), `apple-touch-icon.png` (180×180 opaque). A new build's
@@ -709,10 +724,37 @@ the page says how far each date can be trusted.
   exercised by stubbing `globalThis.fetch` in a throwaway script under
   `server/src/scripts/_t.mjs` (delete it after). Don't `pkill -f` a pattern
   that matches your own shell.
+- **Sending from a complaint is background** (`complaint_outbox`): Send and
+  "Raise it with the supplier" answer at once; the page follows the email
+  until it has gone, then the step is taken. Keep new sends on the outbox
+  rather than calling `sendMail` inside a request.
+- **Cross-repo**: `sam-kahan/invoices-manager` (the invoicing app, `v2/`) has
+  the endpoints this app calls — push, read, cancel, and
+  `GET /api/external/invoices?companyId=&reference=` (find by our GC-COM
+  reference, added 29 Sep). A change to the bridge usually needs both repos.
 - **Deploys restart the server**; `deploy.sh` waits for imports first. Push to
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-09-29 — clearer wording, dates and phone layout
+- **Dashboard Complaints tile** is a short list ("13 need chasing", "9 emails
+  to check", …) and opens the list on **Needs attention**
+  (`/complaints?show=attention`; the list reads `?show=` for its first view).
+- **"(s)" is gone**: `plural()` everywhere counts are shown, including notes
+  the system writes (Tidy up merges, past-complaint imports).
+- **UK dates in what people read**: timeline correction and re-dating notes,
+  the ombudsman referral pack, search results (`readable()` / `ukDate()`).
+  The AI is given the complaint date as "1 September 2026" and told never to
+  write ISO dates to organisations.
+- **The plain Stage 2 request** (no AI draft) quotes a timescale "as your
+  procedure sets out" only when their procedure states it (not a `defaulted`
+  `stage2Days`); otherwise it asks for a reply within the time their
+  procedure sets out.
+- **The search box's Enter waits for current results** (never opens a result
+  for the shorter text still on screen) and says when a search failed.
+- **Phones**: the complaint timeline and every heading-less table wrap
+  instead of being clipped (see Phones under Client).
 
 ### 2026-09-29 — nothing done twice by a double-click; month ends stay month ends
 - **Recurring key dates on a month end stay on the month end**
