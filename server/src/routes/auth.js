@@ -131,27 +131,39 @@ router.post(
   }),
 );
 
+// A new password ends every other way in: other unused reset/invite links,
+// and every other signed-in session (all of them after a reset, since whoever
+// asked for it may not be the one signed in; all but this one on a change).
+async function endOtherAccess(userId, keepSid = null) {
+  await query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [userId]);
+  await query(
+    `DELETE FROM session WHERE sess->>'userId' = $1::text AND ($2::text IS NULL OR sid <> $2)`,
+    [String(userId), keepSid],
+  ).catch((err) => console.error('[auth] sessions not ended:', err.message));
+}
+
 // Complete a reset with a valid token.
 router.post(
   '/reset',
   asyncHandler(async (req, res) => {
     const { token, password } = parse(resetInput, req.body);
+    // Claimed in one statement, so a link pressed twice at once can't be
+    // used twice.
+    const hash = await bcrypt.hash(password, 12);
     const { rows } = await query(
-      `SELECT * FROM password_reset_tokens
-        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+      `UPDATE password_reset_tokens SET used_at = now()
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+        RETURNING user_id`,
       [sha256(token)],
     );
     const rec = rows[0];
     if (!rec) throw new HttpError(400, 'This reset link is invalid or has expired.');
 
-    const hash = await bcrypt.hash(password, 12);
-    await query('UPDATE users SET password_hash = $2 WHERE id = $1', [
+    await query('UPDATE users SET password_hash = $2, password_set_at = now() WHERE id = $1', [
       rec.user_id,
       hash,
     ]);
-    await query('UPDATE password_reset_tokens SET used_at = now() WHERE id = $1', [
-      rec.id,
-    ]);
+    await endOtherAccess(rec.user_id);
     res.json({ ok: true });
   }),
 );
@@ -176,10 +188,11 @@ router.post(
     if (!ok) throw new HttpError(400, 'Current password is incorrect.');
 
     const hash = await bcrypt.hash(new_password, 12);
-    await query('UPDATE users SET password_hash = $2 WHERE id = $1', [
+    await query('UPDATE users SET password_hash = $2, password_set_at = now() WHERE id = $1', [
       user.id,
       hash,
     ]);
+    await endOtherAccess(user.id, req.sessionID);
     res.json({ ok: true });
   }),
 );

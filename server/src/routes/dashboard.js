@@ -26,12 +26,16 @@ async function collectDueItems(days = 30) {
     await query(
       `SELECT k.id, k.title, k.due_date, k.category, k.source, k.recurrence,
               c.name AS company_name,
-              (k.due_date < CURRENT_DATE) AS overdue
+              (k.due_date < $2::date) AS overdue
          FROM key_dates k JOIN companies c ON c.id = k.company_id
         WHERE k.status = 'pending'
-          AND k.due_date <= CURRENT_DATE + ($1 || ' days')::interval
+          -- A dissolved company files nothing more, and the sync no longer
+          -- rolls its dates on, so they would read as overdue for ever.
+          AND c.status <> 'dissolved'
+          AND k.due_date <= $2::date + ($1 || ' days')::interval
         ORDER BY k.due_date ASC`,
-      [days],
+      // Today in the UK, not the database server's clock.
+      [days, todayISO()],
     )
   ).rows.map((r) => ({
     type: 'key_date',
@@ -48,12 +52,12 @@ async function collectDueItems(days = 30) {
   const tasks = (
     await query(
       `SELECT t.id, t.title, t.due_date, t.priority, c.name AS company_name,
-              (t.due_date < CURRENT_DATE) AS overdue
+              (t.due_date < $2::date) AS overdue
          FROM tasks t LEFT JOIN companies c ON c.id = t.company_id
         WHERE t.status <> 'done' AND t.due_date IS NOT NULL
-          AND t.due_date <= CURRENT_DATE + ($1 || ' days')::interval
+          AND t.due_date <= $2::date + ($1 || ' days')::interval
         ORDER BY t.due_date ASC`,
-      [days],
+      [days, todayISO()],
     )
   ).rows.map((r) => ({
     type: 'task',
@@ -158,11 +162,11 @@ router.get(
         SELECT
           (SELECT count(*) FROM companies) AS companies,
           (SELECT count(*) FROM tasks WHERE status <> 'done') AS open_tasks,
-          (SELECT count(*) FROM key_dates
-             WHERE status = 'pending' AND due_date < CURRENT_DATE) AS overdue_key_dates,
+          (SELECT count(*) FROM key_dates k JOIN companies c ON c.id = k.company_id
+             WHERE k.status = 'pending' AND k.due_date < $1::date AND c.status <> 'dissolved') AS overdue_key_dates,
           (SELECT count(*) FROM tasks
-             WHERE status <> 'done' AND due_date < CURRENT_DATE) AS overdue_tasks
-      `)
+             WHERE status <> 'done' AND due_date < $1::date) AS overdue_tasks
+      `, [todayISO()])
     ).rows[0];
 
     // Contractor commission at a glance: what is waiting to be invoiced, and
@@ -181,19 +185,19 @@ router.get(
           -- next invoice, so there is nothing to chase.
           (SELECT COALESCE(sum(i.commission_amount), 0) FROM contractor_invoices i
              WHERE i.commission_invoice_id IS NULL AND NOT i.waived
-               AND i.invoice_date < date_trunc('month', CURRENT_DATE)
+               AND i.invoice_date < date_trunc('month', $1::date)
                AND NOT ${carriedLineSql('i')})                        AS earlier_commission,
           (SELECT count(DISTINCT to_char(i.invoice_date, 'YYYY-MM')) FROM contractor_invoices i
              WHERE i.commission_invoice_id IS NULL AND NOT i.waived
-               AND i.invoice_date < date_trunc('month', CURRENT_DATE)
+               AND i.invoice_date < date_trunc('month', $1::date)
                AND NOT ${carriedLineSql('i')})                        AS earlier_months,
           (SELECT COALESCE(sum(commission_amount), 0) FROM contractor_invoices
-             WHERE invoice_date >= date_trunc('month', CURRENT_DATE)) AS month_commission,
+             WHERE invoice_date >= date_trunc('month', $1::date)) AS month_commission,
           (SELECT COALESCE(sum(total_amount), 0) FROM commission_invoices
              WHERE status = 'sent')                                   AS awaiting_payment,
           (SELECT count(*) FROM commission_invoices
              WHERE status = 'sent')                                   AS awaiting_count
-      `)
+      `, [todayISO()])
     ).rows[0];
 
     // Complaints at a glance: open, and how many need chasing or have an
@@ -219,10 +223,13 @@ router.get(
     res.json({
       complaints,
       window_days: days,
+      // Only the figures of sections this viewer may see (null: not shown).
       counts: {
-        companies: Number(counts.companies),
-        open_tasks: Number(counts.open_tasks),
-        overdue: Number(counts.overdue_key_dates) + Number(counts.overdue_tasks),
+        companies: seeCompanies ? Number(counts.companies) : null,
+        open_tasks: seeTasks ? Number(counts.open_tasks) : null,
+        overdue: seeCompanies || seeTasks
+          ? (seeCompanies ? Number(counts.overdue_key_dates) : 0) + (seeTasks ? Number(counts.overdue_tasks) : 0)
+          : null,
       },
       overdue: items.filter((i) => i.overdue),
       upcoming: items.filter((i) => !i.overdue),
@@ -248,7 +255,8 @@ router.get(
 // scheduler can hit this endpoint daily later.
 router.post(
   '/send-reminders',
-  sessionOrCronKey,
+  // Everything the nightly job does, so administrators only by hand.
+  sessionOrCronKey('admin'),
   asyncHandler(async (req, res) => {
     const days = Number(req.body?.days) || 14;
 

@@ -280,6 +280,7 @@ export default function CompanyDetail() {
         )}
       </div>
 
+      {!company.tasks_hidden && (
       <div className="card">
         <div className="card-head">
           <h2>Tasks {openTasks.length > 0 && <span className="badge navy">{openTasks.length}</span>}</h2>
@@ -305,6 +306,7 @@ export default function CompanyDetail() {
           </table>
         )}
       </div>
+      )}
 
       {showAddDate && (
         <AddKeyDateModal

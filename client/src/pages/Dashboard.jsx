@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, daysUntil, formatMoney } from '../api';
+import { useAuth } from '../auth.jsx';
 
 const CATEGORY_LABEL = {
   year_end: 'Year end',
@@ -22,6 +23,9 @@ function DueBadge({ date }) {
 }
 
 function ItemRow({ item, onDismiss }) {
+  // Dismiss only for someone who may change it (the server would refuse it).
+  const { canEdit } = useAuth();
+  const mayDismiss = canEdit(item.type === 'task' ? 'tasks' : 'companies');
   const [busy, setBusy] = useState(false);
   const chManaged = item.type === 'key_date' && item.source === 'companies_house';
   const willRoll =
@@ -55,7 +59,7 @@ function ItemRow({ item, onDismiss }) {
       <td className="muted">{item.company_name || '—'}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
         <DueBadge date={item.due_date} />
-        <button
+        {mayDismiss && <button
           className="btn-ghost btn-sm"
           style={{ marginLeft: 8 }}
           disabled={busy}
@@ -70,13 +74,14 @@ function ItemRow({ item, onDismiss }) {
           }}
         >
           {busy ? '…' : 'Dismiss'}
-        </button>
+        </button>}
       </td>
     </tr>
   );
 }
 
 export default function Dashboard() {
+  const { canEdit } = useAuth();
   const [data, setData] = useState(null);
   const [sending, setSending] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -166,18 +171,25 @@ export default function Dashboard() {
   return (
     <>
       <div className="stat-row">
-        <div className="stat accent">
-          <div className="label">Companies</div>
-          <div className="value">{counts.companies}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Open tasks</div>
-          <div className="value">{counts.open_tasks}</div>
-        </div>
-        <div className={`stat ${counts.overdue ? 'alert' : ''}`}>
-          <div className="label">Overdue</div>
-          <div className="value">{counts.overdue}</div>
-        </div>
+        {/* A figure is null when this person can't see that section. */}
+        {counts.companies !== null && (
+          <div className="stat accent">
+            <div className="label">Companies</div>
+            <div className="value">{counts.companies}</div>
+          </div>
+        )}
+        {counts.open_tasks !== null && (
+          <div className="stat">
+            <div className="label">Open tasks</div>
+            <div className="value">{counts.open_tasks}</div>
+          </div>
+        )}
+        {counts.overdue !== null && (
+          <div className={`stat ${counts.overdue ? 'alert' : ''}`}>
+            <div className="label">Overdue</div>
+            <div className="value">{counts.overdue}</div>
+          </div>
+        )}
         {complaints && (
           <Link to="/complaints" className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}>
             <div className="label">Complaints</div>
@@ -231,17 +243,23 @@ export default function Dashboard() {
           <span className={`badge ${mailer.enabled ? 'ok' : 'grey'}`}>
             SMTP2GO {mailer.enabled ? 'ready' : 'not configured'}
           </span>
-          <button
-            className="btn btn-sm"
-            onClick={syncFromCH}
-            disabled={syncing}
-            title="Refresh statutory dates from Companies House now — filed items drop off"
-          >
-            {syncing ? 'Syncing…' : 'Sync all now'}
-          </button>
-          <button className="btn-navy btn-sm" onClick={sendReminders} disabled={sending}>
-            {sending ? 'Sending…' : 'Email me reminders'}
-          </button>
+          {/* Only for those allowed to run them: the sync changes company
+              dates, and the reminder run is the whole nightly job. */}
+          {canEdit('companies') && (
+            <button
+              className="btn btn-sm"
+              onClick={syncFromCH}
+              disabled={syncing}
+              title="Refresh statutory dates from Companies House now — filed items drop off"
+            >
+              {syncing ? 'Syncing…' : 'Sync all now'}
+            </button>
+          )}
+          {canEdit('admin') && (
+            <button className="btn-navy btn-sm" onClick={sendReminders} disabled={sending}>
+              {sending ? 'Sending…' : 'Email me reminders'}
+            </button>
+          )}
         </div>
       </div>
 

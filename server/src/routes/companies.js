@@ -13,6 +13,7 @@ import {
   syncAllCompanies,
 } from '../services/companySync.js';
 import { config } from '../config.js';
+import { can } from '../services/permissions.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -100,7 +101,10 @@ router.get(
         [req.params.id],
       )
     ).rows;
-    const tasks = (
+    // Its tasks only for someone who may see Tasks: the company page is
+    // reached with Companies access alone.
+    const showTasks = can(req.user, 'tasks');
+    const tasks = !showTasks ? [] : (
       await query(
         `SELECT * FROM tasks WHERE company_id = $1 ORDER BY
            (status = 'done'), due_date NULLS LAST`,
@@ -108,7 +112,7 @@ router.get(
       )
     ).rows;
 
-    res.json({ ...rows[0], key_dates: keyDates, tasks });
+    res.json({ ...rows[0], key_dates: keyDates, tasks, tasks_hidden: !showTasks });
   }),
 );
 
@@ -208,7 +212,7 @@ router.put(
       [
         req.params.id,
         data.name,
-        data.company_number || null,
+        data.company_number ? normaliseCompanyNumber(data.company_number) : null, // as Companies House writes it, so a typed and an imported company match
         data.status || 'active',
         data.incorporation_date || null,
         data.accounts_next_due || null,
@@ -251,7 +255,7 @@ async function insertCompany(data, client = { query }) {
      RETURNING ${COLS}`,
     [
       data.name,
-      data.company_number || null,
+      data.company_number ? normaliseCompanyNumber(data.company_number) : null, // as Companies House writes it, so a typed and an imported company match
       data.status || 'active',
       data.incorporation_date || null,
       data.accounts_next_due || null,

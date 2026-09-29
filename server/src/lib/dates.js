@@ -53,3 +53,24 @@ export function monthLabel(month) {
     timeZone: 'UTC',
   });
 }
+
+// The next occurrence of a recurring date AFTER `today` (marking a VAT
+// quarter or a PAYE month done). Each occurrence is counted from the ORIGINAL
+// date and clamped to the month's end, so 31 Aug monthly is 30 Sep, then
+// 31 Oct — never drifting to the 1st, a day after the real deadline — and
+// 29 Feb annual is 28 Feb in other years. As many periods as needed, so a
+// date several periods overdue doesn't land on another past date.
+export function nextOccurrence(dateStr, recurrence, today = todayISO()) {
+  const step = { annual: 12, quarterly: 3, monthly: 1 }[recurrence];
+  if (!step || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr || '')) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  for (let n = 1; n < 2400; n += 1) {
+    const total = y * 12 + (m - 1) + n * step;
+    const ty = Math.floor(total / 12);
+    const tm = total % 12;
+    const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+    const next = `${ty}-${String(tm + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+    if (next > today) return next;
+  }
+  return null;
+}

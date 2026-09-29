@@ -35,7 +35,7 @@ router.param('id', requireUuidParam);
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 const COLS = `id, email, name, job_title, role, permissions, active,
-  invited_at, last_login_at, created_at, updated_at`;
+  invited_at, last_login_at, created_at, updated_at, created_by_invite, password_set_at`;
 
 const permissionsInput = z.record(z.enum(SECTION_KEYS), z.enum(LEVELS)).optional();
 
@@ -57,7 +57,16 @@ const updateInput = z.object({
 
 function decorate(row) {
   if (!row) return row;
-  return { ...row, effective_permissions: effectivePermissions(row) };
+  // access_permissions: what they have when active. The edit form starts
+  // from it, so saving a deactivated person's name (or reactivating them)
+  // never wipes the access they had: effective is all "none" while inactive.
+  return {
+    ...row,
+    effective_permissions: effectivePermissions(row),
+    // The one test for "Remove" (the DELETE route asks the same).
+    removable: Boolean(row.created_by_invite && !row.last_login_at && !row.password_set_at),
+    access_permissions: effectivePermissions({ ...row, active: true }),
+  };
 }
 
 // Send someone a link to set their own password. Best-effort: a mail hiccup
@@ -143,8 +152,8 @@ router.post(
     // opened through the emailed link, which sets a real one.
     const placeholder = await bcrypt.hash(randomBytes(32).toString('hex'), 12);
     const { rows } = await query(
-      `INSERT INTO users (email, name, job_title, password_hash, role, permissions)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+      `INSERT INTO users (email, name, job_title, password_hash, role, permissions, created_by_invite)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, true)
        RETURNING ${COLS}`,
       [
         email,
@@ -236,7 +245,7 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      'SELECT id, last_login_at, invited_at FROM users WHERE id = $1',
+      'SELECT id, last_login_at, invited_at, created_by_invite, password_set_at FROM users WHERE id = $1',
       [req.params.id],
     );
     const user = rows[0];
@@ -246,7 +255,10 @@ router.delete(
     // recorded" is not the same thing: accounts that predate staff accounts
     // have none either, and deleting one of those would destroy a colleague's
     // account rather than tidying away a mistake.
-    const neverAccepted = !user.last_login_at && !!user.invited_at;
+    // Nor is "invited": any account can be sent a password link. It must have
+    // been CREATED by invitation, and the person never set a password or
+    // logged in.
+    const neverAccepted = user.created_by_invite && !user.last_login_at && !user.password_set_at;
     if (!neverAccepted) {
       throw new HttpError(
         409,

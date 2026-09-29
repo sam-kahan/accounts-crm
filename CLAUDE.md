@@ -94,7 +94,10 @@ From the Greenco logo — use these, don't invent colours:
   `/api/auth/*`. The unattended jobs (reminder digest, mailbox fetch) accept a
   session OR the cron key — sent as the `X-Cron-Key` header (preferred) or
   `?key=REMINDER_CRON_KEY` (legacy). Compared in constant time; see
-  `middleware/auth.js` (`sessionOrCronKey`).
+  `middleware/auth.js` (`sessionOrCronKey(section)`). A PERSON running one
+  also needs that section at edit level — the reminder run is `admin` (it
+  syncs every company, pushes invoices and spends AI credits), the mailbox
+  check is `complaints` — so being logged in is never enough.
 - **Trust model: one department, sections not records.** Everyone with a login
   is a member of the Greenco accounts department, so records are not owned by
   individuals — there is no per-row scoping, and anyone who can reach a section
@@ -703,6 +706,33 @@ the page says how far each date can be trusted.
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-09-29 — fixes from a review of access, staff accounts and key dates
+- **The nightly jobs need the right access when a person runs them**
+  (`sessionOrCronKey(section)`, see Auth): a read-only user could set off
+  the reminder run (Companies House sync, invoicing pushes, AI reviews). The
+  dashboard shows **Sync all now** / **Email me reminders** / **Dismiss** only
+  to those who may use them.
+- **The dashboard's figures follow access too** (`counts` are null for a
+  section the viewer can't see; the tiles hide), and the company page only
+  lists its tasks to someone with Tasks (`tasks_hidden`).
+- **"Today" on the dashboard is the UK day** (`todayISO()` passed in; SQL
+  `CURRENT_DATE` is the database's clock), and a **dissolved company** no
+  longer raises key-date reminders for ever.
+- **Recurring key dates don't drift** (`lib/dates.js#nextOccurrence`, tested):
+  counted from the original date and clamped to month end — 31 Aug monthly
+  is 30 Sep then 31 Oct, not 1 Oct forever after.
+- **Staff accounts** (migration `036`): an account is removable only if it
+  was **created by invitation** and the person never set a password or signed
+  in (`created_by_invite`, `password_set_at`; `removable` on each user, the
+  same test as `DELETE`) — resending a link no longer makes a colleague's
+  account deletable. A reset link is **claimed in one statement** (usable
+  once, even pressed twice at once), and a new password ends every other
+  unused link and every other session (`endOtherAccess`). Editing a
+  deactivated person starts from the access they had (`access_permissions`),
+  so saving no longer wipes it.
+- A company number typed by hand is stored as Companies House writes it
+  ("12345" → "00012345"), so it matches the same company imported.
 
 ### 2026-09-29 — AI usage page: what the AI costs, by feature
 - **Every AI call is recorded** (`ai_usage`, migration `035`) with what it was

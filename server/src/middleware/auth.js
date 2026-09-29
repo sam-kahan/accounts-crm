@@ -83,8 +83,13 @@ function safeEqual(a, b) {
 // jobs (reminder digest, mailbox fetch). The key is read from the X-Cron-Key
 // header (preferred) or ?key=/body.key (legacy — discouraged, as query strings
 // land in access logs). Compared in constant time.
-export function sessionOrCronKey(req, res, next) {
-  if (req.session?.userId) return requireAuth(req, res, next);
+// A person (session) also needs the given section: these jobs sync every
+// company, push to Greenco Invoicing and spend AI credits, so being logged in
+// is not enough — a read-only user must not be able to set them off.
+export const sessionOrCronKey = (section) => (req, res, next) => {
+  if (req.session?.userId) {
+    return requireAuth(req, res, (err) => (err ? next(err) : requirePermission(section)(req, res, next)));
+  }
   const provided = req.get('x-cron-key') || req.query.key || req.body?.key;
   if (config.reminderCronKey && provided && safeEqual(provided, config.reminderCronKey)) {
     // Mark it so the permission checks let it through: there is no user behind
@@ -93,4 +98,4 @@ export function sessionOrCronKey(req, res, next) {
     return next();
   }
   return next(new HttpError(401, 'Not authenticated'));
-}
+};

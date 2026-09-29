@@ -132,7 +132,7 @@ const input = z.object({
 // Defined before the requireAuth guard below so the cron can call it with a key.
 router.post(
   '/email/fetch',
-  sessionOrCronKey,
+  sessionOrCronKey('complaints'),
   asyncHandler(async (_req, res) => {
     const started = new Date().toISOString();
     const errors = [];

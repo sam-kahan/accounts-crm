@@ -72,7 +72,7 @@ function UserModal({ initial, options, onClose, onSaved }) {
           email: initial.email,
           job_title: initial.job_title || '',
           role: initial.role,
-          permissions: { ...initial.effective_permissions },
+          permissions: { ...(initial.access_permissions || initial.effective_permissions) },
           active: initial.active,
         }
       : {
@@ -376,7 +376,7 @@ export default function Users() {
                     {u.active && !u.last_login_at && u.invited_at && (
                       <button className="btn-ghost btn-sm" onClick={() => resend(u)}>Resend invite</button>
                     )}
-                    {!u.last_login_at && u.invited_at && u.id !== me?.id && (
+                    {u.removable && u.id !== me?.id && (
                       <button className="btn-danger btn-sm" onClick={() => remove(u)}>Remove</button>
                     )}
                   </td>
