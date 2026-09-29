@@ -3000,7 +3000,7 @@ function EvidenceCard({ c, onSaved }) {
           ) : (
             <>
               <ul style={{ margin: 0, padding: 0 }}>{ev.shared.filter((i) => ['outcome', 'losses'].includes(i.key)).map(row)}</ul>
-              <button className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => setEditing(true)}>
+              <button className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => { setOutcome(c.outcome_wanted || ''); setLosses(c.losses || ''); setError(null); setEditing(true); }}>
                 {c.outcome_wanted || c.losses ? 'Change these' : 'Add these'}
               </button>
             </>

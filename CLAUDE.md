@@ -768,9 +768,21 @@ the page says how far each date can be trusted.
   WANT and an EVIDENCE section (what's on file and missing); UK dates and
   readable stages throughout. The AI is given the outcome and losses as
   Greenco set them.
-- A complaint made formally from the page (a "Formal complaint made" entry)
-  is never questioned by a re-check again (no formal complaint / a
-  different date).
+- A complaint made formally from the page (its own "Formal complaint made"
+  entry, dated the day it is recorded as made) is never questioned by a
+  re-check again: `planRecheck(..., { formallyMade })` skips the "not a
+  complaint" stop and the date difference, and the rest of the re-check goes
+  ahead.
+- Fixes from a review: a copy a colleague FORWARDED in (only our address on
+  it) counts, placed by the part it was recorded on, who wrote it, or the one
+  organisation (`keysOf` in `evidenceChecklist`); a referred complaint keeps
+  its Stage 2 request (from the escalation entry) and says no final response
+  came; past Stage 1, their Stage 1 response has its own line; only calls
+  noted by a person count; the zip dates and orders emails by the day SENT
+  (a forward says when it was forwarded), labels ours by the usual test, keeps
+  a long file name's extension (`safeName(..., { keepExt })`), and leaves out
+  a removed organisation's emails AND their attachments (the checklist's
+  document count too).
 
 ### 2026-09-29 — "never re-checked" says which, and why
 - `GET /complaints/recheck` returns `never` (up to 20: ref, organisation,

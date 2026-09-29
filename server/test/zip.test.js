@@ -42,3 +42,11 @@ test('safe file names', () => {
   assert.equal(safeName(''), 'untitled');
   assert.equal(safeName('x'.repeat(200)).length, 80);
 });
+
+test('a long file name keeps its extension', () => {
+  const long = `${'A'.repeat(120)} statement.pdf`;
+  const n = safeName(long, 100, { keepExt: true });
+  assert.equal(n.length, 100);
+  assert.ok(n.endsWith('.pdf'));
+  assert.equal(safeName('short.pdf', 100, { keepExt: true }), 'short.pdf');
+});

@@ -511,8 +511,13 @@ async function evidenceFor(c, { events, emails, attachments }) {
   return evidenceChecklist({
     complaint: c,
     parties,
-    emails: own.map((e) => ({ id: e.id, subject: e.subject, ...(whose.get(e.id) || { keys: [], ours: false, on: null }) })),
-    docs: attachments,
+    emails: own.map((e) => ({
+      id: e.id, subject: e.subject, party_id: e.party_id, author_org: e.analysis?.author_org || null, kind: e.analysis?.kind || null,
+      ...(whose.get(e.id) || { keys: [], ours: false, on: null }),
+    })),
+    // Documents that came with an email of an organisation taken off the
+    // complaint are that organisation's history, like the email itself.
+    docs: attachments.filter((a) => !a.source_email_id || !emails.some((e) => e.id === a.source_email_id && e.removed_org)),
     events: events.filter((e) => !e.removed_org),
     forwardTo: c.email_address,
     today: todayISO(),
@@ -582,7 +587,9 @@ async function packText(ctx, grounds) {
   lines.push('');
   lines.push('GROUNDS FOR REFERRAL');
   lines.push('-'.repeat(48));
-  lines.push(grounds || 'Not drafted here: press “Build referral pack” on the complaint for the AI to draft the grounds from everything on file.');
+  lines.push(grounds === null
+    ? 'Not drafted here: press “Build referral pack” on the complaint for the AI to draft the grounds from everything on file.'
+    : grounds || '(The AI returned no grounds this time: build the pack again, or write them from the timeline below.)');
   lines.push('');
   lines.push('CASE TIMELINE');
   lines.push('-'.repeat(48));
@@ -621,26 +628,38 @@ router.get(
 // Everything to upload to the ombudsman in one download: the summary (the
 // referral pack without the AI's grounds, so no AI is used), every email as a
 // text file (oldest first, numbered, with who, when and to whom) and every
-// document as it was received. An organisation's emails from after it was
-// taken off the complaint are left out.
+// document as it was received. An organisation taken off the complaint: its
+// emails and what came with them are left out (its history, not this case).
 router.get(
   '/:id/evidence.zip',
   asyncHandler(async (req, res) => {
     const ctx = await gatherContext(req.params.id, undefined, { files: 0 });
     const c = ctx.complaint;
-    const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
+    const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }).replace('Sept', 'Sep');
     const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, null) }];
-    const emails = [...ctx.emails].filter((e) => !e.removed_org).reverse();
+    // Each email dated the day it was SENT (a forward's own date is only when
+    // it was forwarded), oldest first; ours by the same test as everywhere
+    // (sent from here, read as ours, or from our address with no reading).
+    const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
+    const isOurs = (e) => e.direction === 'outbound' || e.analysis?.kind === 'our_email' ||
+      (ourDomain && String(e.sender_email || '').toLowerCase().endsWith(`@${ourDomain}`) && !e.analysis?.kind);
+    const sentDay = (e) => (/^\d{4}-\d{2}-\d{2}$/.test(e.analysis?.sent_on || '') ? e.analysis.sent_on
+      : e.received_at ? londonDateOf(new Date(e.received_at)) : '');
+    // An organisation taken off the complaint: its emails (and what came with
+    // them) are its history, left out of what goes to the ombudsman.
+    const offIds = new Set(ctx.emails.filter((e) => e.removed_org).map((e) => e.id));
+    const emails = ctx.emails.filter((e) => !e.removed_org)
+      .sort((a, b) => sentDay(a).localeCompare(sentDay(b)) || new Date(a.received_at) - new Date(b.received_at));
     emails.forEach((e, i) => {
-      const day = e.received_at ? londonDateOf(new Date(e.received_at)) : '';
-      const dir = e.direction === 'outbound' || e.analysis?.kind === 'our_email' ? 'SENT' : 'RECEIVED';
+      const day = sentDay(e);
+      const forwarded = day && e.received_at && day !== londonDateOf(new Date(e.received_at));
       files.push({
-        name: `Emails/${String(i + 1).padStart(3, '0')} ${day} ${dir} ${safeName(e.subject, 60)}.txt`,
+        name: `Emails/${String(i + 1).padStart(3, '0')} ${day} ${isOurs(e) ? 'SENT' : 'RECEIVED'} ${safeName(e.subject, 60)}.txt`,
         date: e.received_at ? new Date(e.received_at) : undefined,
         data: [
           `From: ${e.sender_name ? `${e.sender_name} <${e.sender_email || ''}>` : e.sender_email || ''}`,
           `To: ${(e.to_addresses || []).join(', ')}`,
-          `Date: ${e.received_at ? when(e.received_at) : ''}`,
+          `Date: ${forwarded ? `${readable(day)} (as sent; forwarded here ${when(e.received_at)})` : e.received_at ? when(e.received_at) : ''}`,
           `Subject: ${e.subject || '(no subject)'}`,
           '',
           e.body_text || e.body_preview || '(no text kept)',
@@ -648,9 +667,9 @@ router.get(
       });
     });
     const docs = (await query(
-      `SELECT filename, storage_path, uploaded_at, sha256 FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at`,
+      `SELECT filename, storage_path, uploaded_at, sha256, source_email_id FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at`,
       [c.id],
-    )).rows;
+    )).rows.filter((d) => !d.source_email_id || !offIds.has(d.source_email_id));
     const seen = new Set();
     const unreadable = [];
     for (const d of docs) {
@@ -658,7 +677,7 @@ router.get(
       if (d.sha256) seen.add(d.sha256);
       try {
         files.push({
-          name: `Documents/${londonDateOf(new Date(d.uploaded_at))} ${safeName(d.filename, 100)}`,
+          name: `Documents/${londonDateOf(new Date(d.uploaded_at))} ${safeName(d.filename, 100, { keepExt: true })}`,
           date: new Date(d.uploaded_at),
           data: await fs.readFile(d.storage_path),
         });

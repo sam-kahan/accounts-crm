@@ -70,8 +70,11 @@ export function zipStore(files) {
 }
 
 // A file name safe on every system: no path separators or reserved
-// characters, not too long.
-export function safeName(s, max = 80) {
-  const clean = String(s || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return (clean || 'untitled').slice(0, max).trim();
+// characters, not too long. `keepExt`: a long name is shortened before its
+// extension, never through it (a "statement.pdf" that loses ".pdf" won't open).
+export function safeName(s, max = 80, { keepExt = false } = {}) {
+  const clean = String(s || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'untitled';
+  if (clean.length <= max) return clean;
+  const ext = keepExt ? (clean.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0] : '';
+  return `${clean.slice(0, max - ext.length).trim()}${ext}`;
 }

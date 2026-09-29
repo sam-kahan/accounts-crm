@@ -47,14 +47,18 @@ const DATE_LABEL = {
 //   notes    plain-English list of what changed
 //   differs  what the emails say that wasn't applied, for a person to check
 //   skip     why nothing was applied at all, or null
-export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {}) {
+// `formallyMade`: the complaint was made formally from the complaint page on
+// the day it is recorded as made, so whether it is a complaint and when it
+// was made are known for certain: the reading is never used to question
+// either, and the rest of the plan (stage, dates) goes ahead.
+export function planRecheck(c, x, { hasParties = false, today = todayISO(), formallyMade = false } = {}) {
   const changes = {};
   const notes = [];
   const differs = [];
   let doubt = null;
   const out = (skip = null) => ({ changes, notes, differs, skip, doubt });
   if (!x) return out('The emails could not be read');
-  if (x.is_complaint === false) {
+  if (x.is_complaint === false && !formallyMade) {
     doubt = { kind: 'not_complaint', why: x.not_complaint_why || 'no email shows a formal complaint being made' };
     return out('The emails don’t show a formal complaint being made');
   }
@@ -69,7 +73,7 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
   // The day it was made: every deadline and the ombudsman date run from it,
   // so a difference is put to a person whatever else happens below (a
   // complaint with more than one organisation included).
-  if (x.raised_on && c.raised_on && x.raised_on !== c.raised_on) {
+  if (!formallyMade && x.raised_on && c.raised_on && x.raised_on !== c.raised_on) {
     differs.push(`It is recorded as made on ${ukDate(c.raised_on)}, the emails say ${ukDate(x.raised_on)}`);
     doubt = { kind: 'raised_date', date: x.raised_on, quote: x.complaint_evidence?.quote || null,
       why: `the emails show the complaint was made on ${ukDate(x.raised_on)}, but it is recorded as ${ukDate(c.raised_on)}` };
@@ -319,15 +323,14 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
     const cur = (await client.query('SELECT * FROM complaints WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!cur) throw new Error('The complaint was removed while it was being re-checked');
     const hasParties = (await client.query('SELECT 1 FROM complaint_parties WHERE complaint_id = $1 LIMIT 1', [id])).rowCount > 0;
-    plan = planRecheck(cur, x, { hasParties });
     // Made as a formal complaint from the complaint page (sent from here, or
-    // recorded as sent from Outlook): whether it is one, and the day it was
-    // made, are known for certain, so a reading of the emails never
-    // questions either.
+    // recorded as sent from Outlook) on the day it is recorded as made: its
+    // own entry, not one a merge brought in or an organisation taken off.
     const formallyMade = (await client.query(
-      `SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND type = 'raised' AND note LIKE 'Formal complaint made%' LIMIT 1`, [id],
+      `SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND type = 'raised' AND note LIKE 'Formal complaint made%'
+          AND event_date = $2::date AND removed_org IS NULL LIMIT 1`, [id, cur.raised_on],
     )).rowCount > 0;
-    if (formallyMade && plan.doubt) plan = { ...plan, doubt: null };
+    plan = planRecheck(cur, x, { hasParties, formallyMade });
     cols = Object.keys(plan.changes);
     const before = {};
     for (const k of cols) before[k] = cur[k] ?? null;

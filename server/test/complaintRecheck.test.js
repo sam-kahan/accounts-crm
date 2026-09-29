@@ -76,3 +76,15 @@ test('leaving Stage 2 keeps their Stage 2 answer as the final response', () => {
   assert.equal(p.changes.stage, 'ombudsman');
   assert.equal(p.changes.final_response_on, '2026-05-01');
 });
+
+test('planRecheck: a complaint made formally from the page is never questioned, and still moves on', () => {
+  const c = { stage: 'stage_1', state: 'open', raised_on: '2026-09-01', stage_started_on: '2026-09-01' };
+  const x = { is_complaint: false, raised_on: '2026-04-17', confidence: 'high', stage: 'stage_1', state: 'open', acknowledged_on: '2026-09-03' };
+  const plain = planRecheck(c, x, { today: '2026-09-29' });
+  assert.equal(plain.doubt.kind, 'not_complaint');
+  const formal = planRecheck(c, x, { today: '2026-09-29', formallyMade: true });
+  assert.equal(formal.doubt, null);
+  assert.equal(formal.skip, null);
+  assert.equal(formal.differs.length, 0);
+  assert.equal(formal.changes.acknowledged_on, '2026-09-03');
+});
