@@ -147,7 +147,8 @@ export function guardReview(review, facts) {
   if (facts.stage2Asked && isStage2Request(review.email)) {
     // Their Stage 2 answer is overdue: asking for Stage 2 again is still
     // wrong, but "wait" would be too. Chase that answer, or refer.
-    if (facts.anyOverdue) {
+    // (Unless Greenco has just written to them: then it waits like any chase.)
+    if (facts.anyOverdue && !chaseHeldUntil(facts)) {
       const h = 'Stage 2 has already been asked for and their answer is overdue: chase them for it' +
         (facts.referral?.open ? ', or refer the complaint to the ombudsman now.'
           : `. Not the ombudsman yet: ${facts.referral?.why || 'check their procedure allows it first'}.`);
@@ -319,11 +320,17 @@ export function factsForTrack(t, contact = {}, today = undefined) {
 }
 
 // Each organisation's step, guarded against its own facts.
+// Returned in the order of `tracks`, one entry each, matched by key: every
+// reader (the page, the dashboard, the digest) takes an organisation's step
+// by its position, so after an organisation is added or taken off a stored
+// step is never read as another organisation's. One with no step is null.
+// (Entries stored without keys, from before keys, are taken by position.)
 export function guardByOrg(byOrg, tracks, contactOf, today = undefined) {
   if (!Array.isArray(byOrg)) return byOrg;
-  return byOrg.map((e, i) => {
-    const t = tracks.find((x) => x.key === e?.key) || tracks[i];
-    if (!e || !t) return e || null;
+  const keyed = byOrg.some((e) => e?.key);
+  return tracks.map((t, i) => {
+    const e = keyed ? byOrg.find((x) => x?.key === t.key) : byOrg[i];
+    if (!e) return null;
     if (!trackOpen(t)) return { ...e, headline: 'Their part of the complaint has ended. Nothing to do.', email: null, email_now: false, next_action: null };
     return { ...guardReview(e, factsForTrack(t, contactOf(t.key), today)), key: e.key, org_name: e.org_name };
   });
@@ -340,5 +347,10 @@ export function composeByOrg(review, tracks) {
     return h ? `${t.org_name}: ${h.replace(/[.\s]*$/, '.')}` : null;
   }).filter(Boolean);
   const headline = parts.join(' ') || review.headline;
-  return { ...review, headline, recommended_action: headline, email: null, email_now: false };
+  // The complaint-wide caution and next action were worked out before the
+  // steps were split by organisation, and would contradict them (a "Check:"
+  // about one organisation's chase under another's step): each
+  // organisation's own step carries its own.
+  return { ...review, headline, recommended_action: headline, email: null, email_now: false,
+    caution: null, guarded: null, next_action: null };
 }

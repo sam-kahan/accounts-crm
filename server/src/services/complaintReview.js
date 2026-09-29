@@ -4,7 +4,8 @@ import { ensureSignOff } from '../lib/signature.js';
 import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview, anyReferral } from './complaintContext.js';
 import { contactForOne } from './trackContact.js';
 import { assistComplaint } from './complaintAssistant.js';
-import { reviewSignature, normaliseNextAction } from './complaintRules.js';
+import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintRules.js';
+import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 
 export { reviewSignature };
@@ -69,6 +70,7 @@ const BY_ORG_INSTRUCTION =
 
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
+  const startedAt = new Date();
   // The two newest files only: the rest were read by earlier reviews, and
   // re-sending every PDF on every refresh is where the AI cost went.
   const ctx = await gatherContext(id, undefined, { files: 2 });
@@ -111,10 +113,17 @@ export async function refreshReview(id) {
       review.by_org = guardByOrg(normaliseByOrg(raw.by_org, tracks), tracks, (k) => contact.get(k) || {});
       review = composeByOrg(review, tracks);
     }
+    // Whether each organisation's part could go to the ombudsman when this
+    // was written: when that changes the review is out of date
+    // (complaintRules.js#reviewOutrun).
+    review.referral_open = [c, ...(c.parties || [])].map((t) => Boolean(t.referral?.open));
     await query(
       `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
-              ai_review_error = NULL WHERE id = $1`,
-      [id, JSON.stringify(review), reviewSignature(ctx.complaint)],
+              ai_review_error = NULL,
+              -- A change asked for a review while this one was being written: kept, so it follows.
+              review_wanted_at = CASE WHEN review_wanted_at <= $4 THEN NULL ELSE review_wanted_at END
+        WHERE id = $1`,
+      [id, JSON.stringify(review), reviewSignature(ctx.complaint), startedAt],
     );
     return review;
   } catch (err) {
@@ -137,6 +146,10 @@ export function cancelScheduledReview(id) {
 
 export function scheduleReview(id, delayMs = 120000) {
   if (!config.anthropic.enabled || !id) return;
+  // Kept on the complaint as well as in the timer: a restart (every deploy)
+  // within the two minutes would otherwise lose it, and a change that moves
+  // no date leaves nothing for the nightly check to notice.
+  query('UPDATE complaints SET review_wanted_at = now() WHERE id = $1', [id]).catch(() => {});
   clearTimeout(pending.get(id));
   pending.set(
     id,
@@ -145,6 +158,18 @@ export function scheduleReview(id, delayMs = 120000) {
       refreshReview(id).catch((err) => console.error(`[complaints] review ${id} failed:`, err.message));
     }, delayMs),
   );
+}
+
+// At start-up: the reviews asked for but not written before the server
+// stopped, one each (spaced out), so none is lost to a deploy.
+export async function resumeWantedReviews() {
+  if (!config.anthropic.enabled) return 0;
+  const { rows } = await query(
+    `SELECT id FROM complaints WHERE review_wanted_at IS NOT NULL
+        AND (ai_reviewed_at IS NULL OR review_wanted_at > ai_reviewed_at) ORDER BY review_wanted_at`,
+  );
+  rows.forEach((r, i) => scheduleReview(r.id, 120000 + i * 15000));
+  return rows.length;
 }
 
 // Nightly: refresh every open complaint whose review the calendar has
@@ -161,7 +186,8 @@ export async function refreshStaleReviews({ limit = 25 } = {}) {
     const c = await decorate(row);
     // Current, and (with more than one organisation) giving each its own step.
     if (row.ai_review && row.ai_review_status === reviewSignature(c) &&
-      (!(c.parties || []).length || Array.isArray(row.ai_review.by_org))) continue;
+      (!(c.parties || []).length || Array.isArray(row.ai_review.by_org)) &&
+      !reviewOutrun(row.ai_review, [c, ...(c.parties || [])], todayISO())) continue;
     try {
       await refreshReview(row.id);
       refreshed += 1;

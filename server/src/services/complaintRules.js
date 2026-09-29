@@ -798,6 +798,21 @@ export const REVIEW_ACTIONS = [
   'send_email', 'escalate_stage2', 'refer_ombudsman', 'record_acknowledgement',
   'record_response', 'resolve', 'wait',
 ];
+// A review the calendar has overtaken although nothing it was written against
+// moved: its "wait until <date>" has passed (for the complaint, or for one of
+// its organisations), or a referral has opened or closed since it was
+// written (it was told whether one could go). The signature can't see
+// either: the dates alone didn't change.
+export function reviewOutrun(review, tracks = [], today) {
+  if (!review) return false;
+  const passed = (na) => na?.type === 'wait' && na.by && na.by < today;
+  if (passed(review.next_action)) return true;
+  if (Array.isArray(review.by_org) && review.by_org.some((e) => passed(e?.next_action))) return true;
+  if (Array.isArray(review.referral_open) && review.referral_open.length === tracks.length &&
+    review.referral_open.some((v, i) => v !== Boolean(tracks[i]?.referral?.open))) return true;
+  return false;
+}
+
 export function normaliseNextAction(a) {
   if (!a || typeof a !== 'object' || !REVIEW_ACTIONS.includes(a.type)) return null;
   const by = typeof a.by === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.by) ? a.by : null;

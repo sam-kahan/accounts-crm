@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { todayISO } from '../lib/dates.js';
 import { HttpError } from '../lib/http.js';
 import { complaintEmailAddress, config } from '../config.js';
 import {
@@ -13,6 +14,7 @@ import {
   procedureOnFile,
   ukDate,
   referralOpen,
+  reviewOutrun,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { loadSchemes, schemeFor } from './ombudsmen.js';
@@ -183,7 +185,8 @@ function withParties(c, parties) {
     // With more than one organisation it must give each its own step
     // (by_org); one written before that is out of date.
     ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all) &&
-      (!parties.length || Array.isArray(c.ai_review.by_org)),
+      (!parties.length || Array.isArray(c.ai_review.by_org)) &&
+      !reviewOutrun(c.ai_review, [all, ...(all.parties || [])], todayISO()),
   };
 }
 

@@ -376,6 +376,11 @@ app.listen(config.port, () => {
     .then(({ escalateMissedStage2Requests }) => escalateMissedStage2Requests())
     .then((n) => n && console.log(`  Stage 2 requests caught up: ${n}`))
     .catch((err) => console.error('  Stage 2 catch-up:', err.message));
+  // Reviews asked for before a restart (a deploy) and not yet written.
+  import('./services/complaintReview.js')
+    .then(({ resumeWantedReviews }) => resumeWantedReviews())
+    .then((n) => n && console.log(`  AI reviews carried over from before the restart: ${n}`))
+    .catch((err) => console.error('  Carrying over AI reviews:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

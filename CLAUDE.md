@@ -746,6 +746,33 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the re-check and the AI review
+- **A review the calendar has overtaken is out of date** even when no date
+  moved (`complaintRules.js#reviewOutrun`, used by `ai_review_current` and
+  the nightly refresh): its "wait until <date>" has passed (for the
+  complaint or one organisation), or a referral opened or closed since it
+  was written (`ai_review.referral_open`, stored when written). A "wait
+  until 9 Oct" stayed on the page and the dashboard for weeks after.
+- **A review asked for survives a restart** (migration `053`,
+  `complaints.review_wanted_at`, set by `scheduleReview`, cleared when one
+  written after it is saved; `resumeWantedReviews` at start-up): a deploy
+  within the two-minute wait lost it, and a change that moves no date left
+  nothing for the nightly check to see.
+- **The re-check never takes an answer dated before its stage began**
+  (`planRecheck`): a Stage 1 reply read as the Stage 2 answer marked the new
+  stage "responded". It is reported instead.
+- **The re-check's signature is of the emails it read**, taken before the
+  read (an email filed during the minute-long read is read next time), and
+  one complaint is never re-checked twice at once (the "re-check all" run
+  skips one being re-checked from its own page, and the page refuses one
+  the run holds).
+- **Each organisation's step lines up with the organisations as they are**
+  (`guardByOrg` returns one entry per current track, matched by key, so a
+  step for an organisation taken off is never read as the next one's);
+  `composeByOrg` drops the complaint-wide caution and next action (they
+  contradicted the per-organisation steps); a Stage 2 answer overdue says
+  "chase" only if Greenco hasn't just written. Undo notes use UK dates.
+
 ### 2026-09-29 — fixes from a review of the emailed referral
 - **What goes to the ombudsman**: a colleague's FORWARD of their email (or of
   our Outlook-sent request) is evidence and goes; only an email between our

@@ -389,3 +389,25 @@ test('a Stage 2 threat, condition or question is never taken for the request', (
   for (const b of no) assert.equal(isStage2Request({ subject: 'x', body: b }), false, b);
   assert.equal(isStage2Request({ subject: 'x', body: 'We would be grateful if you could escalate our complaint to Stage 2.' }), true);
 });
+
+import { reviewOutrun } from '../src/services/complaintRules.js';
+test('a review is out of date once its "wait until" has passed or a referral opened', () => {
+  const tracks = [{ referral: { open: false } }];
+  assert.equal(reviewOutrun({ next_action: { type: 'wait', by: '2026-10-09' } }, tracks, '2026-10-09'), false);
+  assert.equal(reviewOutrun({ next_action: { type: 'wait', by: '2026-10-09' } }, tracks, '2026-10-10'), true);
+  assert.equal(reviewOutrun({ by_org: [null, { next_action: { type: 'wait', by: '2026-10-01' } }] }, tracks, '2026-10-02'), true);
+  assert.equal(reviewOutrun({ referral_open: [false] }, [{ referral: { open: true } }], '2026-10-02'), true);
+  assert.equal(reviewOutrun({ referral_open: [false] }, tracks, '2026-10-02'), false);
+});
+
+test('each organisation\'s step lines up with the organisations as they are now', () => {
+  const tracks = [{ key: 'main', org_name: 'A', stage: 'stage_1', state: 'open' }, { key: 'p2', org_name: 'C', stage: 'stage_1', state: 'open' }];
+  // B (p1) was taken off since the review was written.
+  const stored = [{ key: 'main', headline: 'A step' }, { key: 'p1', headline: 'B step' }, { key: 'p2', headline: 'C step' }];
+  const out = guardByOrg(stored, tracks, () => ({}));
+  assert.equal(out.length, 2);
+  assert.equal(out[1].key, 'p2');
+  const composed = composeByOrg({ headline: 'x', caution: 'about B', guarded: 'x', next_action: { type: 'wait' }, by_org: out }, tracks);
+  assert.equal(composed.caution, null);
+  assert.equal(composed.next_action, null);
+});

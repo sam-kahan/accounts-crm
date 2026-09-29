@@ -1,7 +1,7 @@
 import { query, pool } from '../db/pool.js';
 import { config } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
-import { ukDate, trackOpen } from './complaintRules.js';
+import { ukDate, trackOpen, readable } from './complaintRules.js';
 import { overallState } from './complaintParties.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { reconstructComplaint } from './complaintReconstruct.js';
@@ -128,8 +128,15 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO(), form
     changes.stage = x.stage;
     const started = usable('stage_started_on');
     changes.stage_started_on = started;
-    // The response at the NEW stage (the old stage's answer isn't this one's).
-    changes.responded_on = usable('responded_on');
+    // The response at the NEW stage (the old stage's answer isn't this one's):
+    // never one dated before the new stage began, which would mark it
+    // answered with the old stage's reply.
+    const resp = usable('responded_on');
+    const from = started || c.raised_on;
+    if (resp && from && resp < from) {
+      differs.push(`The emails give a response on ${ukDate(resp)}, before ${LABEL[x.stage]} began${started ? ` on ${ukDate(started)}` : ''}: not taken as its answer`);
+      changes.responded_on = null;
+    } else changes.responded_on = resp;
     // Leaving Stage 2: their Stage 2 answer is their FINAL response (the
     // referral window counts from it), so it is kept as that rather than lost.
     if (c.stage === 'stage_2' && c.responded_on && !c.final_response_on && !x.final_response_on) {
@@ -150,7 +157,11 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO(), form
     if (then < now) differs.push(`It is recorded at ${LABEL[c.stage]}, but the emails only show ${LABEL[x.stage]}`);
     if (then === now) {
       if (c.stage !== 'stage_1') fill('stage_started_on', usable('stage_started_on'));
-      fill('responded_on', usable('responded_on'));
+      // Only an answer given at this stage: not one dated before it began.
+      const resp = usable('responded_on');
+      const from = changes.stage_started_on || c.stage_started_on || c.raised_on;
+      if (resp && from && resp < from) differs.push(`The emails give a response on ${ukDate(resp)}, before this stage began: not taken as its answer`);
+      else fill('responded_on', resp);
     }
   }
   fill('acknowledged_on', usable('acknowledged_on'));
@@ -266,6 +277,9 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
   if (!force && c.rechecked_at && c.recheck_signature === sig) {
     return { ...brief, result: 'skipped', text: 'Nothing new since it was last re-checked' };
   }
+  // The signature of exactly the emails about to be read: one filed while the
+  // AI reads (a minute or two) is not in it, so the next re-check reads it.
+  let readSig = sig;
   let msgs = await emailsOf(id);
   if (!msgs.length) {
     await query('UPDATE complaints SET rechecked_at = now(), recheck_signature = $2 WHERE id = $1', [id, sig]);
@@ -302,6 +316,7 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
     const s2 = await search(c, by, step, {});
     added += s2.added || 0;
     if (s2.added) {
+      readSig = await emailSignature(id);
       msgs = await emailsOf(id);
       await step(`Reading its ${msgs.length} emails, with the ones just found`);
       x = await reconstructComplaint(msgs);
@@ -312,7 +327,7 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
   // against the row as it is NOW, locked: the search and the read take a
   // minute or two, and a date recorded meanwhile (by a person, or by an email
   // arriving) must not be overwritten or recorded as "blank" for Undo.
-  sig = await emailSignature(id);
+  sig = readSig;
   let plan;
   let cols = [];
   let text = '';
@@ -543,7 +558,7 @@ export async function undoRecheck(id, by) {
   }
   await query(
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
-    [id, todayISO(), `Changes from the re-check on ${londonDateOf(new Date(r.at))} undone (${cols.map((k) => `${k.replace(/_/g, ' ')} back to ${r.before[k] ?? 'blank'}`).join('; ')}).`, by],
+    [id, todayISO(), `Changes from the re-check on ${ukDate(londonDateOf(new Date(r.at)))} undone (${cols.map((k) => `${k.replace(/_/g, ' ')} back to ${readable(r.before[k] instanceof Date ? r.before[k].toISOString().slice(0, 10) : r.before[k]) ?? 'blank'}`).join('; ')}).`, by],
   );
   // The emails it marked as dealt with are new again: what they said is no
   // longer recorded, so a person should see them.
@@ -608,10 +623,19 @@ export async function startRecheck({ by, force = false, onlyNever = false }) {
     try {
       for (const id of ids) {
         let r;
-        try {
-          r = await recheckComplaint(id, { by: RECHECK_BY, force });
-        } catch (err) {
-          r = { id, result: 'failed', text: String(err.message).slice(0, 300) };
+        // One re-check of a complaint at a time: the page's own press and
+        // this run would each pay for the same read.
+        if (runningHere.has(id)) {
+          r = { id, result: 'skipped', text: 'Being re-checked from its own page at the same time' };
+        } else {
+          runningHere.add(id);
+          try {
+            r = await recheckComplaint(id, { by: RECHECK_BY, force });
+          } catch (err) {
+            r = { id, result: 'failed', text: String(err.message).slice(0, 300) };
+          } finally {
+            runningHere.delete(id);
+          }
         }
         state.done += 1;
         if (r.result === 'changed') state.changed += 1;

@@ -88,3 +88,13 @@ test('planRecheck: a complaint made formally from the page is never questioned, 
   assert.equal(formal.differs.length, 0);
   assert.equal(formal.changes.acknowledged_on, '2026-09-03');
 });
+
+test('a response dated before the new stage began is never taken as its answer', () => {
+  const p = plan(c(), x({ stage: 'stage_2', stage_started_on: '2026-08-01', responded_on: '2026-07-15' }));
+  assert.equal(p.changes.stage, 'stage_2');
+  assert.equal(p.changes.responded_on, null);
+  assert.ok(p.differs.some((d) => /before Stage 2 began/.test(d)));
+  // Already at Stage 2: an earlier date doesn't fill the blank.
+  const q = plan(c({ stage: 'stage_2', stage_started_on: '2026-08-01' }), x({ stage: 'stage_2', stage_started_on: '2026-08-01', responded_on: '2026-07-15' }));
+  assert.equal(q.changes.responded_on, undefined);
+});
