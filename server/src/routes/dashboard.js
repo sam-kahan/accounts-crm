@@ -176,9 +176,14 @@ router.get(
     const seeTasks = can(req.user, 'tasks');
     const seeCommission = can(req.user, 'commission');
     const seeComplaints = can(req.user, 'complaints');
-    const items = (await collectDueItems(days)).filter((i) =>
-      i.type === 'task' ? seeTasks : seeCompanies,
-    );
+    // The same list the morning email sends: key dates and tasks, and (for
+    // someone who may see complaints) each complaint's deadline with its next
+    // step, in date order. Without the complaints, "Nothing overdue" sat
+    // beside complaints weeks overdue.
+    const items = [
+      ...(await collectDueItems(days)).filter((i) => (i.type === 'task' ? seeTasks : seeCompanies)),
+      ...(seeComplaints ? await collectComplaintDueItems(days) : []),
+    ].sort((a, b) => (a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0));
 
     const counts = (
       await query(`
@@ -256,8 +261,9 @@ router.get(
       counts: {
         companies: seeCompanies ? Number(counts.companies) : null,
         open_tasks: seeTasks ? Number(counts.open_tasks) : null,
-        overdue: seeCompanies || seeTasks
-          ? (seeCompanies ? Number(counts.overdue_key_dates) : 0) + (seeTasks ? Number(counts.overdue_tasks) : 0)
+        overdue: seeCompanies || seeTasks || seeComplaints
+          ? (seeCompanies ? Number(counts.overdue_key_dates) : 0) + (seeTasks ? Number(counts.overdue_tasks) : 0) +
+            items.filter((i) => i.type === 'complaint' && i.overdue).length
           : null,
       },
       overdue: items.filter((i) => i.overdue),

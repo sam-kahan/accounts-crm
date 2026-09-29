@@ -746,6 +746,20 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the dashboard lists complaint deadlines; merges keep the new fields
+- **The dashboard's Overdue / Upcoming lists are the morning email's list**:
+  key dates and tasks, plus (for someone who may see complaints) each
+  complaint's deadline via `collectComplaintDueItems`, in date order, each
+  linked to the complaint with its next step and no Dismiss. The Overdue
+  tile counts overdue complaints too. It said "Nothing overdue" beside
+  complaints weeks overdue.
+- The morning email lists an unacknowledged complaint on its
+  acknowledgement date (`awaiting_ack`), not its later response date.
+- **Tidy up merges keep** `outcome_wanted` / `losses` (both kept, labelled,
+  when they differ) and `removed_orgs` (combined).
+- The list's status labels wrap (`.badge.wrap`); the page writes "Sep" like
+  the server.
+
 ### 2026-09-29 — evidence for the ombudsman, collected as the complaint goes
 - **Evidence for the ombudsman** card on every complaint
   (`services/complaintEvidence.js#evidenceChecklist`, pure, tested, no AI;

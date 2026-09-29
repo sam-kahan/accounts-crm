@@ -44,7 +44,10 @@ function ItemRow({ item, onDismiss, onError }) {
         {formatDate(item.due_date)}
       </td>
       <td>
-        {item.label}
+        {item.type === 'complaint' ? <Link to={`/complaints/${item.id}`}>{item.label}</Link> : item.label}
+        {item.type === 'complaint' && item.detail && (
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>Next: {item.detail}</div>
+        )}
         {item.type === 'key_date' && item.category && (
           <span className="badge navy" style={{ marginLeft: 8 }}>
             {CATEGORY_LABEL[item.category] || item.category}
@@ -59,7 +62,7 @@ function ItemRow({ item, onDismiss, onError }) {
       <td className="muted">{item.company_name || '—'}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
         <DueBadge date={item.due_date} />
-        {mayDismiss && <button
+        {mayDismiss && item.type !== 'complaint' && <button
           className="btn-ghost btn-sm"
           style={{ marginLeft: 8 }}
           disabled={busy}
@@ -247,7 +250,7 @@ export default function Dashboard() {
 
       <div className="flex-between" style={{ marginBottom: 16 }}>
         <div className="muted">
-          Key dates &amp; tasks due in the next 90 days.
+          Key dates, tasks and complaint deadlines in the next 90 days (the same list as the morning email).
         </div>
         <div className="btn-row">
           <span className={`badge ${mailer.enabled ? 'ok' : 'grey'}`}>
@@ -285,7 +288,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {overdue.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} onError={setMsg} />
+                <ItemRow key={`${i.type}-${i.id}-${i.company_name || ''}-${i.label}`} item={i} onDismiss={dismiss} onError={setMsg} />
               ))}
             </tbody>
           </table>
@@ -303,7 +306,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {upcoming.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} onError={setMsg} />
+                <ItemRow key={`${i.type}-${i.id}-${i.company_name || ''}-${i.label}`} item={i} onDismiss={dismiss} onError={setMsg} />
               ))}
             </tbody>
           </table>
