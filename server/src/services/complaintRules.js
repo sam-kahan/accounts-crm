@@ -421,8 +421,17 @@ export function deriveStatus(complaint, rule) {
   const ackOverdue = !responded && ackWd !== null && ackWd < 0;
   const referFrom = computeOmbudsmanFrom(complaint, rule);
   const canReferNow = referFrom && referFrom <= today;
+  // Why a referral is open, with the date it rests on, so a wrong date (an
+  // import that took an early email for the complaint) is visible rather
+  // than a bare "you can refer" — and on a complaint nobody has checked yet,
+  // a prompt to check that date first.
+  const referWhy = !canReferNow ? ''
+    : complaint.final_response_on && complaint.final_response_on === referFrom
+      ? `their final response was on ${ukDate(complaint.final_response_on)}`
+      : `${rule.ombudsmanAfterWeeks} week${rule.ombudsmanAfterWeeks === 1 ? ' has' : 's have'} passed since the complaint was made on ${ukDate(complaint.raised_on)}` +
+        (complaint.needs_check ? '; check that date first, as this complaint hasn’t been checked yet' : '');
   const referNote = canReferNow
-    ? ` You can also refer it to ${theOmbudsman(rule.ombudsman)} now.`
+    ? ` You can also refer it to ${theOmbudsman(rule.ombudsman)} now (${referWhy}).`
     : '';
 
   if (responded) {
@@ -489,7 +498,7 @@ export function deriveStatus(complaint, rule) {
     // The wait comes first, always: the referral note on its own ("You can
     // also refer it…") read as the only step, next to a review saying wait.
     nextAction: (due ? `Nothing to send yet: wait for ${waitFor}, due ${ukDate(due)}.` : `Wait for ${waitFor}.`) +
-      (canReferNow ? ` If you'd rather not wait, you can already refer it to ${theOmbudsman(rule.ombudsman)}.` : ''),
+      (canReferNow ? ` If you'd rather not wait, you can already refer it to ${theOmbudsman(rule.ombudsman)} (${referWhy}).` : ''),
   };
 }
 

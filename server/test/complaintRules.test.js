@@ -303,6 +303,9 @@ test('deriveStatus: waiting on them with the ombudsman already open says wait fi
   const d = deriveStatus(c, effectiveRule(null, 'energy'));
   assert.equal(d.status, 'awaiting_response');
   assert.match(d.nextAction, /^Nothing to send yet: wait for their final \(Stage 2\) response, due /);
-  assert.match(d.nextAction, /If you'd rather not wait, you can already refer it to the Energy Ombudsman\.$/);
+  assert.match(d.nextAction, /If you'd rather not wait, you can already refer it to the Energy Ombudsman \(8 weeks have passed since the complaint was made on Mon 6 Jan 2020\)\.$/);
+  // Imported and not yet checked: the date it rests on is to be checked first.
+  const u = deriveStatus({ ...c, needs_check: true }, effectiveRule(null, 'energy'));
+  assert.match(u.nextAction, /made on Mon 6 Jan 2020; check that date first, as this complaint hasn.t been checked yet\)\.$/);
   assert.doesNotMatch(d.nextAction, /^You can also/);
 });
