@@ -769,8 +769,17 @@ the page says how far each date can be trusted.
   asks for Stage 2 while its organisation is still at Stage 1 (and nobody
   put it back since). Start-up escalates the certain ones sent from here,
   dated the day sent, with a timeline note (`escalateMissedStage2Requests`);
+  that and Send's own escalation are recorded on the email
+  (`escalateFromEmail` → `complaint_emails.applied`), so the page offers
+  **Undo** on it — stage can't be set in Edit details, so nothing else could
+  take a wrong escalation back, and an undone one is never redone;
   the complaint page offers **Move to Stage 2 from <date>** for the rest
-  (`stage2_missed`: Outlook copies, or emails that only mention Stage 2).
+  (`stage2_missed`: Outlook copies, or emails that speak of escalating to
+  Stage 2 without a condition — a chaser that only threatens it never
+  prompts).
+- Waiting on them with the ombudsman already open, the dates' step says
+  "Nothing to send yet: wait for …, due …" FIRST, then that a referral is
+  already possible; it used to show only "You can also refer it…".
 - The dates' next step says "Nothing to send yet: you wrote to them on …"
   when chasing is held (`chase_held_until`), like the review; a default is
   "their own procedure hasn't been researched yet" (not "doesn't set one")

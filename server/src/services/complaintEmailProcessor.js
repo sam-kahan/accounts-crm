@@ -2,7 +2,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { ukDate, trackOpen } from './complaintRules.js';
+import { ukDate, trackOpen, readable } from './complaintRules.js';
 import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
@@ -419,6 +419,26 @@ async function applyEmail(em, analysis, skipped = []) {
 // Undo what was recorded automatically from an email: put the replaced values
 // back, remove the automatic entry, note who undid it, and return the email to
 // "New" for a person to decide.
+// What an Undo put back, in words a person reads: "back to Stage 1", "date
+// acknowledged back to blank" — only what the record had changed, with UK
+// dates, never column names or internal flags.
+const UNDO_LABEL = {
+  acknowledged_on: 'date acknowledged', responded_on: 'date responded', final_response_on: 'final response date',
+  stage_started_on: 'stage start date', reference: 'their reference', response_due: 'response due date',
+};
+const STAGE_WORDS = { stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'the ombudsman', resolved: 'resolved', closed: 'closed' };
+export function undoneWords(applied) {
+  const out = [];
+  const before = applied?.before || {};
+  const after = applied?.after || {};
+  if ('stage' in before && before.stage !== after.stage) out.push(`back to ${STAGE_WORDS[before.stage] || before.stage}`);
+  for (const [col, label] of Object.entries(UNDO_LABEL)) {
+    if (!(col in before) || (before[col] ?? null) === (after[col] ?? null)) continue;
+    out.push(`${label} back to ${before[col] ? readable(String(before[col]).slice(0, 10)) : 'blank'}`);
+  }
+  return out;
+}
+
 export async function undoEmail(em, by) {
   const applied = em.applied;
   if (!applied) return false;
@@ -452,7 +472,7 @@ export async function undoEmail(em, by) {
     [
       em.complaint_id,
       `Automatic record from the email "${em.subject || '(no subject)'}" undone` +
-        (cols.length ? ` (${cols.map((c) => `${c.replace(/_/g, ' ')} back to ${applied.before[c] ?? 'blank'}`).join('; ')})` : '') + '.',
+        (undoneWords(applied).length ? ` (${undoneWords(applied).join('; ')})` : '') + '.',
       by,
       todayISO(),
       partyId && now ? partyId : null,

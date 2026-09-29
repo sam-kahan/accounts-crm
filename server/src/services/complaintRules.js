@@ -486,8 +486,10 @@ export function deriveStatus(complaint, rule) {
     ...base,
     status: 'awaiting_response',
     label,
-    nextAction: referNote.trim() ||
-      (due ? `Nothing to send yet: wait for ${waitFor}, due ${ukDate(due)}.` : `Wait for ${waitFor}.`),
+    // The wait comes first, always: the referral note on its own ("You can
+    // also refer it…") read as the only step, next to a review saying wait.
+    nextAction: (due ? `Nothing to send yet: wait for ${waitFor}, due ${ukDate(due)}.` : `Wait for ${waitFor}.`) +
+      (canReferNow ? ` If you'd rather not wait, you can already refer it to ${theOmbudsman(rule.ombudsman)}.` : ''),
   };
 }
 
@@ -748,8 +750,13 @@ export function missedStage2Requests(tracks, emails, events = []) {
   const sorted = [...emails].filter((e) => e.sent_on).sort((a, b) => a.sent_on.localeCompare(b.sent_on));
   for (const e of sorted) {
     const certain = e.our_step === 'stage2_request' || isStage2Request(e);
+    // Not certain: offered only if a sentence of ours speaks of escalating to
+    // Stage 2 without a condition or a future ("if we don't hear by Friday,
+    // we will escalate…" is a chaser, and must not raise the prompt).
     const own = String(e.body || '').split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
-    if (!certain && !MENTIONS_STAGE2.test(`${e.subject || ''}\n${own}`)) continue;
+    const loose = [e.subject || '', ...own.split(/(?<=[.!?;])\s+|\n+/)]
+      .some((x) => MENTIONS_STAGE2.test(x) && !CONDITION_BEFORE.test(x) && !NEGATIVE.test(x));
+    if (!certain && !loose) continue;
     // Whose track: the one it was sent for; with one organisation, that one;
     // sent from here with none named, the main one. Otherwise a person says.
     const t = e.party_id ? tracks.find((x) => x.party_id === e.party_id)
@@ -758,7 +765,7 @@ export function missedStage2Requests(tracks, emails, events = []) {
     // A person put it back to Stage 1 (or recorded an escalation) after it
     // was sent: their decision stands.
     const later = events.some((ev) => (ev.party_id || null) === (t.party_id || null) && ev.event_date >= e.sent_on &&
-      (ev.type === 'escalated' || /^Details corrected:.*\bstage\b/i.test(ev.note || '')));
+      (ev.type === 'escalated' || /^(?:Details corrected:|Automatic record from the email).*\bstage\b/i.test(ev.note || '')));
     if (later) continue;
     // The latest per organisation, but a certain request is never replaced
     // by a later email that only mentions Stage 2.

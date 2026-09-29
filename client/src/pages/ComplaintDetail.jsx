@@ -238,7 +238,10 @@ export default function ComplaintDetail() {
         if (gone.length) {
           const done = c.outbox.filter((o) => gone.includes(o.id));
           const sup = done.find((o) => o.supplier_name);
-          const esc = done.find((o) => o.then_escalate);
+          // Moved on by the button, or by the email's own words (a plain Send
+          // of the Stage 2 request): said either way.
+          const stageOf = (x) => [x.stage, ...(x.parties || []).map((p) => p.stage)].join('|');
+          const esc = done.find((o) => o.then_escalate) || stageOf(fresh) !== stageOf(c);
           setMsg(sup
             ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
             : esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');

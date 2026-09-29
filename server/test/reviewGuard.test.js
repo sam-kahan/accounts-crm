@@ -305,9 +305,17 @@ test('missedStage2Requests: a request we sent that left the complaint at Stage 1
   // Already moved on, or a person put it back to Stage 1 afterwards: nothing.
   assert.deepEqual(missedStage2Requests([{ ...main, stage: 'stage_2' }], [ask]), []);
   assert.deepEqual(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'Details corrected: stage: Stage 2 → Stage 1' }]), []);
-  // Only mentions it (a threat): offered for a person to decide, never certain.
+  // A chaser that only threatens it: no prompt.
   const threat = { ...ask, id: 'e2', subject: 'Chasing', body: 'If we do not hear by Friday we will escalate our complaint to Stage 2.' };
-  assert.equal(missedStage2Requests([main], [threat])[0].certain, false);
+  assert.deepEqual(missedStage2Requests([main], [threat]), []);
+  // Speaks of escalating without asking in so many words: offered, never certain.
+  const vague = { ...ask, id: 'e3', subject: 'Our complaint', body: 'This now needs escalating to Stage 2 of your procedure.', from_here: false };
+  assert.equal(missedStage2Requests([main], [vague])[0].certain, false);
+  // A later email that only mentions it never replaces a certain request.
+  const [both] = missedStage2Requests([main], [{ ...ask, sent_on: '2026-09-20' }, { ...vague, sent_on: '2026-09-25' }]);
+  assert.equal(both.email_id, 'e1');
+  // Undone by a person afterwards: not offered again.
+  assert.deepEqual(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'Automatic record from the email "x" undone (stage back to stage_1).' }]), []);
   // A chaser that doesn't mention Stage 2: nothing.
   assert.deepEqual(missedStage2Requests([main], [{ ...ask, subject: 'Chasing', body: 'Please reply by Friday.' }]), []);
   // Two organisations and not sent from here with none named: a person says whose.

@@ -391,7 +391,7 @@ async function afterSent(o, messageId) {
       : isStage2Request({ subject: o.subject, body: o.body })
         ? (o.party_id ? (atStage1 ? { party } : null) : await stage2TrackFor(o.complaint_id, o.to_addresses))
         : null;
-    if (track) await escalateTrack(o.complaint_id, track.party?.id || null, sentOn, o.sent_by);
+    if (track) await escalateFromEmail(o.complaint_id, track.party?.id || null, sentOn, o.sent_by, emailId);
     else if (o.then_escalate && !atStage1) {
       await query(
         `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
@@ -1349,7 +1349,7 @@ async function stage2MissedFor(ids) {
   )).rows;
   const events = (await query(
     `SELECT complaint_id, type, party_id, to_char(event_date, 'YYYY-MM-DD') AS event_date, note FROM complaint_events
-      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%')`,
+      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%' OR note LIKE 'Automatic record from the email%')`,
     [ids],
   )).rows;
   const out = new Map();
@@ -1377,11 +1377,11 @@ export async function escalateMissedStage2Requests() {
   for (const [id, list] of await stage2MissedFor(ids)) {
     for (const m of list.filter((x) => x.certain && x.from_here)) {
       try {
-        await escalateTrack(id, m.party_id, m.sent_on, 'Automatic (Stage 2 request sent from here)');
+        await escalateFromEmail(id, m.party_id, m.sent_on, 'Automatic (Stage 2 request sent from here)', m.email_id);
         await query(
           `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
           [id, m.party_id, m.sent_on,
-            `Moved to Stage 2 from ${ukDate(m.sent_on)}: the email sent from here that day, "${m.subject}", asked for Stage 2, but it wasn't recognised as the request at the time. Use Edit details if this is wrong.`,
+            `Moved to Stage 2 from ${ukDate(m.sent_on)}: the email sent from here that day, "${m.subject}", asked for Stage 2, but it wasn't recognised as the request at the time. If that's wrong, press Undo on that email.`,
             'Automatic (Stage 2 request sent from here)'],
         );
         scheduleReview(id);
@@ -1392,6 +1392,34 @@ export async function escalateMissedStage2Requests() {
     }
   }
   return n;
+}
+
+// Escalate because of an email of ours (the Stage 2 request sent from here,
+// or found afterwards), recorded on that email like any automatic record, so
+// the page shows it there with **Undo** (complaintEmailProcessor#undoEmail):
+// the stage and dates as they were, and the escalated entry removed. Stage
+// can't be set in Edit details, so without this a wrong escalation could not
+// be taken back. Without an email row (it couldn't be stored) it is simply
+// escalated.
+const TRACK_COLS = ['stage', 'stage_started_on', 'responded_on', 'final_response_on', 'response_due_manual'];
+async function escalateFromEmail(complaintId, partyId, date, by, emailId) {
+  const table = partyId ? 'complaint_parties' : 'complaints';
+  const rowOf = async () => (await query(`SELECT ${TRACK_COLS.join(', ')} FROM ${table} WHERE id = $1`, [partyId || complaintId])).rows[0];
+  const before = await rowOf();
+  await escalateTrack(complaintId, partyId, date, by);
+  if (!emailId || !before) return;
+  const after = await rowOf();
+  const ev = (await query(
+    `SELECT id FROM complaint_events WHERE complaint_id = $1 AND type = 'escalated' AND party_id IS NOT DISTINCT FROM $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [complaintId, partyId || null],
+  )).rows[0];
+  const iso = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ?? null);
+  const pick = (r) => Object.fromEntries(TRACK_COLS.map((k) => [k, iso(r[k])]));
+  await query(
+    `UPDATE complaint_emails SET applied = $2, party_id = COALESCE(party_id, $3) WHERE id = $1 AND applied IS NULL`,
+    [emailId, JSON.stringify({ before: pick(before), after: pick(after), event_id: ev?.id || null, party_id: partyId || null }), partyId || null],
+  );
 }
 
 async function escalateTrack(complaintId, partyId, date, by) {

@@ -297,3 +297,12 @@ test('procedureOnFile: only an organisation whose own procedure has been found o
   assert.equal(procedureOnFile({ research_status: 'manual' }), true);
   assert.equal(procedureOnFile({ research_status: 'none', verified_at: '2026-09-01T10:00:00Z' }), true); // a person checked it
 });
+
+test('deriveStatus: waiting on them with the ombudsman already open says wait first, never only "you can also refer"', () => {
+  const c = complaint({ stage: 'stage_2', raised_on: '2020-01-06', stage_started_on: '2099-01-01', response_due: '2099-02-01', acknowledged_on: '2020-01-07' });
+  const d = deriveStatus(c, effectiveRule(null, 'energy'));
+  assert.equal(d.status, 'awaiting_response');
+  assert.match(d.nextAction, /^Nothing to send yet: wait for their final \(Stage 2\) response, due /);
+  assert.match(d.nextAction, /If you'd rather not wait, you can already refer it to the Energy Ombudsman\.$/);
+  assert.doesNotMatch(d.nextAction, /^You can also/);
+});
