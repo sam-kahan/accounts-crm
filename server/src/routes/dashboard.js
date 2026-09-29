@@ -137,6 +137,17 @@ export async function collectComplaintDueItems(days = 30) {
         });
         continue;
       }
+      // Not acknowledged yet, and that is due first: listed on the day the
+      // acknowledgement is due (what its next step says to wait for).
+      if (t.status === 'awaiting_ack' && t.ack_due && (!t.response_due || t.ack_due < t.response_due)) {
+        if (t.ack_due > horizon) continue;
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint acknowledgement due: ${c.subject}`,
+          due_date: t.ack_due, company_name: t.org_name, overdue: false, detail, link,
+        });
+        continue;
+      }
       if (!t.response_due || t.response_due > horizon) continue;
       items.push({
         type: 'complaint',
