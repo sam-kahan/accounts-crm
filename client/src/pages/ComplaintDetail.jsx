@@ -1102,7 +1102,7 @@ export default function ComplaintDetail() {
                       {a.author && <> from {a.author}</>}
                       {a.sent_on && <>, sent {formatDate(a.sent_on)}</>}
                       {a.forwarded && ' (forwarded)'}. {a.summary}
-                      {a.confidence !== 'high' && <div style={{ fontSize: 12, marginTop: 2 }}>Not certain ({a.confidence} confidence), so please check.</div>}
+                      {['low', 'medium'].includes(a.confidence) && <div style={{ fontSize: 12, marginTop: 2 }}>Not certain ({a.confidence} confidence), so please check.</div>}
                     </div>
                   ) : (
                     em.body_preview && <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{em.body_preview}</div>

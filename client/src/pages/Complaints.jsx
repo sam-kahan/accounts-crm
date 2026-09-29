@@ -456,6 +456,17 @@ function OverdueDraftsModal({ onClose }) {
   );
 }
 
+// The next step, as the complaint page gives it: the AI's while its review
+// is up to date, otherwise the one the dates give (for each organisation,
+// named, when there is more than one), never an out-of-date one.
+function nextStepOf(c) {
+  const ai = c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action);
+  if (ai) return ai;
+  const tracks = [c, ...(c.parties || [])].filter((t) => t.nextAction);
+  if ((c.parties || []).length) return tracks.map((t) => `${t.org_name}: ${t.nextAction}`).join(' ') || null;
+  return c.nextAction || null;
+}
+
 export default function Complaints() {
   const [items, setItems] = useState(null);
   const [orgs, setOrgs] = useState([]);
@@ -699,9 +710,9 @@ export default function Complaints() {
                     {c.needs_check && <span className="badge amber" style={{ marginLeft: 6 }}>To check</span>}
                     {c.state === 'open' && c.resolution_suggested && <span className="badge ok" style={{ marginLeft: 6 }}>Looks resolved: confirm</span>}
                     {c.new_emails > 0 && <span className="badge amber" style={{ marginLeft: 6 }}>{c.new_emails} new email{c.new_emails === 1 ? '' : 's'} to check</span>}
-                    {c.state === 'open' && (c.ai_review?.headline || c.ai_review?.recommended_action) && (
+                    {c.state === 'open' && nextStepOf(c) && (
                       <div style={{ fontSize: 12, marginTop: 2 }}>
-                        <span style={{ fontWeight: 600 }}>Next:</span> {c.ai_review.headline || c.ai_review.recommended_action}
+                        <span style={{ fontWeight: 600 }}>Next:</span> {nextStepOf(c)}
                       </div>
                     )}
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}
