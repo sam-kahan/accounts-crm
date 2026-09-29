@@ -381,8 +381,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* --- Forms ---------------------------------------------------------------- */
-label.field { display: block; margin-bottom: 14px; }
-label.field .lbl { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: var(--navy); }
+label.field, div.field { display: block; margin-bottom: 14px; }
+label.field .lbl, div.field > .lbl { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: var(--navy); }
 input, select, textarea {
   width: 100%;
   font-family: inherit;

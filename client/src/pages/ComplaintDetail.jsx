@@ -1363,8 +1363,8 @@ export default function ComplaintDetail() {
           {c.awaiting_first_email && (
             <div className="inline-note warn" style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 16 }}>
-                <strong>Next step:</strong> send the complaint to {c.org_name}. Nothing on file shows it has gone to
-                them yet, so nothing is due from them until it has.
+                <strong>Next step:</strong> send the complaint to {c.org_name}. It was logged as not sent yet, so
+                nothing is due from them until it has gone.
               </div>
               <div className="btn-row" style={{ marginTop: 8 }}>
                 <button className="btn-primary btn-sm" onClick={() => setFormalOpen(true)}>
