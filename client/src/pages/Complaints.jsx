@@ -91,6 +91,17 @@ function NewComplaintModal({
   const askSent = !importMode && !fromEmailId;
   const [notSent, setNotSent] = useState(askSent);
   const sentAlready = !askSent || !notSent;
+  // What the AI found when it read the email or letter: whether it asks for a
+  // complaint using the word "complaint" (checked in code on the server), and
+  // why not. Null until something has been read.
+  const [wordCheck, setWordCheck] = useState(null);
+  // Logged as sent without an email shown to ask for a complaint in so many
+  // words: saved flagged as NOT RAISED, and said so here first.
+  const notRaisedWhy = askSent && sentAlready && wordCheck?.made !== true
+    ? (wordCheck
+      ? `the email it was logged from doesn’t ask for a complaint using the word “complaint”${wordCheck.why ? `: ${wordCheck.why}` : ''}`
+      : 'no copy of the email that raised it was checked for the word “complaint”')
+    : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [researching, setResearching] = useState(false);
@@ -123,6 +134,7 @@ function NewComplaintModal({
       // request or a dispute that never became a complaint still has to be sent.
       const made = p.is_complaint === true;
       if (askSent) setNotSent(!made);
+      setWordCheck({ made, why: made ? null : (p.not_complaint_why || '').replace(/\.$/, '') || null });
       setFillNotes(
         [askSent ? (made
           ? `The AI reads this as the complaint itself, already made${p.raised_on ? ` on ${formatDate(p.raised_on)}` : ''}, so “Yes, it has been sent” is selected.`
@@ -198,6 +210,7 @@ function NewComplaintModal({
         // or already has dates from them.
         imported: sentAlready && (Boolean(importMode) ||
           (filled && (form.stage !== 'stage_1' || Boolean(form.acknowledged_on || form.responded_on)))),
+        not_raised: notRaisedWhy,
         ...(sentAlready ? {} : {
           not_sent_yet: true, raised_on: todayISO(), stage: 'stage_1',
           acknowledged_on: null, responded_on: null, stage_started_on: null,
@@ -356,6 +369,16 @@ function NewComplaintModal({
                   Yes, it has been sent
                 </label>
               </div>
+              {notRaisedWhy && (
+                <div className="login-error" style={{ marginTop: 8 }} role="alert">
+                  <strong>⚠ Not raised yet?</strong> {wordCheck
+                    ? <>The email you uploaded doesn’t ask for a complaint using the word “complaint”{wordCheck.why ? ` (${wordCheck.why})` : ''}.</>
+                    : <>Nothing has been checked for the word “complaint”: fill the form in from the email that raised it (above) so it can be checked.</>}
+                  {' '}A complaint is only made by an email that asks for one in so many words, and its clock starts from that email.
+                  Choose <strong>Not yet</strong> to send it from here, or save it anyway and it will be <strong>flagged as not raised</strong> until
+                  someone confirms another email did ask for it.
+                </div>
+              )}
               {notSent && (
                 <span className="muted" style={{ fontSize: 12 }}>
                   Once it is saved, the complaint offers to draft the email from what you enter here and the documents
@@ -435,7 +458,7 @@ function NewComplaintModal({
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy}>
-            {busy ? 'Saving…' : 'Log complaint'}
+            {busy ? 'Saving…' : notRaisedWhy ? 'Log it, flagged as not raised' : 'Log complaint'}
           </button>
         </div>
       </form>

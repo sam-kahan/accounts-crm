@@ -39,7 +39,7 @@ export async function lastTheirsByComplaint(ids) {
   const ours = String(config.complaintEmail.domain || '').toLowerCase();
   const { rows } = await query(
     `SELECT complaint_id,
-            max(CASE WHEN analysis->>'sent_on' ~ '^\d{4}-\d{2}-\d{2}$'
+            max(CASE WHEN analysis->>'sent_on' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
                      THEN (analysis->>'sent_on')::date
                      ELSE (received_at AT TIME ZONE 'Europe/London')::date END) AS d
        FROM complaint_emails

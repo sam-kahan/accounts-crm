@@ -746,6 +746,15 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the date an email was SENT is read again
+- Two SQL patterns written `'^\d{4}-…'` inside JS strings lost the backslash
+  (JS reads `\d` as `d`), so the AI's `sent_on` was never used and every
+  email was dated the day it arrived: `lastTheirsByComplaint` ("they wrote
+  last", which holds back or allows a chase) and `stage2MissedFor` (the "Move
+  to Stage 2 from <date>" prompt). A forward read as written days later. Both
+  now use `[0-9]`; no other SQL pattern in the server had the problem. Write
+  SQL regexes without backslashes (`[0-9]`, `[[:space:]]`) or double them.
+
 ### 2026-09-29 — a complaint is made only by an email that uses the word "complaint"
 - **Greenco's rule** (the owner's, and important): an email or letter makes
   a complaint only when it USES THE WORD "complaint" / "complain" to make one
@@ -761,6 +770,14 @@ the page says how far each date can be trusted.
   (`complaint_evidence`) to use the word, and `raised_on` is that sentence's
   date; `normaliseReconstruction` does the same for imports and re-checks. A
   formal complaint sent from the page without the word is refused (400).
+- **Adding a complaint flags it** when it isn't shown to have been raised:
+  on the Log form, "Yes, it has been sent" with an email read as not asking
+  for a complaint in so many words (or with nothing read at all) shows a red
+  "Not raised yet?" warning and the button says "Log it, flagged as not
+  raised". Saved that way, `not_raised` (the reason) stores `complaint_doubt`
+  `{kind: 'not_complaint', at_logging: true}`: the complaint page's banner
+  says it hasn't been raised, offers **Raise it as a formal complaint…** or
+  **It is a complaint: keep it**, and no referral opens until it is answered.
 - Complaints already on file are not changed by this. A re-check (only ever
   started by a person) may now ASK about one whose emails never used the word
   (the usual "no formal complaint" question); it never changes its dates.

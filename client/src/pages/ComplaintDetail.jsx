@@ -1068,8 +1068,19 @@ export default function ComplaintDetail() {
           <div className="inline-note warn" style={{ marginBottom: 16 }} role="alert">
             {q.kind === 'not_complaint' ? (
               <>
-                <strong>⚠ The emails don’t show a formal complaint being made</strong> ({q.why}). It may have been imported
-                from a query or a disputed bill. Until this is answered, it won’t be treated as ready for the ombudsman.
+                {q.at_logging ? (
+                  <>
+                    <strong>⚠ Not raised yet: no email on file asks for a complaint using the word “complaint”</strong> ({q.why}).
+                    A complaint is only made by an email that asks for one in so many words, so its clock hasn’t started.
+                    Raise it now, or keep it if another email did ask for it. Until this is answered, it won’t be treated
+                    as ready for the ombudsman.
+                  </>
+                ) : (
+                  <>
+                    <strong>⚠ The emails don’t show a formal complaint being made</strong> ({q.why}). It may have been imported
+                    from a query or a disputed bill. Until this is answered, it won’t be treated as ready for the ombudsman.
+                  </>
+                )}
                 <div className="btn-row" style={{ marginTop: 8 }}>
                   {c.state === 'open' && (
                     <button className="btn-primary btn-sm" disabled={answering !== null} onClick={() => setFormalOpen(true)}>

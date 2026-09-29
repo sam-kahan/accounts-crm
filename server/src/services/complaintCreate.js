@@ -56,8 +56,8 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           (organisation_id, org_name, org_type, reference, our_reference, property,
            subject, category, description, channel, raised_on, stage, state,
            response_due, response_due_manual, ref_code, acknowledged_on, responded_on,
-           imported, stage_started_on, final_response_on, account_numbers, outcome_wanted, losses, not_sent_yet)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+           imported, stage_started_on, final_response_on, account_numbers, outcome_wanted, losses, not_sent_yet, complaint_doubt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          RETURNING *`,
         [
           d.organisation_id || null, d.org_name, d.org_type || 'council',
@@ -72,6 +72,12 @@ export async function createComplaint(d, { by = null, raisedNote = null, needsCh
           // For the ombudsman, when given (the API; the complaint page asks for them later).
           (d.outcome_wanted || '').trim() || null, (d.losses || '').trim() || null,
           notSent,
+          // Said to have been sent, but not shown to ask for a complaint in
+          // so many words: flagged as not raised until a person answers it
+          // (Raise it as a formal complaint, or It is a complaint: keep it).
+          !notSent && d.not_raised
+            ? JSON.stringify({ kind: 'not_complaint', why: String(d.not_raised).slice(0, 500), at_logging: true })
+            : null,
         ],
       );
       await client.query(

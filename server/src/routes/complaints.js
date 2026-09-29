@@ -146,6 +146,11 @@ const input = z.object({
   // Logged before it has been sent to them: the page then offers to draft
   // and send it, and it runs from the day it goes.
   not_sent_yet: z.boolean().optional(),
+  // Logged as already sent, but the email it was logged from doesn't ask for
+  // a complaint using the word "complaint" (or none was checked): why, so the
+  // complaint is flagged as not raised (complaint_doubt) until a person
+  // answers it.
+  not_raised: z.string().trim().min(1).max(500).optional().nullable(),
   response_due: isoDate.optional().nullable(), // override
   // Set when importing an existing complaint at a known stage.
   stage: z.enum(['stage_1', 'stage_2', 'ombudsman']).optional(),
@@ -2000,7 +2005,7 @@ async function stage2MissedFor(ids) {
     `SELECT id, complaint_id, subject, COALESCE(body_text, body_preview) AS body, party_id, direction = 'outbound' AS from_here,
             sender_email, to_addresses,
             analysis->>'our_step' AS our_step,
-            CASE WHEN analysis->>'sent_on' ~ '^\d{4}-\d{2}-\d{2}$' THEN analysis->>'sent_on'
+            CASE WHEN analysis->>'sent_on' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN analysis->>'sent_on'
                  ELSE to_char((received_at AT TIME ZONE 'Europe/London')::date, 'YYYY-MM-DD') END AS sent_on
        FROM complaint_emails
       WHERE complaint_id = ANY($1::uuid[]) AND (direction = 'outbound' OR analysis->>'kind' = 'our_email')
