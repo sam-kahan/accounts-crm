@@ -713,6 +713,21 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — one search box for everything
+- **The top bar searches every section the viewer may see**
+  (`components/GlobalSearch.jsx`, `GET /api/search?q=` in `routes/search.js`,
+  behind `requireAuth` with each section checked by `can()` inside, so the box
+  never shows a glimpse of what access withholds): complaints (subject,
+  property, organisation, GC-C code, their/our reference, account numbers,
+  further organisations and their references), organisations, companies (name,
+  number), tasks, contractor invoices (GC-CI ref, their number, property,
+  contractor), commission invoices (GC-COM and the invoicing system's number)
+  and contractors. Numbers and references match however they are spaced or
+  punctuated. Enter opens the first result; arrows move; on a phone the box
+  takes the title's place and the results the full width. A result opens the
+  record (`/organisations?open=<id>` opens that organisation; a contractor
+  invoice opens its month filtered to its reference).
+
 ### 2026-09-29 — emails signed by the sender; Stage 2 request from each organisation's section; organisation fixes
 - **Every draft is signed by whoever sends it.** The AI signs off with the
   placeholders `[Name]` / `[Job title]` (its system prompt says so), and

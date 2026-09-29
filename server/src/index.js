@@ -29,6 +29,7 @@ import bounceWebhook from './routes/bounceWebhook.js';
 import invoicingWebhook from './routes/invoicingWebhook.js';
 import users from './routes/users.js';
 import aiUsage from './routes/aiUsage.js';
+import search from './routes/search.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -137,6 +138,8 @@ app.use('/api/contractor-invoices', requireAuth, requirePermission('commission')
 app.use('/api/commission-invoices', requireAuth, requirePermission('commission'), commissionInvoices);
 app.use('/api/users', requireAuth, requirePermission('admin'), users);
 app.use('/api/ai-usage', requireAuth, requirePermission('admin'), aiUsage);
+// Searches only the sections the viewer may see (checked per section inside).
+app.use('/api/search', requireAuth, search);
 app.use('/api/complaints', complaints); // email-fetch uses a cron key; rest gated in-router
 app.use('/api/dashboard', dashboard); // send-reminders allows a cron key; see route
 

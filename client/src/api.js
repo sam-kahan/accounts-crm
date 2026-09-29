@@ -148,6 +148,9 @@ export const api = {
       request(`/organisations/documents/${docId}`, { method: 'DELETE' }),
   },
 
+  // The top bar's search: every section the viewer may see.
+  search: (q) => request(`/search?q=${encodeURIComponent(q)}`),
+
   // Admin → AI usage: what the AI has cost, by month (YYYY-MM).
   aiUsage: (month) => request(`/ai-usage${month ? `?month=${month}` : ''}`),
 

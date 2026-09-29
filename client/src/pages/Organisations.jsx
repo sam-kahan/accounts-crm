@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
 import { FIGURES, blank, mergeProfile, fillStandard } from '../procedureMerge.js';
@@ -429,11 +430,18 @@ export default function Organisations() {
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);
 
+  // ?open=<id> (from the search box) opens that organisation straight away.
+  const [params, setParams] = useSearchParams();
   const load = () => {
     setErr(null);
     return api.organisations
       .list()
-      .then(setOrgs)
+      .then((list) => {
+        setOrgs(list);
+        const want = params.get('open');
+        const hit = want && list.find((o) => o.id === want);
+        if (hit) { setEditing(hit); setParams({}, { replace: true }); }
+      })
       .catch((e) => setErr(e.message));
   };
   useEffect(() => {

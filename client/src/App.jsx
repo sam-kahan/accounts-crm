@@ -3,6 +3,7 @@ import { useStackedTables } from './components/useStackedTables';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
+import GlobalSearch from './components/GlobalSearch.jsx';
 
 // `section` is the access a nav entry needs; entries without one are open to
 // anyone signed in. The list is filtered against what the server granted, so
@@ -132,6 +133,7 @@ export default function App() {
             </button>
             <h1>{title}</h1>
           </div>
+          <GlobalSearch />
         </header>
         <div className="content">
           <Outlet />
