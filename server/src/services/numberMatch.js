@@ -21,11 +21,31 @@ export function searchableKey(key) {
   return /^GCC[A-Z0-9]{6}$/.test(key) || (key.length >= 6 && /\d/.test(key));
 }
 
-// The number as a pattern that allows the usual separators between its
-// characters and requires it to stand on its own.
+// The number as a pattern that allows a space or hyphen between its
+// characters and requires it to stand on its own: never part of a longer
+// number, including one whose groups are separated ("0300 1234 5678" is a
+// phone number, not account 12345678; "8500 1234 5678" is not 12345678
+// either), and never a date or an amount (dots and slashes are not allowed
+// inside it, so "20/09/26" and "£2009.26" are not 200926). A real match
+// missed this way only means the email is filed some other way: a wrong
+// "certain" match would record their dates on another complaint.
 export function numberPattern(key) {
-  const body = [...key].join('[\\s./-]?');
-  return new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`, 'i');
+  const body = [...key].join('[ -]?');
+  return new RegExp(`(?<![A-Za-z0-9])(?<!\\d[\\s./-])${body}(?![A-Za-z0-9])(?![\\s./-]\\d)`, 'gi');
+}
+
+// Written like a date ("20-09-26", "20 09 2026"): never taken as a number.
+const DATE_SHAPED = /^\d{1,2}[ -]\d{1,2}[ -](?:\d{2}|\d{4})$/;
+
+// Does the text quote this number anywhere, standing on its own and not
+// written as a date?
+export function quotes(text, re) {
+  re.lastIndex = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (!DATE_SHAPED.test(m[0])) return true;
+    if (m[0].length === 0) re.lastIndex += 1;
+  }
+  return false;
 }
 
 // Every number that identifies an open complaint, with the complaint it
@@ -54,7 +74,7 @@ export function complaintsQuoted(text, index) {
   const s = String(text || '');
   const ids = new Set();
   if (!s) return ids;
-  for (const n of index) if (n.re.test(s)) ids.add(n.complaintId);
+  for (const n of index) if (quotes(s, n.re)) ids.add(n.complaintId);
   return ids;
 }
 

@@ -170,3 +170,15 @@ test('our referral to the ombudsman: from Stage 2 only, keeping their Stage 2 an
   assert.equal(plan.changes.final_response_on, '2026-07-20');
   assert.equal(planFromAnalysis(complaint(), ours({ our_step: 'ombudsman_referral' }), { today: '2026-09-30' }).auto, false);
 });
+
+test('planFromAnalysis: an unplaced acknowledgement or response on a two-organisation complaint waits for a person', () => {
+  const main = { stage: 'stage_2', state: 'open', raised_on: '2026-07-01', stage_started_on: '2026-09-01', acknowledged_on: '2026-07-02' };
+  const ack = { kind: 'acknowledgement', confidence: 'high', from_organisation: true, sent_on: '2026-09-10', summary: 'We acknowledge' };
+  assert.equal(planFromAnalysis(main, ack, { today: '2026-09-29', soleTrack: false }).auto, false);
+  const ended = { ...main, stage: 'resolved', state: 'resolved' };
+  const resp = { kind: 'final_response', confidence: 'high', from_organisation: true, sent_on: '2026-09-10', summary: 'Our final response' };
+  assert.equal(planFromAnalysis(ended, resp, { today: '2026-09-29', soleTrack: false }).auto, false);
+  // Routine correspondence still files itself.
+  const routine = { kind: 'other', confidence: 'high', from_organisation: true, sent_on: '2026-09-10', summary: 'Please send a meter reading' };
+  assert.equal(planFromAnalysis(main, routine, { today: '2026-09-29', soleTrack: false }).auto, true);
+});

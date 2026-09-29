@@ -250,6 +250,13 @@ export function ackChangesNothing(track, a, text = '') {
 // the other organisation's first, so it isn't settled on this part's dates.
 export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', soleTrack = true } = {}) {
   if (!a) return { auto: false, reason: 'Not analysed' };
+  // Not certainly this organisation's part (a complaint with more than one,
+  // the email not placed): anything that could set a date waits for a
+  // person, whatever this part's own state. Filed against this part, another
+  // organisation's acknowledgement or response would be lost.
+  if (!soleTrack && a.kind !== 'our_email' && couldChangeDate(a, text)) {
+    return { auto: false, reason: 'It isn’t clear which organisation’s part it belongs to' };
+  }
   // Routine correspondence (a holding letter, a request for information, a
   // reply that records nothing): filed as correspondence even when the AI is
   // only fairly sure, so nobody has to click through every routine email; the
@@ -362,7 +369,7 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
   }
   lines.push('');
   lines.push(`The email as it arrived (outer headers): from ${email.sender_name || ''} <${email.sender_email || ''}>, ` +
-    `received ${email.received_at ? new Date(email.received_at).toISOString().slice(0, 16) : 'unknown'} (UTC), subject "${email.subject || ''}".`);
+    `received ${email.received_at ? new Date(email.received_at).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }) : 'unknown'} (UK time), subject "${email.subject || ''}".`);
   lines.push('<untrusted_content>');
   lines.push(String(email.body_text || email.body_preview || '').slice(0, 40000));
   lines.push('</untrusted_content>');

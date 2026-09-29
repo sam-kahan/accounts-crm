@@ -160,6 +160,20 @@ router.post(
   '/email/fetch',
   sessionOrCronKey('complaints'),
   asyncHandler(async (_req, res) => {
+    // One check at a time: a slow one (many AI reads) must not overlap the
+    // next five-minute check, which would read the same emails again.
+    if (fetchRunning) return res.status(202).json({ skipped: 'A check is already running.' });
+    fetchRunning = true;
+    try {
+      await fetchNow(res);
+    } finally {
+      fetchRunning = false;
+    }
+  }),
+);
+let fetchRunning = false;
+async function fetchNow(res) {
+  {
     const started = new Date().toISOString();
     const errors = [];
     // 1. The catch-all: complaint addresses and the general inbox.
@@ -223,8 +237,8 @@ router.post(
       .then(() => runAutoImport())
       .catch((err) => console.error('[complaints] automatic import:', err.message));
     res.json({ ...result, inserted: r.inserted, matched: r.matched });
-  }),
-);
+  }
+}
 
 // Everything below this line requires a logged-in session.
 router.use(requireAuth, requirePermission('complaints'));

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
 import { callClaude, extractJson } from './complaintAssistant.js';
 import { fetchConversation } from './graphMail.js';
+import { numberPattern, quotes as quotesNumber } from './numberMatch.js';
 
 // ---------------------------------------------------------------------------
 // The account number is the main key for a complaint: one complaint's emails
@@ -222,8 +223,14 @@ async function mailboxesToSearch() {
   return [...new Set([...(await watchedMailboxes()), config.ms.mailbox, ...past].filter(Boolean).map((m) => m.toLowerCase()))];
 }
 
-const quotes = (msgs, key) => msgs.some((m) =>
-  keyOf(`${m.subject || ''} ${m.bodyText || m.bodyPreview || ''}`).includes(key));
+// The same rule as filing by number (numberMatch.js): the number standing on
+// its own, never inside a phone number, a longer number, a date or an amount.
+// (Squashing the whole text and looking for the digits anywhere took any
+// thread whose footer phone number contained them.)
+const quotes = (msgs, key) => {
+  const re = numberPattern(key);
+  return msgs.some((m) => quotesNumber(`${m.subject || ''}\n${m.bodyText || m.bodyPreview || ''}`, re));
+};
 
 async function searchOne(c, number, mailboxes) {
   const { searchMailbox } = await import('./graphMail.js');

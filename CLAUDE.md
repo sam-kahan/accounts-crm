@@ -746,6 +746,32 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the email filing pipeline
+- **Filing by number never matches inside another number, a date or an
+  amount** (`numberMatch.js#numberPattern`/`quotes`): only spaces and
+  hyphens inside a number, no digit group straight before or after it
+  ("0300 1234 5678" is not account 12345678), and a date-shaped match
+  ("20-09-26") never counts. The account-number search uses the same rule
+  (`accountNumbers.js#quotes`: it used to squash the whole text and find the
+  digits anywhere). A real match missed only means the AI files it.
+- **An unplaced email that could set a date waits for a person** on a
+  complaint with more than one organisation (`planFromAnalysis` with
+  `soleTrack: false`); the start-up tidy used to file another organisation's
+  acknowledgement away against the main part, and puts back to New any it
+  did (`settleRoutineEmails`).
+- **The AI is offered every open complaint** (`openCandidates`, up to 150,
+  then the ones the email points at first), and a watched email is thrown
+  away only when the list was complete: with more than 80 open complaints an
+  email about an older one was deleted for good.
+- **One check and one worker per email at a time** (migration `047`,
+  `complaint_emails.processing_at` claimed by `processEmail`, 15-minute
+  lease; `/email/fetch` refuses to overlap itself; `fileWaitingEmails` skips
+  a claimed email): no double reads, records or complaints.
+- The "Needs checking" note is written once (not per retry, not when the AI
+  couldn't read it); "Looks resolved" only when the email is certainly that
+  part's (`placed`); Undo withdraws a "Looks resolved" the same email set;
+  the AI is told the UK time an email arrived, not UTC.
+
 ### 2026-09-29 — fixes from a review of organisation and register editing
 - **Opening a never-researched organisation and saving it no longer marks
   its procedure "entered"**: the form fills blanks with the standard (marked

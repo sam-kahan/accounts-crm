@@ -328,3 +328,24 @@ test('an account number filed as "their reference" still matches the same accoun
   // Two different complaints' case references across organisations are not an account.
   assert.equal(issueMatch({ org_name: 'X', reference: '46890915' }, { org_name: 'Y', reference: '46890915' }).same, false);
 });
+
+test('a number is never matched inside a phone number, a date, an amount or a longer account', () => {
+  const idx = buildNumberIndex([
+    { id: 'A', account_numbers: ['12345678'] },
+    { id: 'B', account_numbers: ['1234567'] },
+    { id: 'C', account_numbers: ['200926'] },
+    { id: 'D', account_numbers: ['850012345678'] },
+  ]);
+  assert.equal(complaintByNumber('Call us on 0300 1234 5678', idx), null);
+  assert.equal(complaintByNumber('phone 0161 123 4567', idx), null);
+  assert.equal(complaintByNumber('Ref 9-1234567', idx), null);
+  assert.equal(complaintByNumber('Sent 20/09/26', idx), null);
+  assert.equal(complaintByNumber('Sent 20-09-26 at 10:00', idx), null); // written as a date
+  assert.equal(complaintByNumber('Account 200926 is overdue', idx), 'C');
+  assert.equal(complaintByNumber('A charge of £2009.26', idx), null);
+  assert.equal(complaintByNumber('acct 8500 1234 5678', idx), 'D');
+  // Still matched however it is written, standing on its own.
+  assert.equal(complaintByNumber('Account: 1234 5678.', idx), 'A');
+  assert.equal(complaintByNumber('Your account 1234-5678, balance due', idx), 'A');
+  assert.equal(complaintByNumber('Account number 12345678', idx), 'A');
+});

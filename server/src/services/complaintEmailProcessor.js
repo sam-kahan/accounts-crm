@@ -42,21 +42,54 @@ async function openNumberIndex() {
   )).rows);
 }
 
-async function openCandidates() {
+// The open complaints the AI may file an email on. All of them when there
+// are few enough to send; otherwise the ones this email points at first (an
+// organisation it is to or from, by its complaints address or its name in
+// the email), then the newest. `complete` says whether every open complaint
+// was offered: an email placed on none of an INCOMPLETE list may belong to
+// one left out, so it is never thrown away on that reading.
+const MAX_CANDIDATES = 150;
+export async function openCandidates(em = null) {
   const { rows } = await query(
-    `SELECT c.id, c.org_name, c.subject, c.property, c.ref_code, c.reference, c.account_numbers, ${PARTY_COLS}
-       FROM complaints c WHERE c.state = 'open' ORDER BY c.raised_on DESC LIMIT 80`,
+    `SELECT c.id, c.org_name, c.subject, c.property, c.ref_code, c.reference, c.account_numbers, ${PARTY_COLS},
+            (SELECT array_agg(lower(substring(o.complaints_email from '@([^>\\s]+)'))) FROM organisations o
+              WHERE o.complaints_email IS NOT NULL AND (o.id = c.organisation_id
+                OR o.id IN (SELECT p.organisation_id FROM complaint_parties p WHERE p.complaint_id = c.id))) AS org_domains
+       FROM complaints c WHERE c.state = 'open' ORDER BY c.raised_on DESC`,
   );
-  return rows;
+  if (rows.length <= MAX_CANDIDATES) return { rows, complete: true };
+  const dom = (a) => (String(a || '').toLowerCase().match(/@([a-z0-9.-]+)/) || [])[1] || null;
+  const domains = new Set([dom(em?.sender_email), ...(em?.to_addresses || []).map(dom)].filter(Boolean));
+  const text = `${em?.subject || ''}\n${em?.body_text || em?.body_preview || ''}`.toLowerCase();
+  const points = (c) => (c.org_domains || []).some((d) => d && domains.has(d)) ||
+    [c.org_name, ...(c.party_names || [])].some((n) => n && n.length >= 4 && text.includes(String(n).toLowerCase()));
+  const first = rows.filter(points);
+  const rest = rows.filter((c) => !points(c));
+  return { rows: [...first, ...rest].slice(0, MAX_CANDIDATES), complete: false };
 }
 
 // Read, file and act on one stored email. Safe to run again: attachments are
 // saved once, and nothing already recorded is recorded twice.
 export async function processEmail(emailId) {
-  let em = (await query(
-    'UPDATE complaint_emails SET attempts = attempts + 1 WHERE id = $1 RETURNING *', [emailId],
+  // Claimed first: never two at once on one email (a slow check overlapping
+  // the next, a retry), which would pay for the read twice and record twice.
+  const em = (await query(
+    `UPDATE complaint_emails SET attempts = attempts + 1, processing_at = now()
+      WHERE id = $1 AND (processing_at IS NULL OR processing_at < now() - interval '15 minutes') RETURNING *`,
+    [emailId],
   )).rows[0];
-  if (!em) return null;
+  if (!em) return null; // gone, or being processed right now
+  try {
+    return await processClaimedEmail(em);
+  } finally {
+    await query('UPDATE complaint_emails SET processing_at = NULL WHERE id = $1', [em.id]).catch(() => {});
+  }
+}
+
+async function processClaimedEmail(claimed) {
+  let em = claimed;
+  // Whether every open complaint was offered to the AI (openCandidates).
+  let candidatesComplete = true;
 
   // 0. Our own email sent from here, come back as a copy: filed, nothing to do.
   if (await settleOwnCopies(em.id)) return { filed: true, ownCopy: true };
@@ -117,10 +150,12 @@ export async function processEmail(emailId) {
           [complaint.id],
         )).rows;
       }
+      const offered = complaint ? null : await openCandidates(em);
+      candidatesComplete = offered ? offered.complete : true;
       analysis = await analyseEmail({
         email: em,
         complaint,
-        candidates: complaint ? null : await openCandidates(),
+        candidates: offered ? offered.rows.map(({ org_domains, ...c }) => c) : null,
         attachments: detail.attachments,
       });
       await query(
@@ -170,7 +205,9 @@ export async function processEmail(emailId) {
       // Only when the AI actually read it and placed it nowhere. If the AI
       // failed, it is kept (and read again later), never thrown away.
       const read = (await query('SELECT analysed_at, analysis_error FROM complaint_emails WHERE id = $1', [em.id])).rows[0];
-      if (read?.analysed_at && !analysis?.complaint_id && !analysis?.new_complaint) {
+      // And only when every open complaint was offered to it: one left out of
+      // a long list may be the complaint it belongs to.
+      if (read?.analysed_at && !analysis?.complaint_id && !analysis?.new_complaint && candidatesComplete) {
         if (em.message_id) {
           await query('INSERT INTO complaint_email_discards (message_id, mailbox) VALUES ($1,$2) ON CONFLICT DO NOTHING', [em.message_id, em.source_mailbox]);
         }
@@ -369,7 +406,9 @@ async function applyEmail(em, analysis, skipped = []) {
   const resolved = resolutionSuggestion(analysis, { arrived });
   // (An email from before the complaint was made can't be saying it's resolved.)
   const beforeComplaint = Boolean(complaint.raised_on && arrived < complaint.raised_on);
-  if (resolved && trackOpen(target) && !beforeComplaint && !returnedClose && !off) {
+  // Only when whose email it is is certain: on a complaint with more than one
+  // organisation, one that can't be placed would flag the wrong part.
+  if (resolved && placed && trackOpen(target) && !beforeComplaint && !returnedClose && !off) {
     await query('UPDATE complaints SET resolution_suggested = $2 WHERE id = $1', [
       complaint.id,
       JSON.stringify({
@@ -408,12 +447,18 @@ async function applyEmail(em, analysis, skipped = []) {
   }
 
   if (!plan.auto) {
-    // Waits for a person, with the suggestion on the email.
-    await query(
-      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
-       VALUES ($1,$2,'note',$3,$4)`,
-      [complaint.id, noteDate, `${kind} from ${who}${summary}${skippedNote}. Needs checking: ${plan.reason}.`, AUTO_BY],
-    );
+    // Waits for a person, with the suggestion on the email. Said once on the
+    // timeline: a retry or a re-read of the same email adds nothing (and an
+    // email the AI couldn't read waits under New without a note).
+    const note = `${kind} from ${who}${summary}${skippedNote}. Needs checking: ${plan.reason}.`;
+    if (analysis) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by)
+         SELECT $1,$2,'note',$3,$4
+          WHERE NOT EXISTS (SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND note = $3 AND created_by = $4)`,
+        [complaint.id, noteDate, note, AUTO_BY],
+      );
+    }
     return;
   }
 
@@ -554,6 +599,17 @@ export async function undoEmail(em, by) {
       WHERE id = $1`,
     [em.id],
   );
+  // A "Looks resolved" this email raised goes with it.
+  const withdrawn = await query(
+    `UPDATE complaints SET resolution_suggested = NULL WHERE id = $1 AND resolution_suggested->>'email_id' = $2`,
+    [em.complaint_id, String(em.id)],
+  );
+  if (withdrawn.rowCount) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [em.complaint_id, todayISO(), `"Looks resolved" from the email "${em.subject || '(no subject)'}" withdrawn with it.`, by],
+    );
+  }
   if (partyId && now) await recomputePartyDeadlines(partyId);
   else await recomputeDeadlines(em.complaint_id);
   // Undoing a part's closure reopens the complaint if that part was its last.
@@ -678,6 +734,8 @@ export async function fileWaitingEmails() {
   const waiting = (await query(
     `SELECT * FROM complaint_emails
       WHERE complaint_id IS NULL AND analysed_at IS NOT NULL AND reviewed_at IS NULL
+        -- not one being read and filed right now
+        AND (processing_at IS NULL OR processing_at < now() - interval '15 minutes')
         AND created_at > now() - interval '60 days'
       ORDER BY received_at LIMIT 200`,
   )).rows;
@@ -735,7 +793,24 @@ export async function fileWaitingEmails() {
 // from the reading already made (no AI). Run once at start-up.
 const ROUTINE_BY = 'Automatic (routine correspondence: nothing in it changes a date)';
 export async function settleRoutineEmails() {
-  const { planFromAnalysis } = await import('./emailAnalysis.js');
+  const { planFromAnalysis, couldChangeDate } = await import('./emailAnalysis.js');
+  // Put back for a person: an email this tidy filed away on a complaint with
+  // more than one organisation, not tied to either, that could set a date
+  // (an acknowledgement or response of the other organisation would have
+  // been lost). Nothing was recorded from them, so nothing to undo.
+  const filed = (await query(
+    `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis FROM complaint_emails e
+      WHERE e.reviewed_by = $1 AND e.party_id IS NULL AND e.applied IS NULL AND e.analysis IS NOT NULL
+        AND EXISTS (SELECT 1 FROM complaint_parties p WHERE p.complaint_id = e.complaint_id)`,
+    [ROUTINE_BY],
+  )).rows;
+  for (const e of filed) {
+    if (e.analysis.kind === 'our_email' || !couldChangeDate(e.analysis, `${e.subject || ''}\n${e.body_text || e.body_preview || ''}`)) continue;
+    await query(
+      `UPDATE complaint_emails SET reviewed_at = NULL, reviewed_as = NULL, reviewed_by = NULL WHERE id = $1 AND reviewed_by = $2`,
+      [e.id, ROUTINE_BY],
+    );
+  }
   const rows = (await query(
     `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis, e.party_id, e.complaint_id
        FROM complaint_emails e
