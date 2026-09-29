@@ -302,7 +302,10 @@ router.post(
 
 // Send a complaint email from the app (SMTP2GO). Auto-CCs the complaint's own
 // address so the reply logs back, and records the sent email on the timeline.
+// Documents of this complaint to attach to an email (the summons, the bill…).
+const attachmentIdsInput = z.array(z.string().uuid()).max(20).optional().nullable();
 const sendInput = z.object({
+  attachment_ids: attachmentIdsInput,
   to: z.string().min(3),
   cc: z.string().optional().nullable(),
   subject: z.string().min(1),
@@ -382,6 +385,7 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
+    const attachmentIds = await checkAttachmentIds(complaint.id, d.attachment_ids);
     // Signed by whoever is sending (a draft's "[Name]" never goes out).
     const subject = signEmail(d.subject, req.user);
     const body = signEmail(d.body, req.user);
@@ -395,12 +399,59 @@ router.post(
       },
       refusal: 'This email has just been sent (or is being sent) from this complaint, so it wasn’t sent again.',
     },
-    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [complaint.id, party?.id || null, Boolean(party), to, cc, subject, body, d.then === 'escalate', who(req)]);
+    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by, attachment_ids)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [complaint.id, party?.id || null, Boolean(party), to, cc, subject, body, d.then === 'escalate', who(req), attachmentIds]);
     res.status(202).json({ queued: true, outbox_id: out.id, escalating: d.then === 'escalate' });
   }),
 );
+
+// Documents of the complaint chosen to go with an email. Checked when it is
+// queued (they are this complaint's, and fit in one email), so a person hears
+// at once rather than from a failed send; read from disk when it goes.
+const EMAIL_ATTACH_BYTES = 14 * 1024 * 1024; // ~19 MB once encoded for email
+async function checkAttachmentIds(complaintId, ids) {
+  const want = [...new Set(ids || [])];
+  if (!want.length) return [];
+  const rows = (await query(
+    'SELECT id, filename, size_bytes FROM complaint_attachments WHERE complaint_id = $1 AND id = ANY($2::uuid[])',
+    [complaintId, want],
+  )).rows;
+  if (rows.length !== want.length) throw new HttpError(400, 'One of the documents chosen isn’t on this complaint any more: reload and choose again.');
+  const total = rows.reduce((n, r) => n + (Number(r.size_bytes) || 0), 0);
+  if (total > EMAIL_ATTACH_BYTES) {
+    throw new HttpError(400, `The documents chosen come to ${(total / 1048576).toFixed(1)} MB, more than one email can carry (14 MB): leave some out and send them in a second email.`);
+  }
+  return want;
+}
+// The files themselves, in the order chosen. A file that can't be read stops
+// the send (it would otherwise go without it, saying it was attached).
+async function chosenAttachments(complaintId, ids) {
+  const rows = (await query(
+    'SELECT id, filename, mimetype, storage_path FROM complaint_attachments WHERE complaint_id = $1 AND id = ANY($2::uuid[])',
+    [complaintId, ids],
+  )).rows;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = [];
+  for (const id of ids) {
+    const r = byId.get(id);
+    if (!r) throw new Error('a document chosen to go with it has been deleted from the complaint since');
+    try {
+      out.push({ filename: r.filename, content: await fs.readFile(r.storage_path), ...(r.mimetype ? { contentType: r.mimetype } : {}) });
+    } catch {
+      throw new Error(`the document "${r.filename}" couldn’t be read from storage`);
+    }
+  }
+  return out;
+}
+// "Attached: …" before the sign-off, where a reader expects it; built from the
+// body as written, so a Try again after a failure never adds it twice.
+function withAttachedLine(body, names, extra = '') {
+  const clean = body.replace(/\n*Attached: [^\n]*(\n|$)/, '\n');
+  const listed = `Attached: ${names.join('; ')}.${extra}`;
+  const at = clean.search(/\n(Kind regards|Yours sincerely|Yours faithfully|Many thanks|Regards),?\s*\n/i);
+  return at >= 0 ? `${clean.slice(0, at).trimEnd()}\n\n${listed}\n${clean.slice(at)}` : `${clean.trimEnd()}\n\n${listed}`;
+}
 
 // Send one queued email, then record it and take the step it was. Claimed
 // by one statement (pending → sending), so it is never sent twice.
@@ -420,11 +471,13 @@ export async function deliverOutbox(outboxId) {
       // add the list a second time.
       o.body = o.body.replace(/\n*Attached: [^\n]*(\n|$)/, '\n');
       attachments = r.attachments;
-      const listed = `Attached: ${attachments.map((x) => x.filename).join('; ')}.` +
-        (r.left.length ? ` Too large to email together, and available on request: ${r.left.join('; ')}.` : '');
-      // Before the sign-off, where a reader expects it.
-      const at = o.body.search(/\n(Kind regards|Yours sincerely|Yours faithfully|Many thanks|Regards),?\s*\n/i);
-      o.body = at >= 0 ? `${o.body.slice(0, at).trimEnd()}\n\n${listed}\n${o.body.slice(at)}` : `${o.body.trimEnd()}\n\n${listed}`;
+      o.body = withAttachedLine(o.body, attachments.map((x) => x.filename),
+        r.left.length ? ` Too large to email together, and available on request: ${r.left.join('; ')}.` : '');
+      await query('UPDATE complaint_outbox SET body = $2 WHERE id = $1', [o.id, o.body]);
+    } else if ((o.attachment_ids || []).length) {
+      // The documents a person chose to send with it.
+      attachments = await chosenAttachments(o.complaint_id, o.attachment_ids);
+      o.body = withAttachedLine(o.body, attachments.map((x) => x.filename));
       await query('UPDATE complaint_outbox SET body = $2 WHERE id = $1', [o.id, o.body]);
     }
     sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body, attachments });
@@ -2502,6 +2555,7 @@ const formalRaiseInput = z.object({
     cc: z.string().optional().nullable(),
     subject: z.string().min(1),
     body: z.string().min(1),
+    attachment_ids: attachmentIdsInput,
   }).optional().nullable(),
   sent_on: isoDate.optional().nullable(),
 });
@@ -2538,10 +2592,11 @@ router.post(
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
+      const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids);
       const out = await queueOutbox(c.id, formalGuard,
-        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal)
-         VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req)]);
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal, attachment_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,true,$7) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), attachmentIds]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
     if (d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');

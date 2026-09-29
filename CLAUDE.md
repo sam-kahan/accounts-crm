@@ -746,6 +746,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — documents go with emails sent from a complaint
+- The Send window and the "Send the complaint / Raise it as a formal
+  complaint" window list the complaint's documents to tick (`AttachPicker`);
+  the complaint's FIRST email has them all ticked, as the letters and bills
+  are what they need. The message mentioning "attached" / "enclosed" /
+  "please find" with nothing ticked is warned about, and the formal send's
+  confirm says how many go ("with NO documents attached"). Before, nothing
+  could be attached, so the Liverpool complaint went without its documents.
+- `complaint_outbox.attachment_ids` (migration `055`): checked when queued
+  (`checkAttachmentIds`: this complaint's, 14 MB at most), read from disk when
+  it goes (`chosenAttachments`: a file that can't be read FAILS the send
+  rather than sending without it), and named in an "Attached: …" line before
+  the sign-off (`withAttachedLine`, shared with the referral), so the copy on
+  the complaint says what went. `send-email` and `formal/raise` take
+  `attachment_ids`.
+
 ### 2026-09-29 — our own emails file themselves, known by the sender
 - **A colleague's email on a complaint (a chaser, a note to them) never waits
   for a person.** It used to be ours only when the AI read it as `our_email`

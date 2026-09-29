@@ -50,6 +50,54 @@ const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name 
 // Where an organisation's part stands with its ombudsman, beside its stage:
 // the stage alone says nothing about it (energy can go after 8 weeks at any
 // stage). From referralOpen on the server, so it never says "can go" early.
+// Which of the complaint's documents go with an email (the summons, the bill,
+// a letter). Newest first, as the Documents list shows them; the size is
+// checked again on the server, which refuses more than one email can carry.
+const ATTACH_LIMIT = 14 * 1024 * 1024;
+function AttachPicker({ docs = [], value = [], onChange }) {
+  if (!docs.length) return null;
+  const chosen = new Set(value);
+  const total = docs.filter((d) => chosen.has(d.id)).reduce((n, d) => n + (Number(d.size_bytes) || 0), 0);
+  const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+  const toggle = (id) => onChange(chosen.has(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div className="field">
+      <span className="lbl">
+        Attach documents from this complaint{value.length ? ` (${value.length} chosen, ${mb(total)})` : ''}
+      </span>
+      <div className="btn-row" style={{ margin: '2px 0 6px', gap: 12 }}>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => onChange(docs.map((d) => d.id))}>All</button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => onChange([])}>None</button>
+      </div>
+      {docs.map((d) => (
+        <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 4px', fontSize: 14 }}>
+          <input type="checkbox" checked={chosen.has(d.id)} onChange={() => toggle(d.id)} />
+          <span style={{ overflowWrap: 'anywhere' }}>{d.filename}</span>
+          <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{d.size_bytes ? mb(d.size_bytes) : ''}</span>
+        </label>
+      ))}
+      {total > ATTACH_LIMIT && (
+        <span className="login-error" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+          That is more than one email can carry (14 MB): leave some out and send them in a second email.
+        </span>
+      )}
+    </div>
+  );
+}
+
+// The message says something is attached, but nothing is chosen.
+function saysAttached(body) {
+  return /\battach(?:ed|ing|ment|ments)\b|\benclosed?\b|\bplease find\b/i.test(String(body || '').replace(/\n*Attached: [^\n]*/g, ''));
+}
+function NothingAttachedWarning({ body, ids, docs }) {
+  if (!docs?.length || (ids || []).length || !saysAttached(body)) return null;
+  return (
+    <div className="login-error" style={{ marginBottom: 10, fontSize: 13 }}>
+      The message mentions something attached, but no documents are chosen below.
+    </div>
+  );
+}
+
 function ombudsmanBadge(t) {
   if (!trackOpen(t) || t.stage === 'ombudsman' || !t.referral) return null;
   const name = t.rule?.scheme?.name || t.rule?.ombudsman || 'the ombudsman';
@@ -2243,6 +2291,13 @@ export default function ComplaintDetail() {
             <textarea rows={12} value={send.body}
               onChange={(e) => setSend({ ...send, body: e.target.value })} />
           </label>
+          {send.then !== 'refer' && (
+            <>
+              <NothingAttachedWarning body={send.body} ids={send.attachment_ids} docs={c.attachments} />
+              <AttachPicker docs={c.attachments || []} value={send.attachment_ids || []}
+                onChange={(ids) => setSend({ ...send, attachment_ids: ids })} />
+            </>
+          )}
         </Modal>
       )}
 
@@ -2671,6 +2726,9 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
   // The complaint's first email (logged before it was sent), rather than a
   // dispute being made formal: the same draft and send, told differently.
   const first = Boolean(c.awaiting_first_email);
+  // The complaint's first email goes with its documents unless unticked: the
+  // letters and bills it is about are what they need to look into it.
+  const [attachIds, setAttachIds] = useState(() => (first ? (c.attachments || []).map((d) => d.id) : []));
   const [draft, setDraft] = useState(null); // { to, subject, body, caution }
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -2683,10 +2741,11 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
     } catch (e) { setError(e.message); } finally { setBusy(null); }
   }
   async function sendNow() {
-    if (!confirm(`Send the formal complaint to ${draft.to}? Once it has gone, this complaint starts from today: Stage 1, with its deadlines from today.`)) return;
+    const withDocs = attachIds.length ? `with ${plural(attachIds.length, 'document')} attached` : 'with NO documents attached';
+    if (!confirm(`Send the formal complaint to ${draft.to}, ${withDocs}? Once it has gone, this complaint starts from today: Stage 1, with its deadlines from today.`)) return;
     setBusy('send'); setError(null);
     try {
-      await api.complaints.formalRaise(c.id, { send: { to: draft.to, subject: draft.subject, body: draft.body } });
+      await api.complaints.formalRaise(c.id, { send: { to: draft.to, subject: draft.subject, body: draft.body, attachment_ids: attachIds } });
       await onDone('Sending the formal complaint now. Once it has gone, the complaint starts from today (Stage 1); you can carry on.');
     } catch (e) { setError(e.message); setBusy(null); }
   }
@@ -2739,6 +2798,8 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
             <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
           {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          <NothingAttachedWarning body={draft.body} ids={attachIds} docs={c.attachments} />
+          <AttachPicker docs={c.attachments || []} value={attachIds} onChange={setAttachIds} />
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
             Copied in automatically: {c.email_address}{c.external_cc?.length ? `, ${c.external_cc.join(', ')}` : ''}.
           </div>
