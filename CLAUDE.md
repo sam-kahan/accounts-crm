@@ -746,6 +746,19 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fewer emails to review by hand
+- `emailAnalysis.js#planFromAnalysis`: only an email that could change a
+  date (`couldChangeDate`: an acknowledgement or response by the AI's
+  reading OR its own words) waits for a person when uncertain. Routine
+  correspondence read with medium confidence, emails on a finished part, and
+  a second copy of a recorded response are filed as correspondence by
+  themselves (the review still reads them). Low confidence always waits.
+  `settleRoutineEmails()` applied this once at start-up to waiting emails
+  (no-change filings only, no AI).
+- **Accept the AI's reading for all N** on the complaint page records each
+  remaining email as the AI read it (dates and organisation as shown), and
+  leaves what it can't place for a person.
+
 ### 2026-09-29 — a debt collector handing the account back closes only its part
 - An email from a debt collector's part saying the account has gone back to
   (or been recalled by) their client (`complaintRules.js#saysReturnedToClient`,

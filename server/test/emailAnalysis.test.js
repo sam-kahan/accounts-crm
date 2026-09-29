@@ -56,9 +56,25 @@ test('a final response at Stage 2 starts the referral window', () => {
   assert.deepEqual(plan.changes, { responded_on: '2026-10-03', final_response_on: '2026-10-03' });
 });
 
-test('a response when one is already recorded is not recorded twice', () => {
+test('a response when one is already recorded is not recorded twice (filed as correspondence)', () => {
   const plan = planFromAnalysis(complaint({ responded_on: '2026-10-01' }), analysis({ kind: 'stage1_response' }), { today: TODAY });
-  assert.equal(plan.auto, false);
+  assert.equal(plan.auto, true);
+  assert.equal(plan.changes.responded_on, undefined);
+  assert.equal(plan.reviewedAs, 'correspondence');
+});
+
+test('routine correspondence the AI is fairly sure of is filed by itself; anything that could change a date is not', () => {
+  const routine = analysis({ kind: 'request_for_information', confidence: 'medium', summary: 'They ask for a copy of the tenancy agreement.' });
+  assert.deepEqual(planFromAnalysis(complaint(), routine, { today: TODAY, text: 'Please send us a copy of the tenancy agreement.' }),
+    { auto: true, changes: {}, reviewedAs: 'correspondence', event: null });
+  // The words say it's an acknowledgement, whatever the AI called it: a person looks.
+  assert.equal(planFromAnalysis(complaint(), { ...routine, kind: 'other' }, { today: TODAY, text: 'We acknowledge receipt of your complaint.' }).auto, false);
+  // A medium-confidence acknowledgement still waits.
+  assert.equal(planFromAnalysis(complaint(), analysis({ confidence: 'medium' }), { today: TODAY }).auto, false);
+  // Low confidence always waits.
+  assert.equal(planFromAnalysis(complaint(), { ...routine, confidence: 'low' }, { today: TODAY, text: 'x' }).auto, false);
+  // A closed complaint takes nothing, so its emails are filed.
+  assert.equal(planFromAnalysis(complaint({ stage: 'resolved', state: 'resolved' }), analysis(), { today: TODAY }).auto, true);
 });
 
 test('our own email (e.g. CC’d copy) is filed as correspondence, changing nothing', () => {

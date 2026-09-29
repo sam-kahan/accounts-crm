@@ -221,8 +221,23 @@ export function planOurStep(complaint, a, today = todayISO()) {
 
 // What can be recorded from an analysed email without asking anyone.
 // Returns { changes, event, reviewedAs, auto: true } or { auto: false, reason }.
-export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
+// Could this email change a date on the complaint? Only an acknowledgement
+// or a response can — by the AI's reading, OR by the email's own words (so an
+// acknowledgement the AI called "other" is never filed away unseen).
+const DATE_KINDS = new Set(['acknowledgement', 'stage1_response', 'final_response']);
+const DATE_WORDS = /\b(?:acknowledg\w*|stage\s*(?:1|2|one|two)\b|final\s+(?:response|decision|position|viewpoint)|deadlock|(?:complaint|investigation)\s+(?:response|outcome|decision|findings)|outcome\s+of\s+(?:your|the|our)\s+complaint|(?:not\s+)?upheld)/i;
+export function couldChangeDate(a, text = '') {
+  return DATE_KINDS.has(a?.kind) || DATE_WORDS.test(`${a?.summary || ''}\n${text || ''}`);
+}
+
+export function planFromAnalysis(complaint, a, { today = todayISO(), text = '' } = {}) {
   if (!a) return { auto: false, reason: 'Not analysed' };
+  // Routine correspondence (a holding letter, a request for information, a
+  // reply that records nothing): filed as correspondence even when the AI is
+  // only fairly sure, so nobody has to click through every routine email; the
+  // AI review still reads it. Only a LOW-confidence reading, or anything that
+  // could be an acknowledgement or a response, waits for a person.
+  const routine = a.kind !== 'our_email' && !couldChangeDate(a, text);
   // Our own email (a CC'd copy of what we sent) is filed as correspondence
   // unless the AI was unsure; nothing else is filed without high confidence —
   // an uncertain "not from them" could be their real acknowledgement.
@@ -230,7 +245,10 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
   if (a.kind === 'our_email' && a.confidence !== 'low') {
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }
-  if (a.confidence !== 'high') return { auto: false, reason: 'The AI isn’t certain what this is' };
+  if (a.confidence !== 'high') {
+    if (a.confidence === 'medium' && routine) return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
+    return { auto: false, reason: 'The AI isn’t certain what this is' };
+  }
   if (!a.from_organisation) {
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }
@@ -243,7 +261,8 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
   const open = trackOpen(complaint);
 
   if (!date) return { auto: false, reason: 'The date they sent it isn’t clear' };
-  if (!open) return { auto: false, reason: 'The complaint is closed' };
+  // Nothing changes on a finished part: filed as correspondence.
+  if (!open) return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   if (date < (complaint.raised_on || '0000') || date > today) {
     return { auto: false, reason: 'The date doesn’t fit this complaint' };
   }
@@ -265,7 +284,9 @@ export function planFromAnalysis(complaint, a, { today = todayISO() } = {}) {
     if (complaint.stage !== wantStage) {
       return { auto: false, reason: `It reads as a ${a.kind === 'final_response' ? 'final' : 'Stage 1'} response, but the complaint is at ${complaint.stage.replace('_', ' ')}` };
     }
-    if (complaint.responded_on) return { auto: false, reason: 'A response is already recorded' };
+    // Already recorded: this one changes nothing (the recorded date stands);
+    // filed as correspondence for the review to read.
+    if (complaint.responded_on) return { auto: true, changes: refChange, reviewedAs: 'correspondence', event: null };
     if (date < since) return { auto: false, reason: 'The date is before this stage began' };
     return {
       auto: true,

@@ -214,9 +214,11 @@ app.listen(config.port, () => {
   // account numbers kept beside the same number with a digit missing: both
   // tidied (no AI), with the timeline saying what was removed.
   import('./services/complaintEmailProcessor.js')
-    .then(async ({ settleEarlierEmails, settleOwnCopies }) => {
+    .then(async ({ settleEarlierEmails, settleOwnCopies, settleRoutineEmails }) => {
       const n = await settleEarlierEmails();
       if (n) console.log(`  Earlier emails marked as background: ${n}`);
+      const r = await settleRoutineEmails();
+      if (r) console.log(`  Routine emails filed as correspondence: ${r}`);
       const k = await settleOwnCopies();
       if (k) console.log(`  Copies of emails sent from here filed as ours: ${k}`);
     })

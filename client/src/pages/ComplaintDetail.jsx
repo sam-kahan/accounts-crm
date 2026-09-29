@@ -550,6 +550,40 @@ export default function ComplaintDetail() {
       setMsg(e.message);
     }
   }
+  // Every new email as the AI read it, in one press: its kind, the date on
+  // it, and (with more than one organisation) the one it names. Anything it
+  // can't place (no reading, or no organisation for an acknowledgement or a
+  // response) is left for a person, and the page says how many.
+  const [acceptingAll, setAcceptingAll] = useState(false);
+  async function acceptAllReadings(list) {
+    if (!confirm(`Accept the AI’s reading for ${list.length === 1 ? 'this email' : `all ${list.length} emails`}? Acknowledgements and responses are recorded on the dates shown below (check them first: their deadlines follow), everything else is filed as correspondence.`)) return;
+    setAcceptingAll(true);
+    setMsg(null);
+    let done = 0;
+    let left = 0;
+    try {
+      for (const em of list) {
+        const a = em.analysis;
+        if (!a) { left += 1; continue; }
+        const date = emailDates[em.id] ?? (a.sent_on || londonDay(em.received_at));
+        const pick = multi ? (emailParties[em.id] ?? guessTrack(a)) : 'main';
+        const tr = pick === 'main' ? c : parties.find((p) => p.id === pick) || null;
+        let as = 'correspondence';
+        if (a.kind === 'acknowledgement' && tr && tr.stage === 'stage_1' && !tr.acknowledged_on && trackOpen(tr)) as = 'acknowledgement';
+        if ((a.kind === 'stage1_response' || a.kind === 'final_response') && tr && ['stage_1', 'stage_2'].includes(tr.stage) && trackOpen(tr)) as = 'response';
+        if (as !== 'correspondence' && !tr) { left += 1; continue; }
+        await api.complaints.reviewEmail(id, em.id, as, date, as === 'correspondence' ? null : partyIdOf(tr));
+        done += 1;
+      }
+      await load();
+      setMsg(`${done === 1 ? '1 email' : `${done} emails`} accepted as read${left ? `; ${left === 1 ? '1 needs' : `${left} need`} you to say what it is or who it is from` : ''}.`);
+    } catch (e) {
+      await load();
+      setMsg(`${done ? `${done} accepted, then: ` : ''}${e.message}`);
+    } finally {
+      setAcceptingAll(false);
+    }
+  }
   async function undoEmail(em) {
     if (!confirm('Undo what was recorded automatically from this email? It goes back to “New” for you to decide.')) return;
     setMsg(null);
@@ -1464,6 +1498,11 @@ export default function ComplaintDetail() {
         <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--warn)' }}>
           <div className="card-head">
             <h2>New email{newEmails.length === 1 ? '' : 's'} to review <span className="badge amber">{newEmails.length}</span></h2>
+            {newEmails.some((em) => em.analysis) && (
+              <button className="btn-primary btn-sm" disabled={acceptingAll} onClick={() => acceptAllReadings(newEmails)}>
+                {acceptingAll ? 'Accepting…' : newEmails.length === 1 ? 'Accept the AI’s reading' : `Accept the AI’s reading for all ${newEmails.length}`}
+              </button>
+            )}
           </div>
           <div className="card-body">
             <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>

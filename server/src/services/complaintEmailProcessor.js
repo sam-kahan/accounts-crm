@@ -268,6 +268,7 @@ async function applyEmail(em, analysis, skipped = []) {
   const summary = analysis?.summary ? `: ${analysis.summary.replace(/[.\s]+$/, '')}` : '';
   const kind = analysis ? KIND_LABEL[analysis.kind] || 'Email' : 'Email';
   const noteDate = analysis?.sent_on || arrived;
+  const emText = `${em.subject || ''}\n${em.body_text || em.body_preview || ''}`;
 
   // With more than one organisation on the complaint, an email from "the
   // organisation" is recorded on the track of the one that wrote it — never
@@ -292,7 +293,7 @@ async function applyEmail(em, analysis, skipped = []) {
     if (pick.track) {
       placed = true;
       party = pick.track.party;
-      plan = planFromAnalysis(party || complaint, analysis);
+      plan = planFromAnalysis(party || complaint, analysis, { text: emText });
     } else {
       plan = { auto: false, reason: pick.reason };
     }
@@ -308,12 +309,12 @@ async function applyEmail(em, analysis, skipped = []) {
     const hits = tracksOf(complaint, parties, orgs).filter((t) => t.domain && domains.has(t.domain));
     if (hits.length === 1) {
       party = hits[0].party;
-      plan = planFromAnalysis(party || complaint, analysis);
+      plan = planFromAnalysis(party || complaint, analysis, { text: emText });
     } else {
       plan = { auto: false, reason: 'It looks like our Stage 2 request or referral, but it isn’t clear which organisation’s part it moves on' };
     }
   } else {
-    plan = planFromAnalysis(complaint, analysis);
+    plan = planFromAnalysis(complaint, analysis, { text: emText });
   }
   const target = party || complaint;
   const table = party ? 'complaint_parties' : 'complaints';
@@ -701,6 +702,36 @@ export async function fileWaitingEmails() {
 // A past email brought in with an imported complaint: read in full and its
 // attachments kept, but nothing recorded from it — the complaint's dates came
 // from reading the whole thread, and replaying each email would double them.
+// Emails waiting for a person that the rules now file by themselves: routine
+// correspondence, emails on a finished part, a second copy of a recorded
+// response. ONLY those that change nothing are filed (never a date), each
+// from the reading already made (no AI). Run once at start-up.
+const ROUTINE_BY = 'Automatic (routine correspondence: nothing in it changes a date)';
+export async function settleRoutineEmails() {
+  const { planFromAnalysis } = await import('./emailAnalysis.js');
+  const rows = (await query(
+    `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis, e.party_id, e.complaint_id
+       FROM complaint_emails e
+      WHERE e.reviewed_at IS NULL AND e.direction <> 'outbound' AND e.complaint_id IS NOT NULL AND e.analysis IS NOT NULL`,
+  )).rows;
+  let n = 0;
+  for (const e of rows) {
+    const track = e.party_id
+      ? (await query('SELECT * FROM complaint_parties WHERE id = $1', [e.party_id])).rows[0]
+      : (await query('SELECT * FROM complaints WHERE id = $1', [e.complaint_id])).rows[0];
+    if (!track) continue;
+    const plan = planFromAnalysis(track, e.analysis, { text: `${e.subject || ''}\n${e.body_text || e.body_preview || ''}` });
+    if (!plan.auto || Object.keys(plan.changes || {}).length || plan.event) continue;
+    const r = await query(
+      `UPDATE complaint_emails SET reviewed_at = now(), reviewed_as = 'correspondence', reviewed_by = $2
+        WHERE id = $1 AND reviewed_at IS NULL`,
+      [e.id, ROUTINE_BY],
+    );
+    n += r.rowCount;
+  }
+  return n;
+}
+
 // For tests: record an email with a reading already made (no AI).
 export const _applyEmailForTest = (em, analysis) => applyEmail(em, analysis);
 
