@@ -73,7 +73,7 @@ export async function refreshReview(id) {
   const ctx = await gatherContext(id, undefined, { files: 2 });
   try {
     const multi = (ctx.complaint.parties || []).length > 0;
-    const raw = await assistComplaint({ ...ctx, instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') });
+    const raw = await assistComplaint({ ...ctx, feature: 'Standing AI review (automatic)', instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') });
     const headline = typeof raw.headline === 'string' && raw.headline.trim()
       ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
       : null;

@@ -4,6 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { docxToText, isDocx, isLegacyDoc, DocxError } from '../lib/docx.js';
 import { toPence, fromPence } from '../lib/money.js';
+import { track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Read a contractor's invoice (PDF, Word document, photo or plain text) and
@@ -328,7 +329,7 @@ export async function extractInvoice(file) {
   const anthropic = getClient();
   const block = contentFor(file);
 
-  const res = await anthropic.messages.create({
+  const res = await track('Reading a contractor invoice', anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: 2000,
     thinking: { type: 'adaptive' },
@@ -348,7 +349,7 @@ export async function extractInvoice(file) {
         ],
       },
     ],
-  });
+  }));
 
   if (res.stop_reason === 'refusal') {
     throw new HttpError(502, 'The document could not be read. Enter the details by hand.');

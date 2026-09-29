@@ -148,6 +148,9 @@ export const api = {
       request(`/organisations/documents/${docId}`, { method: 'DELETE' }),
   },
 
+  // Admin → AI usage: what the AI has cost, by month (YYYY-MM).
+  aiUsage: (month) => request(`/ai-usage${month ? `?month=${month}` : ''}`),
+
   users: {
     list: () => request('/users'),
     options: () => request('/users/access/options'),

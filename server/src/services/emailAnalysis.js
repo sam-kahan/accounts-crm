@@ -4,6 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
 import { trackOpen } from './complaintRules.js';
+import { track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Reads an email that arrived for a complaint — usually one a colleague has
@@ -347,14 +348,14 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
   }
   if (left.length) lines.push(`Not attached (too large to send): ${left.join(', ')}. Do not assume their contents.`);
 
-  const res = await anthropic.messages.create({
+  const res = await track('Reading an incoming email', anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: 2000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium' },
     system: SYSTEM,
     messages: [{ role: 'user', content: [...blocks, { type: 'text', text: lines.join('\n') }] }],
-  });
+  }));
   if (res.stop_reason === 'refusal') throw new HttpError(502, 'The email could not be analysed.');
   const text = res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
   const parsed = extractJson(text);

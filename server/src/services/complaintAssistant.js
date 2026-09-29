@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
+import { track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -224,17 +225,18 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
 }
 
 // Shared Claude call returning the concatenated text output.
-export async function callClaude({ system, user, blocks = [], maxTokens = 4000, effort = 'medium' }) {
+// `feature` names what the call is for on Admin → AI usage.
+export async function callClaude({ system, user, blocks = [], maxTokens = 4000, effort = 'medium', feature = 'Complaints (other)' }) {
   const anthropic = getClient();
   const content = blocks.length ? [...blocks, { type: 'text', text: user }] : user;
-  const res = await anthropic.messages.create({
+  const res = await track(feature, anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort },
     system,
     messages: [{ role: 'user', content }],
-  });
+  }));
   if (res.stop_reason === 'refusal') {
     throw new HttpError(502, 'The assistant declined this request.');
   }
@@ -245,7 +247,9 @@ export async function callClaude({ system, user, blocks = [], maxTokens = 4000, 
 }
 
 export async function assistComplaint(input) {
-  const text = await callClaude({ system: SYSTEM, user: contextBlock(input), blocks: input.blocks });
+  const text = await callClaude({
+    system: SYSTEM, user: contextBlock(input), blocks: input.blocks, feature: input.feature || 'Complaint assistant',
+  });
   const result = extractJson(text);
   if (!result || !result.email) {
     throw new HttpError(502, 'The assistant returned no usable draft. Try again or add more detail.');
@@ -277,6 +281,7 @@ export async function classifyComplaintStatus(input) {
     user: contextBlock({ ...input, instruction: 'Assess escalation status only.' }),
     blocks: input.blocks,
     maxTokens: 1500,
+    feature: 'Complaint status check',
   });
   const result = extractJson(text);
   if (!result) throw new HttpError(502, 'Status check returned nothing usable.');
@@ -296,6 +301,7 @@ export async function draftReferralGrounds(input) {
     user: contextBlock({ ...input, instruction: 'Write the grounds for referral.' }),
     blocks: input.blocks,
     maxTokens: 2000,
+    feature: 'Ombudsman referral pack',
   })).trim();
 }
 
@@ -357,7 +363,7 @@ export async function parseImportedComplaint({ text, hint, blocks = [] }) {
     (text
       ? `Material about the complaint:\n<untrusted_content>\n${text}\n</untrusted_content>`
       : 'The material about the complaint is the attached document.');
-  const out = await callClaude({ system: IMPORT_SYSTEM, user, blocks, maxTokens: 2000 });
+  const out = await callClaude({ system: IMPORT_SYSTEM, user, blocks, maxTokens: 2000, feature: 'Reading a complaint (import / log form)' });
   const result = extractJson(out);
   if (result && result.is_complaint === false) return result;
   if (!result || !result.subject) {
@@ -383,6 +389,7 @@ export async function triageComplaintThread(text) {
     user: `<untrusted_content>\n${String(text).slice(0, 8000)}\n</untrusted_content>`,
     maxTokens: 1000,
     effort: 'low',
+    feature: 'Past-complaints search (quick look)',
   });
   const r = extractJson(out);
   // When unsure, let it through: the full read decides, and a missed complaint

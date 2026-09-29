@@ -95,6 +95,7 @@ export async function readAccountNumbers(text) {
     user: `<untrusted_content>\n${String(text).slice(0, 30000)}\n</untrusted_content>`,
     maxTokens: 1000,
     effort: 'low',
+    feature: 'Reading account numbers',
   });
   return cleanAccountNumbers(extractJson(out)?.account_numbers);
 }

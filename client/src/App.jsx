@@ -33,7 +33,10 @@ const AREAS = [
   },
   {
     heading: 'Admin',
-    items: [{ to: '/staff', label: 'Staff & access', icon: '⚙', section: 'admin' }],
+    items: [
+      { to: '/staff', label: 'Staff & access', icon: '⚙', section: 'admin' },
+      { to: '/ai-usage', label: 'AI usage', icon: '✦', section: 'admin' },
+    ],
   },
 ];
 
@@ -47,6 +50,7 @@ const TITLES = {
   '/commission/raised': 'Commission invoices',
   '/commission/contractors': 'Contractors',
   '/staff': 'Staff & access',
+  '/ai-usage': 'AI usage',
 };
 
 export default function App() {

@@ -26,6 +26,7 @@ import ContractorInvoices from './pages/ContractorInvoices.jsx';
 import CommissionInvoices from './pages/CommissionInvoices.jsx';
 import CommissionInvoiceDetail from './pages/CommissionInvoiceDetail.jsx';
 import Users from './pages/Users.jsx';
+import AiUsage from './pages/AiUsage.jsx';
 
 // A page nobody should reach by typing its address. The API refuses it anyway;
 // this just says so plainly instead of showing a broken screen.
@@ -76,6 +77,7 @@ function Gate() {
           path="staff"
           element={<Restricted section="admin"><Users /></Restricted>}
         />
+        <Route path="ai-usage" element={<Restricted section="admin"><AiUsage /></Restricted>} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

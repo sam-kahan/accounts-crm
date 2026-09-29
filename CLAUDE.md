@@ -704,6 +704,20 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — AI usage page: what the AI costs, by feature
+- **Every AI call is recorded** (`ai_usage`, migration `035`) with what it was
+  for and the tokens it used: `services/aiUsage.js#track(feature, create(...))`
+  wraps every `messages.create` (and `callClaude` takes `feature`). Tokens are
+  stored, not money; `costOf()` prices them when read from `PRICES` (US
+  dollars per million, Anthropic's list prices; web search $0.01 each), so a
+  price change never leaves wrong figures. An unknown model is flagged, never
+  shown as free. **A new AI call must go through `track()` with a plain-English
+  feature name.**
+- **Admin → AI usage** (`/ai-usage`, `GET /api/ai-usage?month=`, admin only):
+  the month's estimated spend and where it is heading, spend by feature
+  (dearest first, with its share), day by day, and month by month. Estimates;
+  Anthropic's invoice is the authority.
+
 ### 2026-09-29 — the site works on a phone
 - **Tables read as cards on a phone**, every figure labelled, instead of the
   money columns sitting off the right-hand edge (commission, invoice totals,

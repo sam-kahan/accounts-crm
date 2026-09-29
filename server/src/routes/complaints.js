@@ -236,7 +236,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const d = parse(assistInput, req.body);
     const ctx = await gatherContext(req.params.id, d.context);
-    const result = await assistComplaint({ ...ctx, instruction: d.instruction });
+    const result = await assistComplaint({ ...ctx, feature: 'Complaint assistant (asked)', instruction: d.instruction });
     res.json(result);
   }),
 );
@@ -461,6 +461,7 @@ router.post(
         const ctx = await gatherContext(c.id);
         const r = await assistComplaint({
           ...ctx,
+          feature: 'Chaser drafts',
           instruction:
             (t.status === 'ack_overdue'
               ? 'Draft a polite but firm chaser: the complaint has not been acknowledged within ' +
@@ -1438,6 +1439,7 @@ router.post(
     const name = org?.name || d.org_name;
     const r = await assistComplaint({
       ...ctx,
+      feature: 'Supplier complaint draft',
       instruction:
         `Draft a FORMAL COMPLAINT email from Greenco to ${name}, the company that owns this account, which ` +
         `${c.org_name} is pursuing on their behalf. It is a NEW complaint to ${name} (not a reply to ${c.org_name}). ` +

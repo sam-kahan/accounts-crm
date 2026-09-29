@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { ruleFor } from './complaintRules.js';
 import { contentFor } from './invoiceExtract.js';
+import { track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Research a specific organisation's complaints procedure using Claude with web
@@ -178,7 +179,7 @@ organisation states, and leave anything you can't confirm null and listed in "un
   // iteration cap it returns stop_reason 'pause_turn' and must be resumed by
   // re-sending the conversation. Loop a few times until it finishes.
   for (let i = 0; i < 4; i += 1) {
-    res = await anthropic.messages.create({
+    res = await track('Researching an organisation (web)', anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: 4000,
       thinking: { type: 'adaptive' },
@@ -186,7 +187,7 @@ organisation states, and leave anything you can't confirm null and listed in "un
       system: SYSTEM,
       tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
       messages,
-    });
+    }));
     if (res.stop_reason !== 'pause_turn') break;
     messages.push({ role: 'assistant', content: res.content });
   }
@@ -212,7 +213,7 @@ organisation states, and leave anything you can't confirm null and listed in "un
 export async function readProcedureDocument(file, { name, type } = {}) {
   const anthropic = getClient();
   const block = contentFor(file);
-  const res = await anthropic.messages.create({
+  const res = await track('Reading a complaints procedure document', anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: 4000,
     thinking: { type: 'adaptive' },
@@ -233,7 +234,7 @@ export async function readProcedureDocument(file, { name, type } = {}) {
         ],
       },
     ],
-  });
+  }));
   if (res.stop_reason === 'refusal') {
     throw new HttpError(502, 'The document could not be read. Enter the procedure by hand.');
   }
