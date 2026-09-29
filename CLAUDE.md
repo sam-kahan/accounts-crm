@@ -746,6 +746,29 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the past-complaints import
+- **A date the full reading dropped stays dropped**: import takes its dates
+  from the full reading alone when there is one (`dateOf` in
+  `importClaimed`); the quick reading used to fill them back in (an
+  acknowledgement before the complaint was made, a future "resolved"). The
+  quick reading is cleaned before it is kept and again on import
+  (`complaintReconstruct.js#cleanQuickReading`, pure, tested: real past
+  dates in a possible order, known values only, the asked-for keys only), so
+  a bad date can't fail an import (and its paid retries) either. No step, or
+  timeline entry, before the complaint was made.
+- **Skip sticks**: a later thread about an issue a person skipped waits for
+  a person (`relatedSkipped` → `autoPlan({ skipped })`), in automatic import,
+  the search's own import and the list's note.
+- **The search's own import follows `autoPlan`** (waits for the account
+  number, like automatic import) instead of a looser check of its own.
+- **A thread the AI couldn't read (busy, network) isn't ruled out for
+  good**: nothing is stored and the next search reads it; a reading that
+  came back unusable is still ruled out (reading it again costs the same).
+- **An import is recorded in the same transaction as its complaint**
+  (`createComplaint({ afterInsert })`), so a restart can't make it twice.
+- The search period is clamped to the month end (`monthsAgo`), and the
+  fallback dates use the whole group's first and last emails.
+
 ### 2026-09-29 — fixes from a review of sending from a complaint
 - **Nothing sent twice by two presses at once**: every send is queued by
   `queueOutbox()` (routes/complaints.js), the check and the insert under an

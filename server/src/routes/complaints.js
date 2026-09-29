@@ -20,7 +20,7 @@ import { processEmail, undoEmail, fileWaitingEmails } from '../services/complain
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
-import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused } from '../services/pastComplaints.js';
+import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused, relatedSkipped } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, sameAccount, sameOrgName, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
@@ -1128,6 +1128,7 @@ router.get(
     const paused = await importsPaused();
     const enabled = config.ms.enabled && config.anthropic.enabled;
     const busyRows = rows.filter((r) => r.status === 'importing');
+    const skippedRows = (await query(`SELECT extracted FROM complaint_import_candidates WHERE status = 'skipped'`)).rows;
     res.json(await Promise.all([...busyGroups, ...groupCandidates(pendingRows)].map(async (group) => {
       const merged = mergeExtracted(group);
       const { hit, certain } = await onFileFor(group, { complaints, orgs });
@@ -1137,6 +1138,7 @@ router.get(
         ? autoPlan(group, {
           hit, certain, paused, enabled,
           relatedRunning: busyRows.some((b) => group.some((c) => sameIssue(c.extracted, b.extracted))),
+          skipped: await relatedSkipped(group, skippedRows),
         })
         : null;
       return {

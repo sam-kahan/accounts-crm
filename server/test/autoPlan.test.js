@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoPlan, AUTO_TRIES } from '../src/services/pastComplaints.js';
+import { autoPlan, AUTO_TRIES, monthsAgo } from '../src/services/pastComplaints.js';
 
 const now = new Date('2026-09-28T12:00:00Z');
 const row = (over = {}) => ({ extracted: { confidence: 'high' }, error: null, import_attempts: 0, last_attempt_at: null, accounts_read_at: now, ...over });
@@ -54,4 +54,19 @@ test('nothing is imported or linked until its account number has been read', () 
   assert.match(p.note, /account number/);
   // read by the full read at search time (the field is there, even if empty)
   assert.equal(autoPlan([row({ accounts_read_at: null, extracted: { confidence: 'high', account_numbers: [] } })], { now }).due, true);
+});
+
+test('a thread about a complaint a person skipped waits for a person', () => {
+  const p = autoPlan([row()], { skipped: true, now });
+  assert.equal(p.will, null);
+  assert.equal(p.due, false);
+  assert.match(p.note, /skipped/);
+  // Certainly already on file: still linked (nothing new is made).
+  assert.equal(autoPlan([row()], { skipped: true, hit: { ref_code: 'GC-C-X' }, certain: true, now }).will, 'link');
+});
+
+test('months back are clamped to the month end, never overflowing', () => {
+  assert.equal(monthsAgo(3, new Date('2026-05-31T10:00:00Z')).toISOString().slice(0, 10), '2026-02-28');
+  assert.equal(monthsAgo(12, new Date('2028-02-29T10:00:00Z')).toISOString().slice(0, 10), '2027-02-28');
+  assert.equal(monthsAgo(1, new Date('2026-09-29T10:00:00Z')).toISOString().slice(0, 10), '2026-08-29');
 });

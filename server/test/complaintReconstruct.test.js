@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normaliseReconstruction, storyText } from '../src/services/complaintReconstruct.js';
+import { normaliseReconstruction, storyText, cleanQuickReading } from '../src/services/complaintReconstruct.js';
 
 const TODAY = '2026-10-01';
 
@@ -48,4 +48,22 @@ test('the story is in date order, each email once', () => {
   ]);
   assert.ok(t.indexOf('first') < t.indexOf('second'));
   assert.equal(t.split('first').length - 1, 1, 'the duplicate copy appears once');
+});
+
+test('the quick reading is cleaned before it is kept', () => {
+  const q = cleanQuickReading({
+    is_complaint: true, subject: 'Wrong bill', org_type: 'bank', stage: 'stage_9', confidence: 'certain',
+    raised_on: '2026-03-10', acknowledged_on: '2026-03-01', responded_on: '2026-02-30',
+    state: 'resolved', resolved_on: '2099-01-01', account_numbers: 'A123', injected: 'x',
+  }, { today: '2026-09-29' });
+  assert.equal(q.org_type, 'other');
+  assert.equal(q.stage, 'stage_1');
+  assert.equal(q.confidence, 'low');
+  assert.equal(q.raised_on, '2026-03-10');
+  assert.equal(q.acknowledged_on, null); // before it was made
+  assert.equal(q.responded_on, null); // not a real date
+  assert.equal(q.resolved_on, null); // in the future
+  assert.equal(q.account_numbers, null); // not a list: not read
+  assert.equal('injected' in q, false);
+  assert.deepEqual(cleanQuickReading({ account_numbers: [' A1 ', 'A1', 5] }).account_numbers, ['A1']);
 });

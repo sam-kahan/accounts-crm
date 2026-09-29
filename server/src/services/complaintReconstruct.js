@@ -106,7 +106,7 @@ Return ONLY a JSON object:
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
 const EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 
-function cleanDate(v, today) {
+export function cleanDate(v, today) {
   if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
   const d = new Date(`${v}T00:00:00Z`);
   if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) return null;
@@ -172,6 +172,48 @@ export function normaliseReconstruction(r, { today = todayISO() } = {}) {
   }
   if (out.stage === 'stage_1') out.stage_started_on = out.raised_on;
   if (out.state !== 'resolved') { out.resolved_on = null; }
+  return out;
+}
+
+// The quick reading of one found thread (parseImportedComplaint), reduced
+// the same way before it is kept: it is shown on the list, and it stands in
+// for any part of the full reading that failed on import, so an unreal,
+// future or impossible-order date, or an unknown value, must never reach a
+// complaint through it. Only the keys it is asked for are kept.
+export function cleanQuickReading(r, { today = todayISO() } = {}) {
+  if (!r || typeof r !== 'object') return { is_complaint: false, why: 'nothing could be read' };
+  const d = (k) => cleanDate(r[k], today);
+  const out = {
+    is_complaint: r.is_complaint !== false,
+    why: str(r.why, 300),
+    state: r.state === 'resolved' ? 'resolved' : 'open',
+    resolved_on: d('resolved_on'),
+    summary: str(r.summary, 1000),
+    org_name: str(r.org_name, 200),
+    org_type: ORG_TYPES.includes(r.org_type) ? r.org_type : 'other',
+    subject: str(r.subject, 300),
+    category: str(r.category, 100),
+    property: str(r.property, 300),
+    reference: str(r.reference, 100),
+    our_reference: str(r.our_reference, 100),
+    account_numbers: Array.isArray(r.account_numbers)
+      ? [...new Set(r.account_numbers.map((a) => str(a, 40)).filter(Boolean))].slice(0, 6)
+      : null,
+    channel: ['email', 'portal', 'letter', 'phone', 'other'].includes(r.channel) ? r.channel : 'email',
+    raised_on: d('raised_on'),
+    acknowledged_on: d('acknowledged_on'),
+    responded_on: d('responded_on'),
+    stage: ['stage_1', 'stage_2', 'ombudsman'].includes(r.stage) ? r.stage : 'stage_1',
+    description: str(r.description, 4000),
+    confidence: ['high', 'medium', 'low'].includes(r.confidence) ? r.confidence : 'low',
+    notes: str(r.notes, 1000),
+  };
+  if (out.raised_on) {
+    for (const k of ['acknowledged_on', 'responded_on', 'resolved_on']) {
+      if (out[k] && out[k] < out.raised_on) out[k] = null;
+    }
+  }
+  if (out.state !== 'resolved') out.resolved_on = null;
   return out;
 }
 

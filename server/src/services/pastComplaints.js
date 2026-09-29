@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
 import { searchMailbox, fetchConversation } from './graphMail.js';
 import { parseImportedComplaint, triageComplaintThread } from './complaintAssistant.js';
-import { reconstructComplaint, belongsToComplaint } from './complaintReconstruct.js';
+import { reconstructComplaint, belongsToComplaint, cleanQuickReading } from './complaintReconstruct.js';
 import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
 import { getSetting, setSetting } from './settings.js';
@@ -94,14 +94,24 @@ export function couldBeOurComplaint(msgs, ourDomain) {
   });
 }
 
+// N months before now, clamped to the month's end: 31 May less 3 months is
+// 28 Feb, never 3 Mar (Date#setMonth overflows), so no days go unsearched.
+export function monthsAgo(n, now = new Date()) {
+  const d = new Date(now);
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, last));
+  return d;
+}
+
 async function runScan({ mailboxes, months, carry = null }) {
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - months);
+  const cutoff = monthsAgo(months);
   // Only complaints still live are worth bringing in: every ombudsman we deal
   // with must be approached within 12 months (of the final response, or of
   // the problem), so a thread with nothing in the last year is left alone.
-  const activeSince = new Date();
-  activeSince.setMonth(activeSince.getMonth() - 12);
+  const activeSince = monthsAgo(12);
   const errors = [];
 
   // 1. Search, and group into threads not already known.
@@ -201,9 +211,22 @@ async function runScan({ mailboxes, months, carry = null }) {
             text,
             hint: 'This is an email thread found in a Greenco mailbox. Decide first whether it is a complaint Greenco made.',
           });
-        } catch {
-          extracted = { is_complaint: false, why: 'could not be read' };
+        } catch (err) {
+          // Read, but nothing usable came back: ruled out as before (reading
+          // it again would cost the same for the same answer).
+          if (err.status === 502) {
+            extracted = { is_complaint: false, why: 'could not be read' };
+          } else {
+            // Not read at all (the AI busy, a dropped connection): nothing is
+            // stored, so the next search reads it rather than ruling it out
+            // for good.
+            errors.push(`thread ${t.conversationId.slice(0, 12)}…: couldn't be read (${err.message}); the next search will try it again`);
+            return;
+          }
         }
+        // The quick reading, clamped like the full one before it is kept:
+        // it can stand in for the full reading on import.
+        if (extracted.is_complaint !== false || extracted.subject) extracted = cleanQuickReading(extracted);
       }
       const isComplaint = extracted.is_complaint !== false && Boolean(extracted.subject);
       if (isComplaint) found += 1;
@@ -239,10 +262,13 @@ async function runScan({ mailboxes, months, carry = null }) {
           if (hit && certain) {
             await linkCandidate(cand.id, hit.id, AUTO_SEARCH);
             found -= 1; // not a new one to look at
-          } else if (!hit && extracted.confidence === 'high' && (await getSetting('past_auto_import')) && !(await importsPaused())) {
-            // Switched on: a complaint it is sure of is imported as it is found
-            // (marked "to check", like everything the system creates itself).
-            await importCandidate(cand.id, AUTO_SEARCH);
+          } else if (await getSetting('past_auto_import')) {
+            // Switched on: imported as it is found by the same rule automatic
+            // import follows (autoPlan: its account number read, the AI sure,
+            // nothing skipped about it), marked "to check" like everything
+            // the system creates itself.
+            const plan = autoPlan(group, { hit, certain, paused: await importsPaused(), skipped: await relatedSkipped(group) });
+            if (plan.due && plan.will === 'import') await importCandidate(group[0].id, AUTO_SEARCH);
           }
         }).catch((err) => {
           if (err.status !== 409) throw err; // someone pressed Import or Link first
@@ -344,6 +370,14 @@ export async function onFileFor(group, preloaded = null) {
 async function relatedImportRunning(group) {
   const busy = (await query(`SELECT extracted FROM complaint_import_candidates WHERE status = 'importing'`)).rows;
   return busy.some((b) => group.some((c) => sameIssue(c.extracted, b.extracted)));
+}
+
+// A thread about the same issue that a person skipped: automatic import
+// leaves this one for a person too, rather than bringing back from a thread
+// found later what they chose not to track.
+export async function relatedSkipped(group, preloaded = null) {
+  const skipped = preloaded || (await query(`SELECT extracted FROM complaint_import_candidates WHERE status = 'skipped'`)).rows;
+  return skipped.some((s) => group.some((c) => sameIssue(c.extracted, s.extracted)));
 }
 
 // Claim a found complaint (and the threads grouped with it) for one import or
@@ -502,7 +536,10 @@ export async function importCandidate(id, by) {
 
 async function importClaimed(id, group, by) {
   const cand = group.find((c) => c.id === id);
-  const seed = group.length > 1 ? mergeExtracted(group) : cand.extracted || {};
+  // Cleaned again here: rows found before the quick reading was cleaned as
+  // it was stored still hold what the model said.
+  const seed = cleanQuickReading(group.length > 1 ? mergeExtracted(group) : cand.extracted || {});
+  const members = group.length ? group : [cand];
   const ourDomain = config.complaintEmail.domain.toLowerCase();
 
   // 1. Every email in the threads found for it.
@@ -543,8 +580,16 @@ async function importClaimed(id, group, by) {
     return null;
   }
   const pick = (k) => (x && x[k] != null && x[k] !== '' ? x[k] : seed[k] ?? null);
+  // Dates come from the full reading alone when there is one: it drops a
+  // date that is unreal, in the future or before the complaint was made, and
+  // the quick reading must not put it back. Without it, the (cleaned) quick
+  // reading's.
+  const dateOf = (k) => ((x ? x[k] : seed[k]) || null);
   const iso = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
-  const firstDay = londonDateOf(new Date(cand.first_at));
+  // The group's first and last emails, whichever thread was clicked.
+  const firstAt = new Date(Math.min(...members.map((c) => new Date(c.first_at).getTime())));
+  const lastAt = new Date(Math.max(...members.map((c) => new Date(c.last_at).getTime())));
+  const firstDay = londonDateOf(firstAt);
 
   // 4. The organisation: matched, or set up (with its complaints address, if
   //    the emails show it).
@@ -573,8 +618,11 @@ async function importClaimed(id, group, by) {
   // The day the formal complaint was made (the full read quotes the sentence
   // that made it). If no email shows it, the first email's date stands in,
   // and the complaint says so: its deadlines and ombudsman dates rest on it.
-  const raisedOn = iso(pick('raised_on')) || firstDay;
-  const raisedGuessed = !iso(pick('raised_on'));
+  const raisedOn = iso(dateOf('raised_on')) || firstDay;
+  const raisedGuessed = !iso(dateOf('raised_on'));
+  // Never a step before the complaint was made (the first email's date can
+  // stand in for a raised date the reading didn't give).
+  const after = (v) => (iso(v) && iso(v) >= raisedOn ? iso(v) : null);
 
   // 5. The complaint, as complete as the emails allow.
   const stage = ['stage_1', 'stage_2', 'ombudsman'].includes(pick('stage')) ? pick('stage') : 'stage_1';
@@ -596,15 +644,22 @@ async function importClaimed(id, group, by) {
       channel: pick('channel') || 'email',
       raised_on: raisedOn,
       stage,
-      stage_started_on: stage === 'stage_1' ? null : iso(x?.stage_started_on),
-      acknowledged_on: iso(pick('acknowledged_on')),
-      responded_on: iso(pick('responded_on')),
-      final_response_on: iso(x?.final_response_on),
+      stage_started_on: stage === 'stage_1' ? null : after(x?.stage_started_on),
+      acknowledged_on: after(dateOf('acknowledged_on')),
+      responded_on: after(dateOf('responded_on')),
+      final_response_on: after(x?.final_response_on),
       imported: true,
     },
     {
       by,
       needsCheck: true,
+      // Recorded in the same transaction, so an import cut short from here
+      // on (a restart, a failed statement) is known to have made this
+      // complaint and is never made again.
+      afterInsert: (client, row) => client.query(
+        'UPDATE complaint_import_candidates SET complaint_id = $2 WHERE id = ANY($1::uuid[])',
+        [members.map((c) => c.id), row.id],
+      ),
       raisedNote: `Imported from past emails: ${plural(new Set(msgs.map((m) => m.messageId || m.graphId)).size, 'email')} ` +
         `across ${plural(threads, 'thread')}${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
     },
@@ -613,14 +668,11 @@ async function importClaimed(id, group, by) {
   // Its account numbers were read with the whole story.
   await query('UPDATE complaints SET accounts_read_at = now() WHERE id = $1', [complaint.id]);
 
-  // Recorded straight away, so an import cut short from here on is known to
-  // have made this complaint and is never made again.
-  await query('UPDATE complaint_import_candidates SET complaint_id = $2 WHERE id = ANY($1::uuid[])',
-    [group.map((c) => c.id), complaint.id]);
 
   // 6. The timeline, rebuilt from the emails (the "raised" entry is already there).
   for (const e of x?.events || []) {
     if (e.type === 'raised') continue;
+    if (e.date < raisedOn) continue; // before the complaint: background, not a step of it
     await query(
       `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,$3,$4,$5)`,
       [complaint.id, e.date, e.type, e.note, 'Import (read from the emails)'],
@@ -655,7 +707,7 @@ async function importClaimed(id, group, by) {
 
   // 8. Finished, if it was.
   if (pick('state') === 'resolved') {
-    const on = iso(pick('resolved_on')) || londonDateOf(new Date(cand.last_at));
+    const on = after(dateOf('resolved_on')) || londonDateOf(lastAt);
     await query(`UPDATE complaints SET state = 'resolved', stage = 'resolved', closed_on = $2, outcome = $3 WHERE id = $1`,
       [complaint.id, on, x?.outcome || null]);
     if (!(x?.events || []).some((e) => e.type === 'resolved')) {
@@ -785,7 +837,7 @@ const hhmm = (d) => new Date(d).toLocaleTimeString('en-GB', { timeZone: 'Europe/
 //   - otherwise: left for a person
 // A failure waits half an hour before the next try; a pause (a deploy about
 // to restart) or a related import still running holds it for a few minutes.
-export function autoPlan(group, { hit = null, certain = false, relatedRunning = false, paused = false, enabled = true, now = new Date() } = {}) {
+export function autoPlan(group, { hit = null, certain = false, relatedRunning = false, paused = false, enabled = true, skipped = false, now = new Date() } = {}) {
   const person = (note) => ({ will: null, due: false, note });
   if (!enabled) return person('Automatic import needs the mailbox connection and the AI set up on the server.');
   // The account number is what it is matched on, so it is read first.
@@ -797,6 +849,7 @@ export function autoPlan(group, { hit = null, certain = false, relatedRunning = 
   if (failed.length && tries >= AUTO_TRIES) return person(`Tried ${tries} times without success: press Import to try again, or Skip.`);
   let plan;
   if (hit && certain) plan = { will: 'link', note: `Its emails will be added to ${hit.ref_code || 'the complaint already on file'} automatically.` };
+  else if (skipped) return person('You skipped another thread about the same complaint, so this one waits for you: Import it if it should be tracked after all, or Skip.');
   else if (hit) return person('May already be in the system: check it and Link, or Import if it’s a different complaint.');
   else if (group.some((c) => c.extracted?.confidence === 'high')) plan = { will: 'import', note: 'Will be imported automatically in the next few minutes.' };
   else return person('Waiting for you: the AI was less sure this is a complaint to track.');
@@ -836,6 +889,7 @@ export async function runAutoImport(by = AUTO_SEARCH) {
           hit, certain,
           relatedRunning: await relatedImportRunning(group),
           paused: await importsPaused(),
+          skipped: await relatedSkipped(group),
         });
         if (!plan.due) return;
         if (plan.will === 'link') {
