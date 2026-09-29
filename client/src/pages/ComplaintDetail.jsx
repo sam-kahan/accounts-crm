@@ -1218,11 +1218,17 @@ export default function ComplaintDetail() {
                     <span className={`badge ${badgeOf(t)}`}>{t.label}</span></>
                 } />
               </div>
-              {t.nextAction && (
-                <div className={`inline-note ${t.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 10 }}>
-                  <strong>Next step with {t.org_name}:</strong> {t.nextAction}
-                </div>
-              )}
+              {(() => {
+                // The same step as the top of the page: the AI's for this
+                // organisation while its review is current, else the dates'.
+                const own = c.ai_review_current ? c.ai_review?.by_org?.[tracks.findIndex((x) => x.id === t.id)]?.headline : null;
+                const step = own || t.nextAction;
+                return step ? (
+                  <div className={`inline-note ${t.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 10 }}>
+                    <strong>Next step with {t.org_name}:</strong> {step}
+                  </div>
+                ) : null;
+              })()}
               <div className="btn-row" style={{ marginBottom: 12 }}>
                 {trackButtons(t)}
                 {partyIdOf(t) && (
