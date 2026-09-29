@@ -78,17 +78,17 @@ export default function Ombudsmen() {
           </div>
           <div className="card-body">
             <div className="form-grid">
-              <div><div className="lbl">It will take a case</div>{whenItTakes(s)}</div>
-              <div><div className="lbl">Time limit</div>{timeLimit(s)}</div>
+              <div><div><strong>It will take a case</strong></div>{whenItTakes(s)}</div>
+              <div><div><strong>Time limit</strong></div>{timeLimit(s)}</div>
               <div>
-                <div className="lbl">How to refer</div>
+                <div><strong>How to refer</strong></div>
                 {s.refer_url ? <a href={s.refer_url} target="_blank" rel="noreferrer">Their complaint form ↗</a> : 'Not known'}
                 {s.phone && <div>Phone: {s.phone}</div>}
                 {s.email && <div>Email: {s.email}</div>}
                 {s.post && <div className="muted" style={{ fontSize: 13 }}>Post: {s.post}</div>}
               </div>
               <div>
-                <div className="lbl">Used for</div>
+                <div><strong>Used for</strong></div>
                 {s.usual_for?.length > 0 && <div>Usual for: {s.usual_for.map((t) => ORG_TYPE_LABEL[t] || t).join(', ')}</div>}
                 {s.organisations?.length
                   ? <div className="muted" style={{ fontSize: 13 }}>{s.organisations.map((o) => o.name).join(', ')}</div>
@@ -195,6 +195,20 @@ function EditScheme({ scheme, onClose, onSaved }) {
       }>
       <form id="scheme-form" onSubmit={save}>
         {error && <div className="inline-note warn" style={{ marginBottom: 12 }}>{error}</div>}
+        {/* What to check each figure against, beside the figures themselves. */}
+        {Object.keys(scheme.evidence || {}).length > 0 && (
+          <details open className="inline-note" style={{ marginBottom: 12 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Check against these sources</summary>
+            <ul style={{ fontSize: 13, margin: '6px 0 0' }}>
+              {Object.entries(scheme.evidence).map(([k, e]) => (
+                <li key={k} style={{ marginBottom: 4 }}>
+                  <strong>{EVIDENCE_LABEL[k] || k.replace(/_/g, ' ')}:</strong> “{e.text}”{' '}
+                  <a href={e.url} target="_blank" rel="noreferrer">open the page ↗</a>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         <div className="form-grid">
           <label>Name<input value={f.name || ''} onChange={set('name')} required /></label>
           <label>Website<input value={f.website || ''} onChange={set('website')} /></label>
