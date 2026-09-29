@@ -192,8 +192,12 @@ app.listen(config.port, () => {
   // account numbers kept beside the same number with a digit missing: both
   // tidied (no AI), with the timeline saying what was removed.
   import('./services/complaintEmailProcessor.js')
-    .then(({ settleEarlierEmails }) => settleEarlierEmails())
-    .then((n) => n && console.log(`  Earlier emails marked as background: ${n}`))
+    .then(async ({ settleEarlierEmails, settleOwnCopies }) => {
+      const n = await settleEarlierEmails();
+      if (n) console.log(`  Earlier emails marked as background: ${n}`);
+      const k = await settleOwnCopies();
+      if (k) console.log(`  Copies of emails sent from here filed as ours: ${k}`);
+    })
     .catch((err) => console.error('  Earlier emails:', err.message));
   import('./services/accountNumbers.js')
     .then(({ removeDigitSlips }) => removeDigitSlips())

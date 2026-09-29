@@ -6,8 +6,8 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen } from '../services/complaintRules.js';
-import { overallState } from '../services/complaintParties.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request } from '../services/complaintRules.js';
+import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { recheckComplaint, undoRecheck, startRecheck, recheckStatus } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
@@ -289,7 +289,7 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
-    await sendMail({ to, cc, subject: d.subject, text: d.body });
+    const sent = await sendMail({ to, cc, subject: d.subject, text: d.body });
     await recordOutboundEmail({
       complaintId: complaint.id,
       fromEmail: fromAddress(),
@@ -298,11 +298,22 @@ router.post(
       subject: d.subject,
       body: d.body,
       sentBy: who(req),
+      messageId: sent?.messageId || null,
     });
-    if (d.then === 'escalate') await escalateTrack(complaint.id, null, todayISO(), who(req));
+    // The Stage 2 request moves the complaint on whichever button sent it:
+    // "Send it and escalate" says so, and otherwise the email's own words do
+    // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
+    // with the review offering the same request again.
+    const track = d.then === 'escalate'
+      ? { party: null }
+      : isStage2Request({ subject: d.subject, body: d.body }) ? await stage2TrackFor(complaint.id, to) : null;
+    if (track) await escalateTrack(complaint.id, track.party?.id || null, todayISO(), who(req));
     const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
     scheduleReview(complaint.id);
-    res.json({ sent: true, escalated: d.then === 'escalate', complaint: await decorate(updated) });
+    res.json({
+      sent: true, escalated: Boolean(track), escalated_org: track?.party?.org_name || null,
+      complaint: await decorate(updated),
+    });
   }),
 );
 
@@ -1150,6 +1161,23 @@ router.post(
 // Move one organisation's track on to its next stage (Stage 2, then the
 // ombudsman), its clock starting on `date`. Shared by the Escalate button
 // and "Send it and escalate to Stage 2".
+// The organisation a Stage 2 request we sent is for, when that is certain:
+// with one organisation, the complaint itself (if it is at Stage 1); with
+// more, the one whose domain it was sent to. Null otherwise: then it is only
+// sent, and a person records the step.
+async function stage2TrackFor(complaintId, to) {
+  const complaint = (await query('SELECT * FROM complaints WHERE id = $1', [complaintId])).rows[0];
+  const parties = (await query('SELECT * FROM complaint_parties WHERE complaint_id = $1 ORDER BY created_at', [complaintId])).rows;
+  if (!parties.length) return complaint.stage === 'stage_1' ? { party: null } : null;
+  const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
+  const orgs = orgIds.length
+    ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+    : [];
+  const domains = new Set(to.map((a) => String(a).toLowerCase().split('@')[1]).filter(Boolean));
+  const hits = tracksOf(complaint, parties, orgs).filter((t) => t.domain && domains.has(t.domain));
+  return hits.length === 1 && hits[0].row.stage === 'stage_1' ? { party: hits[0].party } : null;
+}
+
 async function escalateTrack(complaintId, partyId, date, by) {
     const track = await loadTrack(complaintId, partyId);
     const complaint = track.row;
@@ -1453,10 +1481,10 @@ router.post(
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
-      await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
+      const sent = await sendMail({ to, cc, subject: d.send.subject, text: d.send.body });
       await recordOutboundEmail({
         complaintId: c.id, fromEmail: fromAddress(), to, cc,
-        subject: d.send.subject, body: d.send.body, sentBy: who(req),
+        subject: d.send.subject, body: d.send.body, sentBy: who(req), messageId: sent?.messageId || null,
       });
     }
     await createParty(c.id, {

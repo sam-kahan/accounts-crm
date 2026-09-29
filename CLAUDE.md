@@ -694,6 +694,26 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — a Stage 2 request sent from here always escalates; our own copies file themselves
+- **Sending the Stage 2 request moves the complaint to Stage 2 whichever
+  button sent it.** "Send it and escalate" only appeared when the review's
+  `next_action` was `escalate_stage2`, so a plain Send left it at Stage 1.
+  `complaintRules.js#isStage2Request` (pure, tested, no AI) reads the email's
+  own words (a request, never a conditional threat), `send-email` escalates
+  on it (`stage2TrackFor`: the one organisation, or the one whose domain it
+  went to), and the review carries `email_step` so the page offers the
+  one-press button from the email's words too.
+- **The Stage 2 request is never offered twice**: `guardReview` with
+  `stage2Asked` (every open track past Stage 1) drops a review email that is
+  the request and says to wait for their Stage 2 response and its date; the
+  review instruction says the same.
+- **The copy of an email sent from here files itself.** The Message-ID it went
+  out with is stored as the outbound row's `message_id`, so the copies that
+  come back (complaint address, utilities@) are the same email and aren't
+  stored again. For earlier sends, `settleOwnCopies()` (processEmail step 0,
+  and start-up) files a copy as "sent" — same bare sender address, same
+  subject, within two days — with no AI read.
+
 ### 2026-09-28 — emails from before a complaint aren't "new"; mistyped account numbers dropped
 - **An email that arrived before its complaint was made is background**, not a
   reply: `applyEmail` marks it correspondence (`reviewed_by` "Automatic (arrived

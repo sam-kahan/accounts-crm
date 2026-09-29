@@ -288,7 +288,7 @@ export default function ComplaintDetail() {
       setSend(null);
       await load();
       setMsg(r?.escalated
-        ? 'Sent, and the complaint is now at Stage 2 (from today). Their Stage 2 deadline is on the checklist.'
+        ? `Sent, and ${r.escalated_org ? `${r.escalated_org}'s part of the complaint` : 'the complaint'} is now at Stage 2 (from today). Their Stage 2 deadline is on the checklist.`
         : 'Email sent and logged to this complaint.');
     } catch (e) {
       setMsg(e.message);
@@ -680,7 +680,7 @@ export default function ComplaintDetail() {
             const btn = live && c.ai_review.next_action?.type !== 'send_email' ? actionButton(c.ai_review.next_action) : null;
             // Asking for Stage 2 is done BY the email: one button for both.
             const withEscalate = Boolean(draft) && !multi && c.stage === 'stage_1' &&
-              c.ai_review.next_action?.type === 'escalate_stage2';
+              (c.ai_review.next_action?.type === 'escalate_stage2' || c.ai_review.email_step === 'stage2_request');
             return (
               <div className={`inline-note ${c.any_needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 16 }}><strong>Next step:</strong> {text}</div>
@@ -934,7 +934,8 @@ export default function ComplaintDetail() {
                         {em.body}
                       </pre>
                       {(() => {
-                        const esc = !later && !multi && c.stage === 'stage_1' && c.ai_review.next_action?.type === 'escalate_stage2';
+                        const esc = !later && !multi && c.stage === 'stage_1' &&
+                          (c.ai_review.next_action?.type === 'escalate_stage2' || c.ai_review.email_step === 'stage2_request');
                         return (
                           <div className="btn-row">
                             <button className="btn-primary btn-sm" onClick={() => openSend(em, esc ? 'escalate' : null)}>

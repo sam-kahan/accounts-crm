@@ -92,3 +92,36 @@ test('"Don\'t chase" / "Nothing to send": the email is the one kept ready', () =
   assert.equal(w.email_now, false);
   assert.equal(guardReview({ headline: "Don't chase yet.", email: { body: 'x' } }, { anyOverdue: false, today: '2026-09-29' }).email_now, false);
 });
+
+import { isStage2Request } from '../src/services/complaintRules.js';
+
+test('an email of ours that asks for Stage 2 is read as the request; a chaser that threatens it is not', () => {
+  assert.equal(isStage2Request({ subject: 'Re: 2186700 - Our complaint of 17 August 2026 (ref GC-C-BLV2WK) - request for Stage 2 review' }), true);
+  assert.equal(isStage2Request({
+    subject: 'Re: 2186700',
+    body: 'We are not satisfied. We therefore ask that the complaint is passed to a specialist in your Complaints Team for an independent internal review (Stage 2), as set out in your procedure.',
+  }), true);
+  assert.equal(isStage2Request({ subject: 'Complaint update', body: 'Please escalate our complaint to Stage 2.' }), true);
+  assert.equal(isStage2Request({ subject: 'Chasing our complaint', body: 'If we do not hear by Friday we will ask for Stage 2.' }), false);
+  assert.equal(isStage2Request({ subject: 'Chasing', body: 'Please reply by 5 Oct. Otherwise we will request a Stage 2 review.' }), false);
+  assert.equal(isStage2Request({ subject: 'Our Stage 2 review', body: 'Please confirm when we can expect your final response.' }), false);
+  assert.equal(isStage2Request(null), false);
+});
+
+test('once Stage 2 has been asked for, the same request is never offered again', () => {
+  const review = {
+    headline: 'Request a Stage 2 review now.',
+    email: { subject: 'Our complaint - request for Stage 2 review', body: 'Please escalate our complaint to Stage 2.' },
+    email_now: true,
+    next_action: { type: 'escalate_stage2', by: null },
+  };
+  const r = guardReview(review, {
+    today: '2026-09-29', stage2Asked: true, nextDue: { what: 'their Stage 2 response', date: '2026-10-13' },
+  });
+  assert.equal(r.email, null);
+  assert.equal(r.email_now, false);
+  assert.equal(r.next_action.type, 'wait');
+  assert.match(r.headline, /Stage 2 has been asked for\. Nothing to send now: wait for their Stage 2 response, due Tue 13 Oct 2026\./);
+  // Still at Stage 1: left alone.
+  assert.equal(guardReview(review, { today: '2026-09-29', stage2Asked: false }).email.subject, review.email.subject);
+});

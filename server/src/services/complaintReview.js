@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { gatherContext, lastTheirsByComplaint } from './complaintContext.js';
+import { gatherContext, lastTheirsByComplaint, stage2Asked } from './complaintContext.js';
 import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction } from './complaintRules.js';
 import { guardReview, nextDueFromThem } from './reviewGuard.js';
@@ -46,7 +46,10 @@ const REVIEW_INSTRUCTION =
   'would recommend (sent the chaser, asked for Stage 2, sent what they asked for), do NOT recommend it ' +
   'again: the next step is to wait for their reply, so say so in "headline" with the date to wait ' +
   'until (a reasonable reply date, or their procedure\'s deadline), set next_action to "wait", and ' +
-  'make "email" the follow-up to send only if they don\'t reply by then, with "email_now": false.';
+  'make "email" the follow-up to send only if they don\'t reply by then, with "email_now": false. ' +
+  'Once a complaint (or an organisation\'s part of it) is at Stage 2 or with the ombudsman, Stage 2 has ' +
+  'already been asked for: never draft the Stage 2 request again; any follow-up asks for their Stage 2 ' +
+  'response by its due date.';
 
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
@@ -77,6 +80,7 @@ export async function refreshReview(id) {
         nextDue: nextDueFromThem([c, ...(c.parties || [])]),
         lastSentOn: sent[sent.length - 1] || null,
         lastTheirsOn: (await lastTheirsByComplaint([id])).get(id) || null,
+        stage2Asked: stage2Asked([c, ...(c.parties || [])]),
       },
     );
     await query(

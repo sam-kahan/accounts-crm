@@ -116,7 +116,10 @@ export function listComplaintEmails(complaintId) {
 
 // Record an email the user sent from the app against a complaint, and add a
 // timeline entry. Stored as direction 'outbound' / match_method 'sent'.
-export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy }) {
+// `messageId` is the Message-ID the email went out with: the copies that come
+// back (to the complaint's own address, to utilities@) carry the same one, so
+// they are recognised as this email rather than stored as a new one.
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null }) {
   const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
   const graphId = `out-${globalThis.crypto.randomUUID()}`;
   const client = await pool.connect();
@@ -129,7 +132,7 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
           reviewed_at, reviewed_as, reviewed_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),'outbound','sent',now(),'sent',$9)`,
       [
-        complaintId, graphId, graphId, subject, 'You (sent from CRM)', fromEmail,
+        complaintId, graphId, messageId || graphId, subject, 'You (sent from CRM)', fromEmail,
         recipients, (body || '').slice(0, 2000), sentBy || null,
       ],
     );

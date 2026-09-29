@@ -8,6 +8,8 @@ import {
   procedureSteps,
   reviewSignature,
   effectiveRule,
+  trackOpen,
+  isStage2Request,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { guardReview, nextDueFromThem } from './reviewGuard.js';
@@ -86,10 +88,22 @@ export async function decorateMany(rows) {
         nextDue: nextDueFromThem([c, ...c.parties]),
         lastSentOn: lastSent.get(r.id) || null,
         lastTheirsOn: lastTheirs.get(r.id) || null,
+        stage2Asked: stage2Asked([c, ...c.parties]),
       });
+      // Whether its email IS the Stage 2 request (read from its words), so
+      // the page offers "Send it and escalate" whatever the review called
+      // its next step.
+      if (c.ai_review?.email) c.ai_review.email_step = isStage2Request(c.ai_review.email) ? 'stage2_request' : null;
     }
     return c;
   });
+}
+
+// Every open part of the complaint is past Stage 1: a Stage 2 request is
+// no longer something to send.
+export function stage2Asked(tracks) {
+  const open = tracks.filter((t) => t.stage && trackOpen(t));
+  return open.length > 0 && open.every((t) => t.stage !== 'stage_1');
 }
 
 // The further organisations on a complaint, and what the list, the digest and

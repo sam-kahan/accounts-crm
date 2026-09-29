@@ -1,5 +1,5 @@
 import { todayISO } from '../lib/dates.js';
-import { addWorkingDays, ukDate, trackOpen } from './complaintRules.js';
+import { addWorkingDays, ukDate, trackOpen, isStage2Request } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // The AI review must never tell anyone to chase what isn't due, or to chase
@@ -69,6 +69,18 @@ export function wantsToSendNow(r) {
 export function guardReview(review, facts) {
   if (!review) return review;
   const today = facts.today || todayISO();
+  // The Stage 2 request has gone and the complaint is past Stage 1 (no part
+  // of it is still there): a review written before that still offers the
+  // same request. It is never offered twice; the next step is their answer.
+  if (facts.stage2Asked && isStage2Request(review.email)) {
+    const h = `Stage 2 has been asked for. Nothing to send now: ${facts.nextDue
+      ? `wait for ${facts.nextDue.what}, due ${ukDate(facts.nextDue.date)}`
+      : 'wait for their Stage 2 response'}.`;
+    return {
+      ...review, headline: h, recommended_action: h, email: null, email_now: false,
+      next_action: { type: 'wait', by: facts.nextDue?.date || null },
+    };
+  }
   // "Do not escalate." says what not to do and nothing about what to do. It
   // is made whole from the review's own next action: the email below, when
   // there is one to send (the ball rule further down still applies), or

@@ -57,6 +57,9 @@ export async function processEmail(emailId) {
   )).rows[0];
   if (!em) return null;
 
+  // 0. Our own email sent from here, come back as a copy: filed, nothing to do.
+  if (await settleOwnCopies(em.id)) return { filed: true, ownCopy: true };
+
   // 1. The whole email and its attachments.
   let detail = { bodyText: em.body_text, attachments: [], skipped: [] };
   let readNote = null; // set when it had to be read without the full email
@@ -203,6 +206,36 @@ export async function processEmail(emailId) {
 // clear-cut, record the step it represents — keeping the values it replaced so
 // Undo can put them back exactly.
 const EARLIER_BY = 'Automatic (arrived before the complaint was made)';
+const COPY_BY = 'Automatic (our copy of an email sent from here)';
+
+// The copy of an email we sent from here, arriving back through the complaint's
+// own address or utilities@ (everyone on it is copied in). It is that email,
+// already on the complaint as sent, so it is filed as ours with nothing for
+// anyone to do — and never read by the AI. Recognised by the Message-ID it
+// went out with; failing that (an email sent before that was kept), by the
+// same sender, the same subject and within two days of it. `emailId` null:
+// every one waiting (start-up).
+export async function settleOwnCopies(emailId = null) {
+  const r = await query(
+    `UPDATE complaint_emails e
+        SET reviewed_at = now(), reviewed_as = 'sent', reviewed_by = $2,
+            complaint_id = COALESCE(e.complaint_id, o.complaint_id),
+            analysed_at = COALESCE(e.analysed_at, now())
+       FROM complaint_emails o
+      WHERE ($1::uuid IS NULL OR e.id = $1)
+        AND o.direction = 'outbound' AND o.complaint_id IS NOT NULL
+        AND e.direction <> 'outbound' AND e.reviewed_at IS NULL AND e.id <> o.id
+        AND (e.complaint_id IS NULL OR e.complaint_id = o.complaint_id)
+        AND (
+          (o.message_id = e.message_id)
+          OR (lower(substring(e.sender_email from '[^<>\\s]+@[^<>\\s]+')) = lower(substring(o.sender_email from '[^<>\\s]+@[^<>\\s]+'))
+              AND lower(btrim(COALESCE(e.subject, ''))) = lower(btrim(COALESCE(o.subject, '')))
+              AND e.received_at BETWEEN o.received_at - interval '1 hour' AND o.received_at + interval '2 days')
+        )`,
+    [emailId, COPY_BY],
+  );
+  return r.rowCount;
+}
 
 // Emails already waiting as "new" that arrived before their complaint was
 // made: background, not replies, so marked as correspondence (no AI; runs at

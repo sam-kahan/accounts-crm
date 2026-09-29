@@ -597,3 +597,36 @@ export function normaliseNextAction(a) {
   const by = typeof a.by === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.by) ? a.by : null;
   return { type: a.type, by };
 }
+
+// ---------------------------------------------------------------------------
+// Is this email of OURS the Stage 2 request? Read from the words, with no AI,
+// so an email sent from here moves the complaint on whichever button sent it
+// (and the page can offer "Send it and escalate" whatever the review called
+// its next step). Strict on purpose: a chaser that says "if this isn't put
+// right we will ask for Stage 2" is not the request, so a sentence that
+// only threatens it (if / unless / otherwise / will / may) never counts.
+//   subject: "… request for Stage 2 review", "Stage 2 request",
+//            "Escalation to Stage 2"
+//   body:    "We therefore ask that the complaint is passed … for an
+//            independent internal review (Stage 2)", "please escalate our
+//            complaint to Stage 2", "we are escalating this to Stage 2"
+// ---------------------------------------------------------------------------
+const STAGE2 = String.raw`stage\s*(?:2|two)\b`;
+const SUBJECT_STAGE2 = new RegExp(
+  String.raw`\b(?:request(?:ing)?|ask(?:ing)?)\b(?:\s+\w+){0,3}\s+${STAGE2}|\b${STAGE2}\s*(?:review\s+)?(?:request|escalation)\b|\bescalat\w*\s+to\s+${STAGE2}`,
+  'i',
+);
+const ASKS = /\b(?:we\s+(?:therefore\s+|now\s+|hereby\s+)?(?:ask|request|wish to escalate|are escalating|would like to escalate|want to escalate)|please\s+(?:escalate|pass|refer|treat|move|take)|this\s+is\s+(?:our|a)\s+(?:formal\s+)?request)\b/i;
+const CONDITIONAL = /\b(?:if|unless|otherwise|will|may|might|could|would\s+have\s+to|intend)\b/i;
+const MENTIONS_STAGE2 = new RegExp(`\\b${STAGE2}|\\bindependent\\s+(?:internal\\s+)?review\\b|\\bsecond\\s+stage\\b`, 'i');
+
+export function isStage2Request(email) {
+  const subject = String(email?.subject || '');
+  const body = String(email?.body || '');
+  if (SUBJECT_STAGE2.test(subject) && !CONDITIONAL.test(subject)) return true;
+  // Quoted history below the reply is theirs or older: only our own words.
+  const own = body.split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
+  return own
+    .split(/(?<=[.!?])\s+|\n+/)
+    .some((s) => ASKS.test(s) && MENTIONS_STAGE2.test(s) && !CONDITIONAL.test(s.replace(ASKS, '')));
+}
