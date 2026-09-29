@@ -83,7 +83,7 @@ export function evidenceChecklist({ complaint, parties = [], emails = [], docs =
         ? { key: 'response', label, state: 'ok', detail: `Their email of ${ukDate(copy.on)}: “${copy.subject || '(no subject)'}”` }
         : { key: 'response', label, state: 'missing', fix: `Their response of ${ukDate(answeredOn)} isn't on file: ${fwd}, or upload the letter.` });
     } else if (row.response_due && row.response_due < today) {
-      items.push({ key: 'response', label, state: 'ok', detail: `None: they missed the date, ${ukDate(row.response_due)} (on record here)` });
+      items.push({ key: 'response', label, state: 'ok', detail: `none came by ${ukDate(row.response_due)}, the date it was due (the missed deadline is on record here)` });
     } else {
       items.push({ key: 'response', label, state: 'na', detail: row.response_due ? `Not due yet (${ukDate(row.response_due)})` : 'Not due yet' });
     }

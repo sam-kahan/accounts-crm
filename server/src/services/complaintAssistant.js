@@ -141,6 +141,10 @@ function contextBlock(input) {
   lines.push(`Complaint reference: ${complaint.ref_code}`);
   lines.push(`Subject: ${complaint.subject}`);
   if (complaint.description) lines.push(`Description: ${complaint.description}`);
+  // Set by Greenco for the ombudsman: what we want and what it has cost. Ask
+  // for exactly this; never invent an amount that isn't here.
+  if (complaint.outcome_wanted) lines.push(`The outcome we want (as Greenco set it): ${complaint.outcome_wanted}`);
+  if (complaint.losses) lines.push(`Money lost or extra costs (as Greenco set them): ${complaint.losses}`);
   lines.push(`Current stage: ${complaint.stage}`);
   lines.push(`Status: ${complaint.label}${complaint.overdue ? ' (OVERDUE)' : ''}`);
   lines.push(`Raised on: ${complaint.raised_on}`);

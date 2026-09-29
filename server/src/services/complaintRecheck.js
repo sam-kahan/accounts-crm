@@ -320,6 +320,14 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
     if (!cur) throw new Error('The complaint was removed while it was being re-checked');
     const hasParties = (await client.query('SELECT 1 FROM complaint_parties WHERE complaint_id = $1 LIMIT 1', [id])).rowCount > 0;
     plan = planRecheck(cur, x, { hasParties });
+    // Made as a formal complaint from the complaint page (sent from here, or
+    // recorded as sent from Outlook): whether it is one, and the day it was
+    // made, are known for certain, so a reading of the emails never
+    // questions either.
+    const formallyMade = (await client.query(
+      `SELECT 1 FROM complaint_events WHERE complaint_id = $1 AND type = 'raised' AND note LIKE 'Formal complaint made%' LIMIT 1`, [id],
+    )).rowCount > 0;
+    if (formallyMade && plan.doubt) plan = { ...plan, doubt: null };
     cols = Object.keys(plan.changes);
     const before = {};
     for (const k of cols) before[k] = cur[k] ?? null;

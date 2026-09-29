@@ -1,9 +1,12 @@
 import { Router } from 'express';
+import fs from 'node:fs/promises';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
-import { removalTags } from '../services/trackContact.js';
+import { removalTags, emailTracks } from '../services/trackContact.js';
+import { evidenceChecklist } from '../services/complaintEvidence.js';
+import { zipStore, safeName } from '../lib/zip.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
@@ -491,6 +494,118 @@ router.post(
   }),
 );
 
+// What an ombudsman will want, and what is still missing (complaintEvidence.js),
+// for the complaint as the page (and the referral pack) sees it.
+async function evidenceFor(c, { events, emails, attachments }) {
+  const parties = c.parties || [];
+  const orgIds = [c, ...parties].map((t) => t.organisation_id).filter(Boolean);
+  const orgs = orgIds.length
+    ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
+    : [];
+  const own = emails.filter((e) => !e.removed_org);
+  const rows = own.map((e) => ({
+    id: e.id, direction: e.direction, sender_email: e.sender_email, to_addresses: e.to_addresses, party_id: e.party_id,
+    received_on: e.received_at ? londonDateOf(new Date(e.received_at)) : null, kind: e.analysis?.kind || null, sent_on: e.analysis?.sent_on || null,
+  }));
+  const whose = emailTracks({ complaint: c, parties, orgs, emails: rows, events: [], ourDomain: config.complaintEmail.domain });
+  return evidenceChecklist({
+    complaint: c,
+    parties,
+    emails: own.map((e) => ({ id: e.id, subject: e.subject, ...(whose.get(e.id) || { keys: [], ours: false, on: null }) })),
+    docs: attachments,
+    events: events.filter((e) => !e.removed_org),
+    forwardTo: c.email_address,
+    today: todayISO(),
+  });
+}
+
+// The referral pack's text: the facts, what we want, the evidence (on file
+// and missing), the grounds (drafted by the AI, or left for the pack), the
+// timeline and the correspondence log. Shared by the pack and the evidence
+// download so the two can't disagree.
+async function packText(ctx, grounds) {
+  const c = ctx.complaint;
+  const stageWords = (st) => ({ stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'with the ombudsman', resolved: 'resolved', closed: 'closed' })[st] || st;
+  const lines = [];
+  lines.push(`OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
+  lines.push('='.repeat(48));
+  // Never sent too early: a pack prepared before it can go says so first.
+  const notReady = [c, ...(c.parties || [])].filter((t) => trackOpen(t) && t.referral && !t.referral.open);
+  for (const t of notReady) {
+    lines.push(`NOT READY TO SEND${c.parties?.length ? ` (${t.org_name})` : ''}: ${t.referral.why}.`);
+  }
+  if (notReady.length) lines.push('');
+  lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
+  lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
+  if (c.property) lines.push(`Property / account: ${c.property}`);
+  if (c.reference) lines.push(`Their reference: ${c.reference}`);
+  lines.push(`Subject: ${c.subject}`);
+  lines.push(`Raised: ${readable(c.raised_on)}   Stage: ${stageWords(c.stage)}   Status: ${c.label}`);
+  if (c.acknowledged_on) lines.push(`Acknowledged: ${readable(c.acknowledged_on)}`);
+  if (c.responded_on) lines.push(`Their response: ${readable(c.responded_on)}`);
+  if (c.ombudsman_from) lines.push(`Can refer from: ${readable(c.ombudsman_from)}`);
+  lines.push(`Refer by: ${readable(c.ombudsman_deadline) || 'n/a'}`);
+  if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
+  for (const p of c.parties || []) {
+    lines.push('');
+    lines.push(`Also complained to: ${p.org_name} (${p.rule.label})${p.relationship ? `, ${p.relationship}` : ''}`);
+    if (p.reference) lines.push(`  Their reference: ${p.reference}`);
+    lines.push(`  Raised: ${readable(p.raised_on)}   Stage: ${stageWords(p.stage)}   Status: ${p.label}`);
+    if (p.acknowledged_on) lines.push(`  Acknowledged: ${readable(p.acknowledged_on)}`);
+    if (p.responded_on) lines.push(`  Their response: ${readable(p.responded_on)}`);
+    if (p.final_response_on) lines.push(`  Their final response: ${readable(p.final_response_on)}`);
+    lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${readable(p.ombudsman_deadline) || 'n/a'}`);
+  }
+  lines.push('');
+  lines.push('WHAT WE WANT');
+  lines.push('-'.repeat(48));
+  lines.push(c.outcome_wanted || '(not stated yet: add "The outcome we want" on the complaint)');
+  if (c.losses) lines.push(`Money lost or extra costs: ${c.losses}`);
+  // What the ombudsman will ask for: on file, and still missing.
+  const attachments = await listAttachments(c.id);
+  const ev = await evidenceFor(c, { events: ctx.events, emails: ctx.emails, attachments });
+  const mark = { ok: '[x]', missing: '[ ] MISSING:', optional: '[ ] (optional)', na: '[-]' };
+  const itemLine = (i) => `${mark[i.state]} ${i.label}${i.detail ? `: ${i.detail}` : ''}${i.fix && i.state !== 'ok' ? `. ${i.fix}` : ''}`;
+  lines.push('');
+  lines.push(`EVIDENCE${ev.missing ? ` (${ev.missing} still missing)` : ''}`);
+  lines.push('-'.repeat(48));
+  for (const i of ev.shared) lines.push(itemLine(i));
+  for (const t of ev.tracks) {
+    if (ev.tracks.length > 1) lines.push(`${t.org_name}:`);
+    for (const i of t.items) lines.push(`${ev.tracks.length > 1 ? '  ' : ''}${itemLine(i)}`);
+  }
+  if (attachments.length) {
+    lines.push('');
+    lines.push('Documents on file:');
+    for (const a of [...attachments].reverse()) lines.push(`  ${readable(londonDateOf(new Date(a.uploaded_at)))}  ${a.filename}`);
+  }
+  lines.push('');
+  lines.push('GROUNDS FOR REFERRAL');
+  lines.push('-'.repeat(48));
+  lines.push(grounds || 'Not drafted here: press “Build referral pack” on the complaint for the AI to draft the grounds from everything on file.');
+  lines.push('');
+  lines.push('CASE TIMELINE');
+  lines.push('-'.repeat(48));
+  for (const e of [...ctx.events].reverse()) {
+    lines.push(`${readable(e.event_date)}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
+  }
+  lines.push('');
+  lines.push('CORRESPONDENCE LOG');
+  lines.push('-'.repeat(48));
+  if (ctx.emails.length) {
+    for (const em of [...ctx.emails].reverse()) {
+      lines.push(
+        `${em.received_at ? readable(londonDateOf(new Date(em.received_at))) : ''}  ${em.direction === 'outbound' || em.analysis?.kind === 'our_email' ? 'SENT' : 'RECEIVED'}  ` +
+          `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}` +
+          `${em.removed_org ? ` (${em.removed_org}, since taken off this complaint)` : ''}`,
+      );
+    }
+  } else {
+    lines.push('(no emails logged)');
+  }
+  return lines.join('\n');
+}
+
 // Build an ombudsman/ADR referral pack (facts + timeline + AI-drafted grounds).
 router.get(
   '/:id/referral-pack',
@@ -498,60 +613,67 @@ router.get(
     const ctx = await gatherContext(req.params.id);
     const c = ctx.complaint;
     const grounds = await draftReferralGrounds(ctx);
-    const lines = [];
-    lines.push(`OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
-    lines.push('='.repeat(48));
-    // Never sent too early: a pack prepared before it can go says so first.
-    const notReady = [c, ...(c.parties || [])].filter((t) => trackOpen(t) && t.referral && !t.referral.open);
-    for (const t of notReady) {
-      lines.push(`NOT READY TO SEND${c.parties?.length ? ` (${t.org_name})` : ''}: ${t.referral.why}.`);
-    }
-    if (notReady.length) lines.push('');
-    lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
-    lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
-    if (c.property) lines.push(`Property / account: ${c.property}`);
-    if (c.reference) lines.push(`Their reference: ${c.reference}`);
-    lines.push(`Subject: ${c.subject}`);
-    lines.push(`Raised: ${readable(c.raised_on)}   Stage: ${c.stage}   Status: ${c.label}`);
-    if (c.acknowledged_on) lines.push(`Acknowledged: ${readable(c.acknowledged_on)}`);
-    if (c.responded_on) lines.push(`Their response: ${readable(c.responded_on)}`);
-    if (c.ombudsman_from) lines.push(`Can refer from: ${readable(c.ombudsman_from)}`);
-    lines.push(`Refer by: ${readable(c.ombudsman_deadline) || 'n/a'}`);
-    if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
-    for (const p of c.parties || []) {
-      lines.push('');
-      lines.push(`Also complained to: ${p.org_name} (${p.rule.label})${p.relationship ? `, ${p.relationship}` : ''}`);
-      if (p.reference) lines.push(`  Their reference: ${p.reference}`);
-      lines.push(`  Raised: ${readable(p.raised_on)}   Stage: ${p.stage}   Status: ${p.label}`);
-      if (p.acknowledged_on) lines.push(`  Acknowledged: ${readable(p.acknowledged_on)}`);
-      if (p.responded_on) lines.push(`  Their response: ${readable(p.responded_on)}`);
-      if (p.final_response_on) lines.push(`  Their final response: ${readable(p.final_response_on)}`);
-      lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${readable(p.ombudsman_deadline) || 'n/a'}`);
-    }
-    lines.push('');
-    lines.push('GROUNDS FOR REFERRAL');
-    lines.push('-'.repeat(48));
-    lines.push(grounds);
-    lines.push('');
-    lines.push('CASE TIMELINE');
-    lines.push('-'.repeat(48));
-    for (const e of [...ctx.events].reverse()) {
-      lines.push(`${readable(e.event_date)}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
-    }
-    lines.push('');
-    lines.push('CORRESPONDENCE LOG');
-    lines.push('-'.repeat(48));
-    if (ctx.emails.length) {
-      for (const em of [...ctx.emails].reverse()) {
-        lines.push(
-          `${em.received_at ? londonDateOf(new Date(em.received_at)) : ''}  ${em.direction === 'outbound' ? 'SENT' : 'RECEIVED'}  ` +
-            `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}`,
-        );
+    const text = await packText(ctx, grounds);
+    res.json({ ref_code: c.ref_code, ombudsman: c.rule.ombudsman, grounds, text });
+  }),
+);
+
+// Everything to upload to the ombudsman in one download: the summary (the
+// referral pack without the AI's grounds, so no AI is used), every email as a
+// text file (oldest first, numbered, with who, when and to whom) and every
+// document as it was received. An organisation's emails from after it was
+// taken off the complaint are left out.
+router.get(
+  '/:id/evidence.zip',
+  asyncHandler(async (req, res) => {
+    const ctx = await gatherContext(req.params.id, undefined, { files: 0 });
+    const c = ctx.complaint;
+    const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
+    const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, null) }];
+    const emails = [...ctx.emails].filter((e) => !e.removed_org).reverse();
+    emails.forEach((e, i) => {
+      const day = e.received_at ? londonDateOf(new Date(e.received_at)) : '';
+      const dir = e.direction === 'outbound' || e.analysis?.kind === 'our_email' ? 'SENT' : 'RECEIVED';
+      files.push({
+        name: `Emails/${String(i + 1).padStart(3, '0')} ${day} ${dir} ${safeName(e.subject, 60)}.txt`,
+        date: e.received_at ? new Date(e.received_at) : undefined,
+        data: [
+          `From: ${e.sender_name ? `${e.sender_name} <${e.sender_email || ''}>` : e.sender_email || ''}`,
+          `To: ${(e.to_addresses || []).join(', ')}`,
+          `Date: ${e.received_at ? when(e.received_at) : ''}`,
+          `Subject: ${e.subject || '(no subject)'}`,
+          '',
+          e.body_text || e.body_preview || '(no text kept)',
+        ].join('\r\n'),
+      });
+    });
+    const docs = (await query(
+      `SELECT filename, storage_path, uploaded_at, sha256 FROM complaint_attachments WHERE complaint_id = $1 ORDER BY uploaded_at`,
+      [c.id],
+    )).rows;
+    const seen = new Set();
+    const unreadable = [];
+    for (const d of docs) {
+      if (d.sha256 && seen.has(d.sha256)) continue; // the same file saved twice
+      if (d.sha256) seen.add(d.sha256);
+      try {
+        files.push({
+          name: `Documents/${londonDateOf(new Date(d.uploaded_at))} ${safeName(d.filename, 100)}`,
+          date: new Date(d.uploaded_at),
+          data: await fs.readFile(d.storage_path),
+        });
+      } catch {
+        unreadable.push(d.filename);
       }
-    } else {
-      lines.push('(no emails logged)');
     }
-    res.json({ ref_code: c.ref_code, ombudsman: c.rule.ombudsman, grounds, text: lines.join('\n') });
+    if (unreadable.length) {
+      files.push({ name: 'Documents/Could not be included.txt', data: `These files are on the complaint but couldn't be read from storage:\r\n${unreadable.join('\r\n')}` });
+    }
+    const zip = zipStore(files);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName(`${c.ref_code} evidence for the ombudsman`)}.zip"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(zip);
   }),
 );
 
@@ -1113,7 +1235,8 @@ router.get(
       `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_formal, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
-    res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, external_cc: config.smtp.externalCc });
+    const evidence = await evidenceFor(decorated, { events, emails, attachments });
+    res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, evidence, external_cc: config.smtp.externalCc });
   }),
 );
 

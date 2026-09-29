@@ -21,7 +21,7 @@ test('an empty complaint says what to collect, and how', () => {
   assert.match(item(main, 'complaint').fix, /Wed 1 Jul 2026/);
   // Their response never came and the date has passed: that IS the evidence.
   assert.equal(item(main, 'response').state, 'ok');
-  assert.match(item(main, 'response').detail, /missed the date, Wed 26 Aug 2026/);
+  assert.match(item(main, 'response').detail, /none came by Wed 26 Aug 2026, the date it was due/);
   assert.equal(item(main, 'emails').state, 'missing');
 });
 

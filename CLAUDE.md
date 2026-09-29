@@ -746,6 +746,32 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — evidence for the ombudsman, collected as the complaint goes
+- **Evidence for the ombudsman** card on every complaint
+  (`services/complaintEvidence.js#evidenceChecklist`, pure, tested, no AI;
+  `evidence` on `GET /complaints/:id`): the account number, documents,
+  phone calls noted on the timeline, the outcome we want and money lost
+  (migration `046`: `complaints.outcome_wanted`, `losses`, set on the card
+  or in Edit details, logged as corrections), and per organisation the
+  complaint as made (our email within 3 days of `raised_on`), their
+  response (a copy of it, or the missed deadline, which is itself the
+  evidence), our Stage 2 request and the emails with them. Whose email is
+  whose uses the same rule as "last wrote / last heard"
+  (`trackContact.js#emailTracks`). Each missing item says how to fix it
+  (forward to the complaint's address, upload, Edit details); the scheme's
+  own list (register `what_to_include`) is shown under each organisation.
+- **Download all (.zip)** (`GET /:id/evidence.zip`, `lib/zip.js`, stored
+  zip, no dependency, no AI): the summary (the referral pack's text without
+  the AI's grounds), every email as a numbered text file (oldest first) and
+  every document as received. Also on the referral steps.
+- The referral pack (`packText`, shared with the zip) leads with WHAT WE
+  WANT and an EVIDENCE section (what's on file and missing); UK dates and
+  readable stages throughout. The AI is given the outcome and losses as
+  Greenco set them.
+- A complaint made formally from the page (a "Formal complaint made" entry)
+  is never questioned by a re-check again (no formal complaint / a
+  different date).
+
 ### 2026-09-29 — "never re-checked" says which, and why
 - `GET /complaints/recheck` returns `never` (up to 20: ref, organisation,
   subject, and why: its re-check failed, with the reason, or it was added

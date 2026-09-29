@@ -890,7 +890,7 @@ export default function ComplaintDetail() {
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border, #e5e7eb)' }}>
         <div><strong>Referring it to {who}</strong> is done on their website, not by email:</div>
         <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
-          <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once).</li>
+          <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once). Download the evidence (every email and document) to upload with it.</li>
           <li>Make the referral on {who}’s website{formUrl ? '' : ' (find it on their site: no website is on file for it)'}{sc?.phone ? ` (or phone ${sc.phone})` : ''}.</li>
           <li>Record it here with the date you referred it, so the complaint moves on.</li>
         </ol>
@@ -916,6 +916,7 @@ export default function ComplaintDetail() {
           <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
             {referralBusy ? 'Building…' : '1. Build the referral pack'}
           </button>
+          <a className="btn btn-sm" href={`/api/complaints/${c.id}/evidence.zip`} download>Download the evidence (.zip)</a>
           {formUrl && (
             <a className="btn btn-sm" href={formUrl} target="_blank" rel="noreferrer">2. Open their complaint form ↗</a>
           )}
@@ -1642,6 +1643,8 @@ export default function ComplaintDetail() {
         />
       )) : <ProcedureCard c={c} />}
 
+      {c.evidence && <EvidenceCard c={c} onSaved={load} />}
+
       {/* Documents */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-head">
@@ -2312,6 +2315,8 @@ function EditComplaintModal({ c, onClose, onSaved }) {
     final_response_on: c.final_response_on || '',
     due_override: c.response_due_manual ? c.response_due || '' : '',
     description: c.description || '',
+    outcome_wanted: c.outcome_wanted || '',
+    losses: c.losses || '',
   });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   useEffect(() => { api.organisations.list().then(setOrgs).catch(() => setOrgs([])); }, []);
@@ -2354,6 +2359,8 @@ function EditComplaintModal({ c, onClose, onSaved }) {
         final_response_on: blank(form.final_response_on),
         response_due: form.due_override === initialOverride ? undefined : blank(form.due_override),
         description: blank(form.description),
+        outcome_wanted: blank(form.outcome_wanted.trim()),
+        losses: blank(form.losses.trim()),
       });
       await onSaved();
     } catch (err) {
@@ -2440,6 +2447,16 @@ function EditComplaintModal({ c, onClose, onSaved }) {
           <label className="field full">
             <span className="lbl">Details</span>
             <textarea value={form.description} onChange={(e) => set('description', e.target.value)} />
+          </label>
+          <label className="field full">
+            <span className="lbl">The outcome we want (for the ombudsman)</span>
+            <textarea rows={2} value={form.outcome_wanted} placeholder="e.g. Correct the account to the actual readings and refund the £120 overcharged"
+              onChange={(e) => set('outcome_wanted', e.target.value)} />
+          </label>
+          <label className="field full">
+            <span className="lbl">Money lost or extra costs (optional)</span>
+            <textarea rows={2} value={form.losses} placeholder="e.g. £20 late payment fee; £100.33 charged for a vacant period"
+              onChange={(e) => set('losses', e.target.value)} />
           </label>
         </div>
         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
@@ -2887,6 +2904,131 @@ function Info({ label, value }) {
     <div style={{ marginBottom: 14 }}>
       <div className="muted" style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
       <div style={{ marginTop: 4, fontSize: 15 }}>{value}</div>
+    </div>
+  );
+}
+
+// What an ombudsman will want, checked as the complaint goes along
+// (services/complaintEvidence.js): what is on file, and how to put right what
+// isn't. The outcome we want and the money lost are typed in here, and the
+// whole lot downloads as one zip to upload with the referral.
+const EVIDENCE_MARK = {
+  ok: ['✓', 'var(--ok)'],
+  missing: ['!', 'var(--warn)'],
+  optional: ['○', 'var(--text-muted)'],
+  na: ['–', 'var(--text-muted)'],
+};
+function EvidenceCard({ c, onSaved }) {
+  const ev = c.evidence;
+  const [editing, setEditing] = useState(false);
+  const [outcome, setOutcome] = useState(c.outcome_wanted || '');
+  const [losses, setLosses] = useState(c.losses || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const tracks = [c, ...(c.parties || [])];
+  const trackFor = (key) => (key === 'main' ? c : (c.parties || []).find((p) => p.id === key));
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.complaints.update(c.id, { outcome_wanted: outcome.trim() || null, losses: losses.trim() || null });
+      setEditing(false);
+      await onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const row = (i) => {
+    const [mark, colour] = EVIDENCE_MARK[i.state] || EVIDENCE_MARK.na;
+    return (
+      <li key={i.key} style={{ listStyle: 'none', display: 'flex', gap: 8, padding: '4px 0' }}>
+        <span aria-hidden style={{ width: 16, fontWeight: 700, color: colour, flex: 'none' }}>{mark}</span>
+        <span>
+          <strong style={{ fontWeight: 600 }}>{i.label}</strong>
+          {i.detail && <>: {i.detail}</>}
+          {i.fix && i.state !== 'ok' && <div className="muted" style={{ fontSize: 13 }}>{i.fix}</div>}
+        </span>
+      </li>
+    );
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="card-head">
+        <h2>
+          Evidence for the ombudsman{' '}
+          {ev.missing > 0
+            ? <span className="badge amber">{ev.missing} missing</span>
+            : <span className="badge ok">Everything needed is on file</span>}
+        </h2>
+        <a className="btn btn-sm" href={`/api/complaints/${c.id}/evidence.zip`} download
+          title="The summary, every email and every document, ready to upload with the referral">
+          Download all (.zip)
+        </a>
+      </div>
+      <div className="card-body">
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          Kept up to date as the complaint goes along, so if it has to go to the ombudsman everything
+          they ask for is already here. Forward every email to {c.email_address ? <code>{c.email_address}</code> : 'the complaint’s address'} and
+          upload letters, bills and statements under Documents.
+        </p>
+        <ul style={{ margin: 0, padding: 0 }}>{ev.shared.filter((i) => !['outcome', 'losses'].includes(i.key)).map(row)}</ul>
+
+        <div style={{ margin: '10px 0', padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
+          {editing ? (
+            <>
+              {error && <div className="login-error" style={{ marginBottom: 8 }}>{error}</div>}
+              <label className="field">
+                <span className="lbl">The outcome we want</span>
+                <textarea rows={2} value={outcome} onChange={(e) => setOutcome(e.target.value)}
+                  placeholder="e.g. Correct the account to the actual readings and refund the £120 overcharged" />
+              </label>
+              <label className="field">
+                <span className="lbl">Money lost or extra costs (optional)</span>
+                <textarea rows={2} value={losses} onChange={(e) => setLosses(e.target.value)}
+                  placeholder="e.g. £20 late payment fee; £100.33 charged for a vacant period" />
+              </label>
+              <div className="btn-row">
+                <button className="btn-primary btn-sm" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => { setEditing(false); setOutcome(c.outcome_wanted || ''); setLosses(c.losses || ''); }}>Cancel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <ul style={{ margin: 0, padding: 0 }}>{ev.shared.filter((i) => ['outcome', 'losses'].includes(i.key)).map(row)}</ul>
+              <button className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => setEditing(true)}>
+                {c.outcome_wanted || c.losses ? 'Change these' : 'Add these'}
+              </button>
+            </>
+          )}
+        </div>
+
+        {ev.tracks.map((t) => {
+          const tr = trackFor(t.key);
+          const asks = tr?.rule?.scheme?.what_to_include || [];
+          return (
+            <div key={t.key} style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>
+                With {t.org_name}
+                {!t.open && <span className="badge grey" style={{ marginLeft: 6 }}>Finished</span>}
+              </div>
+              <ul style={{ margin: 0, padding: 0 }}>{t.items.map(row)}</ul>
+              {asks.length > 0 && (
+                <details style={{ marginTop: 4 }}>
+                  <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
+                    What {tr.rule.scheme.name} asks for
+                  </summary>
+                  <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>{asks.map((a) => <li key={a}>{a}</li>)}</ul>
+                </details>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
