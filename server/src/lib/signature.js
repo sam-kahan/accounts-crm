@@ -25,8 +25,26 @@ export function signEmail(text, user) {
 // the standard sign-off, which signEmail then fills. A draft with no closing
 // line gets one added.
 const CLOSING = /^[ \t]*(?:kind regards|best regards|regards|many thanks|yours sincerely|yours faithfully),?[ \t]*$/im;
+// The stock phrases that give a drafted email away, taken out whatever the
+// AI wrote (the instructions ask it not to use them; this is the backstop).
+// Only whole stock sentences are removed, and long dashes become commas, so
+// the meaning of the email is never changed.
+const STOCK_SENTENCES = [
+  /^\s*I hope (?:this|my) (?:email|message|letter) finds you well[.!]?\s*/gim,
+  /^\s*I hope you are (?:keeping )?well[.!]?\s*/gim,
+  /\s*(?:Please )?(?:do not|don['’]t) hesitate to (?:contact|get in touch with) (?:us|me)[^.\n]*\.\s*/gi,
+  /\s*(?:Please )?(?:feel free to )?(?:let us know|contact us) if you (?:have|need) any (?:further )?(?:questions|queries|information)[^.\n]*\.\s*/gi,
+  /\s*Thank you (?:in advance )?for your (?:time and )?(?:attention|assistance|cooperation|co-operation) (?:to|in|with) this matter\.\s*/gi,
+];
+export function tidyEmail(body) {
+  let s = String(body ?? '');
+  for (const re of STOCK_SENTENCES) s = s.replace(re, (m) => (/\n/.test(m) ? '\n' : ' '));
+  s = s.replace(/\s*[—–]\s*/g, ', ').replace(/ ,/g, ',').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  return s.replace(/^\s+/, '');
+}
+
 export function ensureSignOff(body) {
-  const s = String(body ?? '').replace(/\s+$/, '');
+  const s = tidyEmail(body).replace(/\s+$/, '');
   if (!s) return s;
   if (NAME.test(s)) { NAME.lastIndex = 0; return s; }
   NAME.lastIndex = 0;

@@ -41,10 +41,28 @@ Produce a firm-but-professional response that:
 - Analyses where the complaint stands and what leverage the user has (e.g. a missed statutory
   deadline is itself a complaint-handling failure and strengthens escalation).
 - Recommends the single most appropriate next action for THIS stage and status.
-- Drafts a complete, ready-to-send email for that action, in UK business English, addressed to the
-  organisation. Reference their own procedure and the relevant law/ombudsman where it helps. Be
-  polite but assertive; cite dates and the reference where known. Use [square-bracket placeholders]
-  only where a fact is genuinely unknown.
+- Drafts a complete, ready-to-send email for that action, addressed to the organisation. Use
+  [square-bracket placeholders] only where a fact is genuinely unknown.
+
+HOW THE EMAILS READ. They must read as if a capable, experienced person in an accounts team wrote
+them: professional and courteous, warm but not overfamiliar, clear and firm, and short. Nobody
+should be able to tell a machine drafted them.
+- Short: usually 80 to 180 words in the body. Say each thing once. Two to four short paragraphs.
+- Open with the point in the first sentence (what this is about and what we need). One short line
+  with the reference and account number, not a block of details.
+- Only the history the reader needs to act: the one or two key dates, not a retelling of every email.
+- A clear ask with a date. A list only when there are three or more separate things to do, and then
+  short plain items, never numbered demands with sub-clauses.
+- Natural British English as people write it. Plain words ("we asked", "you said", "please confirm").
+- Never use: "I hope this email finds you well", "I am writing to", "Please do not hesitate to
+  contact", "at your earliest convenience", "we would like to take this opportunity", "kindly",
+  "furthermore", "moreover", "in addition", "additionally", "please be advised", "rest assured",
+  "we trust", "ensure that", "delve", "pursuant to", "as per", "going forward", headings, bold text,
+  or long dashes. No flowery thanks: one simple "Thank you" at most.
+- Mention their procedure, a regulator or the ombudsman only when it is the point of the email (for
+  example the Stage 2 request, or a missed deadline that matters); never as padding or a threat.
+- Firm where a deadline was missed: say plainly what was due and when, and what we need now.
+- UK dates written out ("1 September 2026").
 
 Ground every claim in the context provided. Do not invent facts, dates, or promises. This is drafting
 help, not legal advice — note any point the user should verify.
@@ -85,7 +103,8 @@ export function extractJson(text) {
 }
 
 // Compact the timeline + emails into a readable block for the prompt.
-function contextBlock({ complaint, rule, events, emails, extraContext, instruction }) {
+function contextBlock(input) {
+  const { complaint, rule, events, emails, extraContext, instruction } = input;
   const lines = [];
   // Today, and where each deadline stands, as the system has worked them out.
   // These are facts, not for the model to re-derive: without today's date it
@@ -97,7 +116,16 @@ function contextBlock({ complaint, rule, events, emails, extraContext, instructi
   // asks them to log one, or threatens one "if unresolved" reads as if it
   // hadn't been made, and confuses everyone who reads it.
   const stageWords = { stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'with the ombudsman', resolved: 'resolved', closed: 'closed' };
-  lines.push(
+  // The one exception: the email being drafted MAKES a new formal complaint
+  // (none was ever made, or it goes to the supplier behind a collector). Told
+  // plainly, or the rule below makes the model return no draft at all.
+  if (input.newComplaintTo) {
+    lines.push(
+      `THE EMAIL TO DRAFT MAKES A NEW FORMAL COMPLAINT to ${input.newComplaintTo}. Write it as exactly that: say it is a ` +
+        'formal complaint and ask them to log it under their complaints procedure. Everything else below is the ' +
+        'background to it. In anything written to them, write dates the UK way ("1 September 2026").',
+    );
+  } else lines.push(
     `THIS IS ALREADY A FORMAL COMPLAINT: it was made to ${complaint.org_name} on ${complaint.raised_on} and is now at ` +
       `${stageWords[complaint.stage] || complaint.stage}. Never write that Greenco is making, raising or opening a ` +
       'complaint, never ask them to log it as one, and never threaten to "raise a complaint" if things are not put ' +

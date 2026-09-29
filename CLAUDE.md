@@ -704,7 +704,14 @@ the page says how far each date can be trusted.
   prefer no-AI rules, low effort, the fewest files, and doing it once
   (remember it was done). Never repeat research or re-read what was read.
 - **Client emails** (drafts the AI writes): warm and genuine, a caring
-  professional, not overfamiliar. No long dashes in complaint wording.
+  professional, not overfamiliar, SHORT and natural (usually 80-180 words,
+  point first, only the history needed, no stock phrases): the style guide
+  is "HOW THE EMAILS READ" in `complaintAssistant.js#SYSTEM`, and
+  `lib/signature.js#tidyEmail` (run by `ensureSignOff`) strips the stock
+  phrases and long dashes whatever the AI writes. No long dashes in
+  complaint wording. A draft that MAKES a new complaint (formal, supplier)
+  passes `newComplaintTo`, which replaces the "this is already a formal
+  complaint" line (the two together made the AI return no draft).
 - **Live state (28 Sep 2026)**: a 12-month past-complaints search ran (555
   threads) with automatic import ON; imported complaints are marked **To
   check** ("Looks right, next ›" walks through them). Account numbers were

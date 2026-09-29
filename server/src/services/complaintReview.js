@@ -30,7 +30,7 @@ const REVIEW_INSTRUCTION =
   'it stands, what the organisation most recently said (with its date), and whether they are keeping ' +
   'to the timescales of their procedure — naming any deadline they have missed. In ' +
   '"recommended_action": the single next thing Greenco should do, and by when. In "steps": the next ' +
-  'few steps in order. In "email": the email for that next step, complete from greeting to sign-off ' +
+  'few steps in order. In "email": the email for that next step (short and natural: see how the emails read), complete from greeting to sign-off ' +
   'so it can be pasted as a reply in their existing email thread as it stands — or, if nothing needs ' +
   'sending yet, the email to send if they miss their next deadline. Add "email_now": true if it ' +
   'should be sent now, false if it is only kept ready. Use the facts and dates in the context only. ALSO add a key "next_action": ' +

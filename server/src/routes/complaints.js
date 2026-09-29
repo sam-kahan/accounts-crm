@@ -1800,18 +1800,18 @@ router.post(
     const r = await assistComplaint({
       ...ctx,
       feature: 'Supplier complaint draft',
+      newComplaintTo: name,
       instruction:
         `Draft a FORMAL COMPLAINT email from Greenco to ${name}, the company that owns this account, which ` +
         `${c.org_name} is pursuing on their behalf. It is a NEW complaint to ${name} (not a reply to ${c.org_name}). ` +
-        'It must: say plainly that it is a formal complaint under their complaints procedure; quote the ' +
-        `account number(s) and ${c.org_name}'s reference; set out, with dates from the emails and documents, ` +
-        'what Greenco asked for, what was promised and what has still not been done (for example the full ' +
-        'or final bill never issued, fees or charges added, the account passed to collection while it was ' +
-        'disputed); and ask them, by a date 10 working days from today, to (1) put the account on hold and ' +
-        `recall it from ${c.org_name} while the complaint is open, (2) issue the correct full bill, (3) remove ` +
-        'any fees or charges added because of their error, and (4) acknowledge this complaint and give their ' +
-        'complaint reference. Firm, polite, UK business English, no long dashes. Use only facts in the ' +
-        'context; put [square brackets] only where a fact is genuinely unknown. In "email" give the subject ' +
+        'Keep it short and natural (see how the emails read). It must: say in the first sentence that this is ' +
+        `a formal complaint; give the account number(s) and ${c.org_name}'s reference on one line; say briefly, ` +
+        'with the key dates, what went wrong (for example the final bill never issued, fees added, the ' +
+        'account passed to collection while disputed); and ask them, by a date 10 working days from today, to ' +
+        `put the account on hold and recall it from ${c.org_name} while the complaint is open, put the bill ` +
+        'right and remove any charges added because of their error, and acknowledge the complaint with their ' +
+        'reference. Use only facts in the context; put [square brackets] only where a fact is genuinely ' +
+        'unknown. In "email" give the subject ' +
         'and the full body, greeting to sign-off (signed off with the [Name] and [Job title] placeholders, as always).',
     });
     res.json({
@@ -1865,17 +1865,18 @@ router.post(
     const r = await assistComplaint({
       ...ctx,
       feature: 'Formal complaint draft',
+      newComplaintTo: c.org_name,
       instruction:
         `The emails show a dispute with ${c.org_name} that was never made into a FORMAL complaint. Draft the email ` +
         `that makes it one: a formal complaint to ${c.org_name} under their complaints procedure` +
-        `${c.rule?.procedureRef ? ` (${c.rule.procedureRef})` : ''}. It must: say plainly in the first lines that this is a ` +
-        'formal complaint and ask them to log it under their complaints procedure; quote the account number(s), the ' +
-        'property and any reference of theirs; set out, with dates from the emails and documents, what the problem is, ' +
-        'what Greenco has already asked for and what they have (or have not) done; say clearly what Greenco wants ' +
-        'done to put it right; and ask them to acknowledge the complaint, give their complaint reference and respond ' +
+        `${c.rule?.procedureRef ? ` (${c.rule.procedureRef})` : ''}. Keep it short and natural (see how the emails ` +
+        'read). It must: say in the first sentence that this is a formal complaint to be logged under their ' +
+        'complaints procedure; give the account number(s), the property and any reference of theirs on one line; ' +
+        'say briefly, with the key dates, what the problem is and what we have already asked for; say clearly ' +
+        'what we want done to put it right; and ask them to acknowledge the complaint, give their reference and respond ' +
         (days ? `within ${days} working days, as their procedure sets out. ` : 'within the time their complaints procedure sets out. ') +
         'Do NOT say it has already been raised as a complaint, and do not ask for Stage 2 or mention the ombudsman. ' +
-        'Firm, polite, UK business English, no long dashes, UK dates. Use only facts in the context; put [square ' +
+        'Use only facts in the context; put [square ' +
         'brackets] only where a fact is genuinely unknown. In "email" give the subject and the full body, greeting to ' +
         'sign-off (signed off with the [Name] and [Job title] placeholders, as always).',
     });
