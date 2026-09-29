@@ -302,10 +302,10 @@ router.post(
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
     const out = (await query(
-      `INSERT INTO complaint_outbox (complaint_id, party_id, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [
-        complaint.id, party?.id || null, to, cc,
+        complaint.id, party?.id || null, Boolean(party), to, cc,
         // Signed by whoever is sending (a draft's "[Name]" never goes out).
         signEmail(d.subject, req.user), signEmail(d.body, req.user),
         d.then === 'escalate', who(req),
@@ -331,8 +331,19 @@ export async function deliverOutbox(outboxId) {
       [o.id, String(err.message || err).slice(0, 500)]);
     return;
   }
+  await afterSent(o, sent?.messageId || null);
+}
+
+// The half after the mail server has taken it: marked sent, recorded on the
+// complaint, and the step it was taken. Also run by "It went" for an email
+// that went although it shows as failed, so it is never sent twice.
+async function afterSent(o, messageId) {
   // It has gone: from here on nothing may put it back to "not sent".
-  await query(`UPDATE complaint_outbox SET status = 'sent', error = NULL, finished_at = now() WHERE id = $1`, [o.id]);
+  try {
+    await query(`UPDATE complaint_outbox SET status = 'sent', error = NULL, uncertain = false, finished_at = now() WHERE id = $1`, [o.id]);
+  } catch (err) {
+    console.error('[outbox] sent but not marked sent:', err.message);
+  }
   // Every step it takes is dated the day it actually went, not the day Send
   // was first pressed: after a failure and Try again those differ, and the
   // deadlines run from when they had it.
@@ -346,7 +357,7 @@ export async function deliverOutbox(outboxId) {
       subject: o.subject,
       body: o.body,
       sentBy: o.sent_by,
-      messageId: sent?.messageId || null,
+      messageId,
       partyId: o.party_id,
     });
     if (o.then_supplier) {
@@ -358,6 +369,18 @@ export async function deliverOutbox(outboxId) {
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
     // with the review offering the same request again.
+    // To an organisation since taken off the complaint: nothing to escalate,
+    // and never the main organisation's part in its place.
+    if (o.to_party && !o.party_id) {
+      if (o.then_escalate || isStage2Request({ subject: o.subject, body: o.body })) {
+        await query(
+          `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+          [o.complaint_id, sentOn, 'The Stage 2 request was sent, but that organisation had been taken off the complaint, so nothing was escalated.', o.sent_by],
+        );
+      }
+      scheduleReview(o.complaint_id);
+      return;
+    }
     const party = o.party_id
       ? (await query('SELECT * FROM complaint_parties WHERE id = $1', [o.party_id])).rows[0] || null
       : null;
@@ -398,6 +421,21 @@ router.post(
     if (!r.rows[0]) throw new HttpError(409, 'That email isn’t waiting to be tried again.');
     setImmediate(() => deliverOutbox(req.params.outboxId).catch((err) => console.error('[outbox]', err.message)));
     res.status(202).json({ queued: true });
+  }),
+);
+// It went after all (the copy is in utilities@): record it and take its step
+// without sending it again.
+router.post(
+  '/:id/outbox/:outboxId/went',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.outboxId).success) throw new HttpError(400, 'Invalid id');
+    const o = (await query(
+      `UPDATE complaint_outbox SET status = 'sending' WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING *`,
+      [req.params.outboxId, req.params.id],
+    )).rows[0];
+    if (!o) throw new HttpError(409, 'That email isn’t waiting to be dealt with.');
+    await afterSent(o, null);
+    res.status(204).end();
   }),
 );
 router.delete(
@@ -1009,7 +1047,7 @@ router.get(
     // Copied in on every email sent from here (utilities@), so the page can say so.
     // Emails still going out, or that failed, shown on the complaint.
     const outbox = (await query(
-      `SELECT id, subject, to_addresses, status, error, then_escalate, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
+      `SELECT id, subject, to_addresses, status, error, uncertain, then_escalate, then_supplier->>'org_name' AS supplier_name, created_at FROM complaint_outbox
         WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
     )).rows;
     res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, external_cc: config.smtp.externalCc });

@@ -537,6 +537,31 @@ textarea { resize: vertical; min-height: 70px; }
   table.steps-table tr:last-child { border-bottom: none; }
   table.steps-table td { display: block; padding: 0; border: none; width: auto !important; }
   table.steps-table td:nth-child(4) { grid-column: 1 / -1; }
+  /* The complaint timeline: date and what kind of entry on one line, the
+     note underneath at full width (it was clipped at the right edge). */
+  table.timeline-table { min-width: 0; }
+  table.timeline-table tr {
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  table.timeline-table tr:last-child { border-bottom: none; }
+  table.timeline-table td { display: block; padding: 0; border: none; width: auto !important; }
+  table.timeline-table td:nth-child(2) { display: flex; flex-wrap: wrap; gap: 4px; }
+  table.timeline-table td:nth-child(3) { grid-column: 1 / -1; }
+  /* Any other table with no headings (a short list laid out as a table:
+     dashboard due items, documents, emails, tasks) can't be stacked with
+     labels, so its cells flow: as many to a line as fit, a long one on a line
+     of its own, never clipped at the right edge. */
+  table:not(:has(th)):not(.steps-table):not(.timeline-table) { min-width: 0; }
+  table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr:last-child { border-bottom: none; }
+  table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr > td {
+    display: block; padding: 0; border: none; width: auto !important;
+    min-width: 0; overflow-wrap: anywhere; text-align: left !important;
+  }
   /* Long "Next:" advice on the complaints list: three lines, the rest on
      the complaint. */
   /* 16px form text: anything smaller and an iPhone zooms the page in on every

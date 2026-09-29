@@ -10,8 +10,11 @@ const TITLE = /\[\s*(?:your\s+)?(?:job\s*title|position|role|title)\s*\]/gi;
 
 export function signEmail(text, user) {
   let s = String(text ?? '');
-  if (user?.name) s = s.replace(NAME, user.name);
-  if (user?.job_title) s = s.replace(TITLE, user.job_title);
+  // A person with no name set signs with their email address rather than
+  // letting "[Name]" go out. Functions, so a "$" in either is kept as typed.
+  const name = user?.name || user?.email;
+  if (name) s = s.replace(NAME, () => name);
+  if (user?.job_title) s = s.replace(TITLE, () => user.job_title);
   else s = s.replace(new RegExp(`^[ \\t]*${TITLE.source}[ \\t]*\\n?`, 'gim'), '').replace(TITLE, '');
   return s;
 }

@@ -214,6 +214,9 @@ export default function ComplaintDetail() {
   // until it has gone (then it is on the complaint, and any escalation done)
   // or failed (then it says so, with Try again).
   const sendingNow = Boolean(c?.outbox?.some((o) => o.status === 'pending' || o.status === 'sending'));
+  // Bumped when a look fails, so one blip (a deploy, a dropped connection)
+  // can't leave the page saying "Sending…" until it is reloaded.
+  const [pollMiss, setPollMiss] = useState(0);
   useEffect(() => {
     if (!sendingNow) return undefined;
     const t = setTimeout(() => {
@@ -230,13 +233,21 @@ export default function ComplaintDetail() {
             ? `Sent to ${sup.supplier_name}, and they have been added to this complaint. Their deadlines run from today.`
             : esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
         }
-      }).catch(() => {});
+      }).catch(() => setPollMiss((n) => n + 1));
     }, 3000);
     return () => clearTimeout(t);
-  }, [c, sendingNow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [c, sendingNow, pollMiss]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function retryOutbox(o) {
     try { await api.complaints.retryOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
+  }
+  async function outboxWent(o) {
+    if (!confirm(`Record "${o.subject}" as sent? Only if the copy is in utilities@: it won't be sent again.`)) return;
+    try {
+      await api.complaints.outboxWent(id, o.id);
+      await load();
+      setMsg('Recorded as sent, and any step it was taken.');
+    } catch (e) { setMsg(e.message); }
   }
   async function discardOutbox(o) {
     if (!confirm(`Discard "${o.subject}"? It wasn't sent, and won't be.`)) return;
@@ -769,7 +780,10 @@ export default function ComplaintDetail() {
             {o.supplier_name ? ` ${o.supplier_name} hasn't been added to the complaint.` : ''}
             <div style={{ fontSize: 13, marginTop: 2 }}>{o.error}</div>
             <div className="btn-row" style={{ marginTop: 6 }}>
-              <button className="btn-primary btn-sm" onClick={() => retryOutbox(o)}>Try again</button>
+              {o.uncertain && (
+                <button className="btn-primary btn-sm" onClick={() => outboxWent(o)}>It went: record it</button>
+              )}
+              <button className={o.uncertain ? 'btn btn-sm' : 'btn-primary btn-sm'} onClick={() => retryOutbox(o)}>Try again</button>
               <button className="btn btn-sm" onClick={() => discardOutbox(o)}>Discard</button>
             </div>
           </div>
@@ -1474,7 +1488,7 @@ export default function ComplaintDetail() {
           </form>
 
           {c.events?.length ? (
-            <table style={{ marginTop: 8 }}>
+            <table className="timeline-table" style={{ marginTop: 8 }}>
               <tbody>
                 {firstOf('events', c.events).map((e) => (
                   <tr key={e.id}>

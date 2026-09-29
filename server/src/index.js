@@ -198,8 +198,8 @@ app.listen(config.port, () => {
   // have gone, so it is never re-sent blindly: it is shown as failed, with a
   // note to check the copy in utilities@ before trying again.
   query(
-    `UPDATE complaint_outbox SET status = 'failed', finished_at = now(),
-            error = 'The system restarted while this was being sent, so it may or may not have gone. Check for the copy in utilities@ before trying again.'
+    `UPDATE complaint_outbox SET status = 'failed', finished_at = now(), uncertain = true,
+            error = 'The system restarted while this was being sent, so it may or may not have gone. Look for the copy in utilities@: if it is there, press It went; if not, Try again.'
       WHERE status = 'sending'`,
   )
     .then(() => query(`SELECT id FROM complaint_outbox WHERE status = 'pending'`))

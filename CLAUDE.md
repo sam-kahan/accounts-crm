@@ -760,6 +760,15 @@ the page says how far each date can be trusted.
   email has gone (`joinSupplier`, dated that day) and never if it fails. It is
   refused up front if they're already on the complaint or another supplier
   email is still waiting.
+- **An email that may have gone** (the server restarted mid-send) is marked
+  `uncertain` (migration `039`) and offers **It went: record it** beside Try
+  again: it records the email and takes its step without sending it again
+  (`afterSent`, the half of `deliverOutbox` after the mail server). An email
+  to an organisation later taken off the complaint (`to_party` kept, its
+  `party_id` cleared) never escalates the main organisation's part instead.
+- **The page's "Sending…" never freezes**: a failed look is retried.
+- **A sender with no name set signs with their email address**, never
+  "[Name]" (`signEmail`, both sides).
 - **A restart mid-send** marks the row failed with a note to check
   utilities@ for the copy before trying again (it may or may not have gone);
   rows still `pending` at start-up are sent.

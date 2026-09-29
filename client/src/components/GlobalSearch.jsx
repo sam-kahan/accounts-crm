@@ -10,6 +10,10 @@ export default function GlobalSearch() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [results, setResults] = useState(null);
+  // The words the results on screen are for: until they match what is typed,
+  // Enter waits (it would open a result for the shorter search).
+  const [resultsFor, setResultsFor] = useState(null);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const box = useRef(null);
@@ -17,12 +21,12 @@ export default function GlobalSearch() {
 
   useEffect(() => {
     const term = q.trim();
-    if (term.length < 2) { setResults(null); return undefined; }
+    if (term.length < 2) { setResults(null); setResultsFor(null); return undefined; }
     const n = ++seq.current;
     const t = setTimeout(() => {
       api.search(term)
-        .then((r) => { if (n === seq.current) { setResults(r.results); setActive(0); } })
-        .catch(() => { if (n === seq.current) setResults([]); });
+        .then((r) => { if (n === seq.current) { setResults(r.results); setResultsFor(term); setFailed(false); setActive(0); } })
+        .catch(() => { if (n === seq.current) { setResults([]); setResultsFor(term); setFailed(true); } });
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
@@ -44,10 +48,12 @@ export default function GlobalSearch() {
 
   const onKey = (e) => {
     if (e.key === 'Escape') { setOpen(false); e.currentTarget.blur(); return; }
-    if (!results?.length) return;
+    const current = resultsFor === q.trim();
+    if (e.key === 'Enter') e.preventDefault();
+    if (!current || !results?.length) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, results.length - 1)); }
     if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-    if (e.key === 'Enter') { e.preventDefault(); go(results[active]); }
+    if (e.key === 'Enter') go(results[active]);
   };
 
   return (
@@ -63,8 +69,10 @@ export default function GlobalSearch() {
       />
       {open && q.trim().length >= 2 && (
         <div className="global-search-results" role="listbox">
-          {results === null ? (
+          {results === null || resultsFor !== q.trim() ? (
             <div className="muted" style={{ padding: 12, fontSize: 13 }}>Searching…</div>
+          ) : failed ? (
+            <div className="muted" style={{ padding: 12, fontSize: 13 }}>The search didn’t work just now. Try again in a moment.</div>
           ) : results.length === 0 ? (
             <div className="muted" style={{ padding: 12, fontSize: 13 }}>Nothing found for “{q.trim()}”.</div>
           ) : results.map((r, i) => (

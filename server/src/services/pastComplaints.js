@@ -1,3 +1,4 @@
+import { plural } from '../lib/words.js';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
@@ -574,8 +575,8 @@ async function importClaimed(id, group, by) {
     {
       by,
       needsCheck: true,
-      raisedNote: `Imported from past emails: ${new Set(msgs.map((m) => m.messageId || m.graphId)).size} email(s) ` +
-        `across ${threads} thread(s)${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
+      raisedNote: `Imported from past emails: ${plural(new Set(msgs.map((m) => m.messageId || m.graphId)).size, 'email')} ` +
+        `across ${plural(threads, 'thread')}${extra.length ? `, ${new Set(extra.map((m) => m.conversationId)).size} of them found by reference or postcode` : ''}.`,
     },
   );
 

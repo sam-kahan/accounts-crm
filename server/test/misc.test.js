@@ -86,3 +86,8 @@ test('a draft is signed by the person sending it, never with a placeholder', () 
   assert.equal(signEmail('Yours,\n[Your Name]', { name: 'Sam Kahan' }), 'Yours,\nSam Kahan');
   assert.equal(signEmail('No placeholders.', { name: 'Sam' }), 'No placeholders.');
 });
+
+test('a sender with no name signs with their email address, and a $ is kept as typed', () => {
+  assert.equal(signEmail('Kind regards,\n[Name]\n[Job title]\nGreenco', { email: 'a@greenco.co.uk' }), 'Kind regards,\na@greenco.co.uk\nGreenco');
+  assert.equal(signEmail('[Name]', { name: 'Jo $& Co' }), 'Jo $& Co');
+});

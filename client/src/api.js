@@ -371,6 +371,8 @@ export const api = {
     sendEmail: (id, data) =>
       request(`/complaints/${id}/send-email`, { method: 'POST', body: JSON.stringify(data) }),
     retryOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}/retry`, { method: 'POST' }),
+    // It went after all (the copy is in utilities@): recorded, not re-sent.
+    outboxWent: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}/went`, { method: 'POST' }),
     discardOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}`, { method: 'DELETE' }),
     checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
     referralPack: (id) => request(`/complaints/${id}/referral-pack`),
@@ -528,8 +530,11 @@ const SIGN_NAME = /\[\s*(?:your\s+)?(?:full\s+)?name\s*\]/gi;
 const SIGN_TITLE = /\[\s*(?:your\s+)?(?:job\s*title|position|role|title)\s*\]/gi;
 export function signEmail(text, user) {
   let s = String(text ?? '');
-  if (user?.name) s = s.replace(SIGN_NAME, user.name);
-  if (user?.job_title) s = s.replace(SIGN_TITLE, user.job_title);
+  // No name set: their email address, never "[Name]". Functions, so a "$"
+  // in either is kept as typed.
+  const name = user?.name || user?.email;
+  if (name) s = s.replace(SIGN_NAME, () => name);
+  if (user?.job_title) s = s.replace(SIGN_TITLE, () => user.job_title);
   else s = s.replace(new RegExp(`^[ \\t]*${SIGN_TITLE.source}[ \\t]*\\n?`, 'gim'), '').replace(SIGN_TITLE, '');
   return s;
 }

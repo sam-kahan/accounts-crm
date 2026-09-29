@@ -439,7 +439,11 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
             total_amount: f.total_amount,
           })
           .catch(() => null);
-        const justLogged = new Set(done.map((d) => String(d.id)));
+        // Every invoice logged from this batch, on this press or an earlier one.
+        const justLogged = new Set([
+          ...done.map((d) => String(d.id)),
+          ...rows.filter((r) => r.state === 'saved' && r.saved).map((r) => String(r.saved.id)),
+        ]);
         const sameBatch = again?.similar?.find((m) => justLogged.has(String(m.invoice.id)))?.invoice;
         if (again?.exact || sameBatch) {
           // Pressing Log again takes it: by then it has been looked at.
@@ -448,7 +452,7 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
             duplicates: again,
             error: again.exact
               ? `Already logged as ${again.exact.ref || again.exact.invoice_number}.`
-              : `Looks like ${sameBatch.ref || 'the invoice'} just logged from this batch (same date and amount), so it was held back. If it really is a separate invoice, press Log again.`,
+              : `Looks like ${sameBatch.ref || 'the invoice'} already logged from this batch (same date and amount), so it was held back. If it really is a separate invoice, press Log again.`,
           });
           continue;
         }

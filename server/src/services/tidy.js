@@ -1,3 +1,5 @@
+import { ukDate } from './complaintRules.js';
+import { plural } from '../lib/words.js';
 import { query, pool } from '../db/pool.js';
 import { todayISO } from '../lib/dates.js';
 import { sameIssue, matchOrgName, sameOrgName } from './orgMatch.js';
@@ -262,9 +264,9 @@ export async function mergeComplaints(keepId, mergeId, by) {
       `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
       [
         keepId, todayISO(),
-        `Merged in ${gone.ref_code} ("${gone.subject}", raised ${gone.raised_on}): ` +
-          `${moved.complaint_emails} email(s), ${moved.complaint_attachments} document(s), ` +
-          `${moved.complaint_events} timeline entr${moved.complaint_events === 1 ? 'y' : 'ies'} moved here` +
+        `Merged in ${gone.ref_code} ("${gone.subject}", raised ${ukDate(gone.raised_on)}): ` +
+          `${plural(moved.complaint_emails, 'email')}, ${plural(moved.complaint_attachments, 'document')}, ` +
+          `${plural(moved.complaint_events, 'timeline entry', 'timeline entries')} moved here` +
           (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + partyNote + '.',
         by,
       ],
