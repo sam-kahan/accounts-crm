@@ -899,3 +899,24 @@ export function missedStage2Requests(tracks, emails, events = []) {
   }
   return [...found.values()];
 }
+
+// ---------------------------------------------------------------------------
+// A debt collector saying the account is no longer theirs: gone back to (or
+// recalled by) their client. Their part of the complaint then ends — they can
+// do nothing more about it — while the supplier's part carries on. Pure; read
+// sentence by sentence, never from a condition or a future ("if the account
+// is returned to our client…").
+// ---------------------------------------------------------------------------
+const RETURNED = [
+  /\b(?:returned|passed|handed|referred|sent|transferred|given)\s+(?:it\s+|the\s+(?:account|debt|file|balance)\s+)?back\b[^.;]{0,60}\b(?:to|by)\s+(?:our|the|their|your)\s+client\b/i,
+  /\b(?:returned|referred)\s+(?:it\s+|the\s+(?:account|debt|file|balance)\s+)?to\s+(?:our|the|their)\s+client\b/i,
+  /\b(?:our|the)\s+client\s+has\s+(?:recalled|withdrawn|taken\s+back|closed)\b/i,
+  /\b(?:recalled|withdrawn)\s+by\s+(?:our|the|their)\s+client\b/i,
+  /\b(?:the\s+account|this\s+account|the\s+debt|it)\s+is\s+no\s+longer\s+(?:with\s+us|being\s+(?:managed|handled|collected|pursued)\s+by\s+us|under\s+our\s+management)\b/i,
+  /\bwe\s+(?:are|have)\s+no\s+longer\s+(?:acting|instructed|collecting|managing|handling|dealing\s+with)\b/i,
+];
+const RETURN_CONDITION = /\b(?:if|unless|should|will|would|may|might|could|once|when|until|intend|going\s+to)\b/i;
+export function saysReturnedToClient(text) {
+  const own = String(text || '').split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
+  return own.split(/(?<=[.!?;])\s+|\n+/).some((s) => RETURNED.some((re) => re.test(s)) && !RETURN_CONDITION.test(s));
+}

@@ -739,6 +739,15 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — a debt collector handing the account back closes only its part
+- An email from a debt collector's part saying the account has gone back to
+  (or been recalled by) their client (`complaintRules.js#saysReturnedToClient`,
+  pure, tested; never a condition or a future) closes THAT part, dated the
+  email, with the reason as its outcome and Undo on the email
+  (`applyEmail`'s `returnedClose`). Only when whose email it is is certain
+  (`placed`). The supplier's part carries on; with only the collector on the
+  complaint, the complaint ends (`settleComplaintState`, also run by Undo).
+
 ### 2026-09-29 — raise it as a formal complaint
 - When the emails show no formal complaint was made (`complaint_doubt`
   'not_complaint'), the complaint offers **Raise it as a formal complaint…**:

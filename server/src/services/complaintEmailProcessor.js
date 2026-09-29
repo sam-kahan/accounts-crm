@@ -2,7 +2,8 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { ukDate, trackOpen, readable } from './complaintRules.js';
+import { ukDate, trackOpen, readable, saysReturnedToClient } from './complaintRules.js';
+import { overallState } from './complaintParties.js';
 import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis, resolutionSuggestion } from './emailAnalysis.js';
 import { saveAttachmentBuffer } from './attachments.js';
@@ -276,6 +277,9 @@ async function applyEmail(em, analysis, skipped = []) {
   )).rows;
   let party = null;
   let plan;
+  // Whose email it is, known for certain: the only organisation, or the one
+  // the signs picked. Nothing is closed on a guess.
+  let placed = !parties.length;
   const fromThem = analysis?.from_organisation && analysis.kind !== 'our_email' && analysis.confidence === 'high';
   if (parties.length && fromThem) {
     const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
@@ -286,6 +290,7 @@ async function applyEmail(em, analysis, skipped = []) {
       complaint, parties, orgs, analysis, email: em, ourDomain: config.complaintEmail.domain,
     });
     if (pick.track) {
+      placed = true;
       party = pick.track.party;
       plan = planFromAnalysis(party || complaint, analysis);
     } else {
@@ -314,12 +319,36 @@ async function applyEmail(em, analysis, skipped = []) {
   const table = party ? 'complaint_parties' : 'complaints';
   const fromWhom = party ? ` (${party.org_name})` : '';
 
+  // A debt collector writing that the account has gone back to their client
+  // (or been recalled): they can do nothing more, so THEIR part ends, dated
+  // their email, with Undo on it. The supplier's part (if on the complaint)
+  // carries on; with only the collector on it, the complaint ends.
+  let returnedClose = false;
+  if (placed && fromThem && target.org_type === 'debt_collector' && trackOpen(target) && complaint.state === 'open' &&
+      saysReturnedToClient(`${em.subject || ''}\n${em.body_text || em.body_preview || ''}`) &&
+      !(complaint.raised_on && arrived < complaint.raised_on)) {
+    const on = /^\d{4}-\d{2}-\d{2}$/.test(analysis?.sent_on || '') && analysis.sent_on <= arrived ? analysis.sent_on : arrived;
+    const othersOpen = party
+      ? trackOpen(complaint) || parties.some((p) => p.id !== party.id && trackOpen(p))
+      : parties.some((p) => trackOpen(p));
+    const outcome = `${target.org_name} no longer has the account: it has gone back to their client, so their part of the complaint has ended.`;
+    const changes = { stage: 'resolved', closed_on: on, outcome };
+    if (party) changes.state = 'resolved';
+    else if (!othersOpen) changes.state = 'resolved';
+    plan = {
+      auto: true, changes, reviewedAs: 'response',
+      event: { type: 'resolved', date: on },
+      step: `${target.org_name}’s part closed: the account has gone back to their client${othersOpen ? ' (the rest of the complaint carries on)' : ''}`,
+    };
+    returnedClose = true;
+  }
+
   // It says it's been put right: flagged "Looks resolved" for a person to
   // confirm (never closed by itself), on whichever track it is about.
   const resolved = resolutionSuggestion(analysis, { arrived });
   // (An email from before the complaint was made can't be saying it's resolved.)
   const beforeComplaint = Boolean(complaint.raised_on && arrived < complaint.raised_on);
-  if (resolved && trackOpen(target) && !beforeComplaint) {
+  if (resolved && trackOpen(target) && !beforeComplaint && !returnedClose) {
     await query('UPDATE complaints SET resolution_suggested = $2 WHERE id = $1', [
       complaint.id,
       JSON.stringify({
@@ -387,7 +416,9 @@ async function applyEmail(em, analysis, skipped = []) {
   });
   const sentStep = analysis?.kind === 'our_email' && (wentOutside || analysis.forwarded);
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
-  const recorded = plan.step
+  const recorded = returnedClose
+    ? ` ${plan.step}, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`
+    : plan.step
     ? ` ${plan.step}${fromWhom}: the complaint was moved on automatically, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`
     : plan.event
       ? ` Recorded automatically as their ${kind.toLowerCase()}${fromWhom}, dated ${ukDate(plan.event.date)}.`
@@ -414,6 +445,17 @@ async function applyEmail(em, analysis, skipped = []) {
     if (party) await recomputePartyDeadlines(party.id);
     else await recomputeDeadlines(complaint.id);
   }
+  // A part closed: the complaint is open while any part is (overallState),
+  // and ends with its last one.
+  if (returnedClose) await settleComplaintState(complaint.id);
+}
+
+async function settleComplaintState(id) {
+  const now = (await query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
+  if (!now) return;
+  const parts = (await query('SELECT * FROM complaint_parties WHERE complaint_id = $1', [id])).rows;
+  const state = overallState(now, parts);
+  if (state !== now.state) await query('UPDATE complaints SET state = $2 WHERE id = $1', [id, state]);
 }
 
 // Undo what was recorded automatically from an email: put the replaced values
@@ -486,6 +528,8 @@ export async function undoEmail(em, by) {
   );
   if (partyId && now) await recomputePartyDeadlines(partyId);
   else await recomputeDeadlines(em.complaint_id);
+  // Undoing a part's closure reopens the complaint if that part was its last.
+  await settleComplaintState(em.complaint_id);
   scheduleReview(em.complaint_id);
   return true;
 }
@@ -657,6 +701,9 @@ export async function fileWaitingEmails() {
 // A past email brought in with an imported complaint: read in full and its
 // attachments kept, but nothing recorded from it — the complaint's dates came
 // from reading the whole thread, and replaying each email would double them.
+// For tests: record an email with a reading already made (no AI).
+export const _applyEmailForTest = (em, analysis) => applyEmail(em, analysis);
+
 export async function processHistoricalEmail(emailId) {
   const em = (await query('SELECT * FROM complaint_emails WHERE id = $1', [emailId])).rows[0];
   if (!em?.complaint_id) return;

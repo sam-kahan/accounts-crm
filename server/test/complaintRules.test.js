@@ -333,3 +333,23 @@ test('referralOpen: never too early for the ombudsman', () => {
   assert.equal(referralOpen({ ...council, response_due: '2026-09-20' }, '2026-09-29').open, true);
   assert.equal(referralOpen({ ...council, stage: 'stage_1', response_due: '2026-09-20' }, '2026-09-29').open, false);
 });
+
+test('saysReturnedToClient: a collector handing the account back ends their part, a condition never does', async () => {
+  const { saysReturnedToClient } = await import('../src/services/complaintRules.js');
+  const yes = [
+    'Please note this account has been returned to our client, British Gas.',
+    'The account has now been passed back to our client and we have closed our file.',
+    'Our client has recalled the account.',
+    'The account is no longer with us.',
+    'We are no longer acting on behalf of British Gas in relation to this account.',
+    'The balance was recalled by our client on 20 September 2026.',
+  ];
+  for (const t of yes) assert.equal(saysReturnedToClient(t), true, t);
+  const no = [
+    'If the account is returned to our client, you will need to contact them.',
+    'We will pass the account back to our client if payment is not received.',
+    'Please contact our client directly.',
+    'We are still collecting this balance on behalf of our client.',
+  ];
+  for (const t of no) assert.equal(saysReturnedToClient(t), false, t);
+});
