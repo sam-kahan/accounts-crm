@@ -187,10 +187,10 @@ test('deriveStatus: a timescale that is only a default says so', () => {
   // Researched, and it states no acknowledgement time: "doesn't set one".
   const d = deriveStatus(c, effectiveRule({ research_status: 'researched' }, 'council'));
   assert.equal(d.status, 'ack_overdue');
-  assert.match(d.nextAction, /the standard for a council \(their procedure doesn't set one\)/);
+  assert.match(d.nextAction, /the standard for a council; their procedure doesn't set one/);
   // Nobody has looked: never claimed that their procedure doesn't set one.
   const u = deriveStatus(c, effectiveRule(null, 'council'));
-  assert.match(u.nextAction, /the standard for a council \(their own procedure hasn't been researched yet\)/);
+  assert.match(u.nextAction, /the standard for a council; their own procedure hasn't been researched yet/);
   assert.doesNotMatch(u.nextAction, /doesn't set one/);
 });
 
@@ -352,4 +352,17 @@ test('saysReturnedToClient: a collector handing the account back ends their part
     'We are still collecting this balance on behalf of our client.',
   ];
   for (const t of no) assert.equal(saysReturnedToClient(t), false, t);
+});
+
+test('procedureSteps: a referral date that has come but is held says "held", not later', () => {
+  const scheme = { id: 's1', key: 'energy_ombudsman', name: 'Energy Ombudsman', wait_weeks: 8, time_limit_months: 12, time_limit_from: 'final_response', verified_at: '2026-09-01T10:00:00Z' };
+  const rule = effectiveRule(null, 'energy', scheme);
+  const c = complaint({ raised_on: '2026-06-01', stage_started_on: '2026-06-01' });
+  const step = (x) => procedureSteps(x, rule).find((s) => s.key === 'ombudsman_from');
+  assert.equal(step(c).state, 'available');
+  const held = step({ ...c, needs_check: true });
+  assert.equal(held.state, 'held');
+  assert.match(held.note, /^Not yet: /);
+  // Still in the future: later, as before.
+  assert.equal(step(complaint({ raised_on: todayISO(), stage_started_on: todayISO() })).state, 'upcoming');
 });

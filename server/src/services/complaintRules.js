@@ -238,7 +238,7 @@ const ORG_FIELDS = {
 const KIND_PHRASE = {
   council: 'a council', housing_association: 'a housing association', water: 'a water company',
   energy: 'an energy supplier', supplier: 'a supplier', managing_agent: 'a managing agent',
-  debt_collector: 'a debt collector (the FCA’s rules)',
+  debt_collector: 'a debt collector, set by the FCA',
   other: 'this kind of organisation',
 };
 
@@ -369,8 +369,8 @@ export function ukDate(iso) {
 function basisOf(rule, key) {
   if (rule.defaulted?.includes(key)) {
     return rule.unresearched
-      ? `the standard for ${rule.kind || 'this kind of organisation'} (their own procedure hasn't been researched yet)`
-      : `the standard for ${rule.kind || 'this kind of organisation'} (their procedure doesn't set one)`;
+      ? `the standard for ${rule.kind || 'this kind of organisation'}; their own procedure hasn't been researched yet`
+      : `the standard for ${rule.kind || 'this kind of organisation'}; their procedure doesn't set one`;
   }
   if (rule.sourceOf?.[key] === 'research') return 'their published complaints information (researched)';
   return rule.procedureRef || 'their procedure';
@@ -685,7 +685,9 @@ export function procedureSteps(complaint, rule) {
     // Open by the dates is not enough on an unchecked or questioned record
     // (referralOpen): then it is not shown as available, and says why.
     state: at >= 3 ? 'done' : closed ? 'past' : !from ? 'pending'
-      : from <= today ? (referralOpen({ ...complaint, ombudsman_from: from, rule }, today).open ? 'available' : 'upcoming') : 'upcoming',
+      // The date has come, but something else holds it (unchecked, a question
+      // to answer, the scheme not checked): 'held', never "later".
+      : from <= today ? (referralOpen({ ...complaint, ombudsman_from: from, rule }, today).open ? 'available' : 'held') : 'upcoming',
     note: at >= 3 ? `Referred to ${theOmbudsman(rule.ombudsman)}`
       : from && from <= today && !referralOpen({ ...complaint, ombudsman_from: from, rule }, today).open
         ? `Not yet: ${referralOpen({ ...complaint, ombudsman_from: from, rule }, today).why}`

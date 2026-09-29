@@ -22,6 +22,7 @@ const STEP_STATE = {
   due: ['Due', 'amber'],
   available: ['Available now', 'green'],
   upcoming: ['Later', 'grey'],
+  held: ['On hold', 'amber'],
   pending: ['Not dated yet', 'grey'],
   past: ['—', 'grey'],
 };
