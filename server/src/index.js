@@ -281,6 +281,16 @@ app.listen(config.port, () => {
       console.log('  Refer-by dates worked out from the ombudsman register');
     })
     .catch((err) => console.error('  Ombudsman register:', err.message));
+  // Further organisations not linked to a saved organisation missed the
+  // register's first re-dating: done once.
+  getSetting('ombudsman_register_parties')
+    .then(async (done) => {
+      if (done) return;
+      const { recomputeLooseParties } = await import('./services/complaintDeadlines.js');
+      await recomputeLooseParties(null, { by: 'Automatic (ombudsman register)', source: 'the ombudsman’s own rules (Complaints → Ombudsmen)' });
+      await setSetting('ombudsman_register_parties', { at: new Date().toISOString() }, 'start-up');
+    })
+    .catch((err) => console.error('  Ombudsman register (further organisations):', err.message));
   // A Stage 2 request sent from here before its words were recognised moves
   // its organisation on now, dated the day it went (no AI).
   import('./routes/complaints.js')

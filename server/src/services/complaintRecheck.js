@@ -66,6 +66,14 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
     differs.push(`The AI wasn’t confident reading the emails (${said}), so nothing was changed`);
     return out('Low-confidence reading');
   }
+  // The day it was made: every deadline and the ombudsman date run from it,
+  // so a difference is put to a person whatever else happens below (a
+  // complaint with more than one organisation included).
+  if (x.raised_on && c.raised_on && x.raised_on !== c.raised_on) {
+    differs.push(`It is recorded as made on ${ukDate(c.raised_on)}, the emails say ${ukDate(x.raised_on)}`);
+    doubt = { kind: 'raised_date', date: x.raised_on, quote: x.complaint_evidence?.quote || null,
+      why: `the emails show the complaint was made on ${ukDate(x.raised_on)}, but it is recorded as ${ukDate(c.raised_on)}` };
+  }
   if (hasParties) {
     differs.push(`This complaint has more than one organisation, so its stages are set by hand (${said})`);
     return out('More than one organisation');
@@ -147,13 +155,6 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
   if (x.reference && !c.reference) {
     changes.reference = x.reference;
     notes.push(`their reference: ${x.reference}`);
-  }
-  if (x.raised_on && c.raised_on && x.raised_on !== c.raised_on) {
-    differs.push(`It is recorded as made on ${ukDate(c.raised_on)}, the emails say ${ukDate(x.raised_on)}`);
-    // Every deadline and the ombudsman date run from this day, so it is put
-    // to a person on the complaint itself (never changed by the re-check).
-    doubt = { kind: 'raised_date', date: x.raised_on, quote: x.complaint_evidence?.quote || null,
-      why: `the emails show the complaint was made on ${ukDate(x.raised_on)}, but it is recorded as ${ukDate(c.raised_on)}` };
   }
   return out();
 }
@@ -338,8 +339,13 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
     // recorded date") is not raised again by reading the same thing.
     const prior = cur.complaint_doubt;
     const answeredSame = prior?.answered && plan.doubt && prior.kind === plan.doubt.kind && (prior.date || null) === (plan.doubt.date || null);
+    // A question still waiting for a person is never dropped by a re-check
+    // that couldn't read the emails fully (low confidence, unreadable): only a
+    // full reading that finds nothing wrong clears it.
+    const couldNotJudge = !x || x.confidence === 'low';
     const doubtValue = answeredSame ? JSON.stringify(prior)
-      : plan.doubt ? JSON.stringify({ ...plan.doubt, at: new Date().toISOString() }) : null;
+      : plan.doubt ? JSON.stringify({ ...plan.doubt, at: new Date().toISOString() })
+        : couldNotJudge && prior && !prior.answered ? JSON.stringify(prior) : null;
     await client.query(
       `UPDATE complaints SET rechecked_at = now(), recheck_signature = $2,
               last_recheck = COALESCE($3::jsonb, last_recheck), needs_check = needs_check OR $4,

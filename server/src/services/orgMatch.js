@@ -101,6 +101,11 @@ export function sameOrgName(a, b) {
     if (place(wa) && place(wa) === place(wb)) return true;
   }
 
+  // A one-letter slip in a long name, but never where a place is what tells
+  // two bodies apart ("Bolton Council" / "Boston Council", "Harrow" /
+  // "Barrow"): not for councils, and only when the first four letters agree.
+  const placeLike = (w) => w.some((x) => COUNCIL_WORDS.has(x));
+  if (placeLike(wa) || placeLike(wb) || ca.slice(0, 4) !== cb.slice(0, 4)) return false;
   return short.length >= 10 && editDistance(ca, cb, 1) <= 1;
 }
 

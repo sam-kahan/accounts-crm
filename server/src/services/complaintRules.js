@@ -822,7 +822,12 @@ function asksForStage2(sentence) {
   const rest = afterAsk.slice(target.index + target[0].length);
   // "… a second stage review is not needed": turned down, not asked for.
   if (/^\W*(?:\w+\s+){0,2}(?:is|are|was|would\s+be)\s+(?:not|n['’]t)\b|^\W*(?:\w+\s+){0,2}(?:isn|aren|wasn)['’]t\b/i.test(rest)) return false;
-  if (/\b(?:if|unless)\b.{0,60}(?:\b(?:not|no|fail\w*|still)\b|n['’]t\b)|\botherwise\b|\bfailing\b/i.test(rest)) return false;
+  // Any condition after it makes it a threat, not the request ("… to Stage 2
+  // if you cannot resolve it", "… unless …", "… should you be unable …"):
+  // "if you could" politeness was already rewritten above.
+  if (/\b(?:if|unless|provided|failing|otherwise|in the event|should (?:you|they|it|we|there))\b/i.test(rest)) return false;
+  // Asking HOW (or whether) to ask for Stage 2 is not asking for it.
+  if (/\b(?:advise (?:us )?how|know how|explain how|tell us how|how (?:we|to|do|can|should|would)|whether)\b/i.test(span)) return false;
   return true;
 }
 
@@ -860,14 +865,19 @@ export function missedStage2Requests(tracks, emails, events = []) {
   const found = new Map();
   const sorted = [...emails].filter((e) => e.sent_on).sort((a, b) => a.sent_on.localeCompare(b.sent_on));
   for (const e of sorted) {
-    const certain = e.our_step === 'stage2_request' || isStage2Request(e);
+    // With more than one organisation, an email of ours with no organisation
+    // recorded is one Send couldn't place (or whose organisation was taken
+    // off since): offered to a person, never certain enough to act on.
+    const unplaced = tracks.length > 1 && !e.party_id;
+    const certain = !unplaced && (e.our_step === 'stage2_request' || isStage2Request(e));
+    const asked = e.our_step === 'stage2_request' || isStage2Request(e);
     // Not certain: offered only if a sentence of ours speaks of escalating to
     // Stage 2 without a condition or a future ("if we don't hear by Friday,
     // we will escalate…" is a chaser, and must not raise the prompt).
     const own = String(e.body || '').split(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,80} wrote:)/i)[0];
     const loose = [e.subject || '', ...own.split(/(?<=[.!?;])\s+|\n+/)]
       .some((x) => MENTIONS_STAGE2.test(x) && !CONDITION_BEFORE.test(x) && !NEGATIVE.test(x));
-    if (!certain && !loose) continue;
+    if (!asked && !loose) continue;
     // Whose track: the one it was sent for; with one organisation, that one;
     // sent from here with none named, the main one. Otherwise a person says.
     const t = e.party_id ? tracks.find((x) => x.party_id === e.party_id)

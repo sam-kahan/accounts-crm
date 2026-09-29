@@ -1403,6 +1403,24 @@ async function stage2TrackFor(complaintId, to) {
   return hits.length === 1 && hits[0].row.stage === 'stage_1' ? { party: hits[0].party } : null;
 }
 
+// A person confirms the Stage 2 request the page found (stage2_missed):
+// escalated from the day it was sent and recorded on that email, so Undo on
+// the email takes it back (stage can't be set in Edit details).
+router.post(
+  '/:id/stage2-missed/:emailId',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) throw new HttpError(400, 'Invalid id');
+    const m = ((await stage2MissedFor([req.params.id])).get(req.params.id) || []).find((x) => x.email_id === req.params.emailId);
+    if (!m) throw new HttpError(409, 'That email isn’t waiting to be recorded as the Stage 2 request any more; reload the page.');
+    await escalateFromEmail(req.params.id, m.party_id, m.sent_on, who(req), m.email_id);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+      [req.params.id, m.party_id, m.sent_on, `Moved to Stage 2 from ${ukDate(m.sent_on)}: the email "${m.subject}" was the Stage 2 request. If that's wrong, press Undo on that email.`, who(req)],
+    );
+    res.json(await decoratedById(req.params.id));
+  }),
+);
+
 // Stage 2 requests we sent that the complaint hasn't caught up with
 // (complaintRules.js#missedStage2Requests), for one complaint or several.
 async function stage2MissedFor(ids) {
@@ -1535,8 +1553,12 @@ async function escalateTrack(complaintId, partyId, date, by, { to = null } = {})
     if (next === 'ombudsman') {
       // The dates alone (a person is recording what they did, so the
       // "not checked" rule doesn't apply), on the day it was referred.
+      // Dates only: whether the scheme's record has been checked yet says
+      // nothing about whether this referral was in time.
+      const { scheme, ...bare } = rule;
+      const datesRule = scheme ? { ...rule, scheme: { ...scheme, verified: true } } : bare;
       const r = referralOpen({ ...complaint, needs_check: false, complaint_doubt: null,
-        ombudsman_from: computeOmbudsmanFrom(complaint, rule), rule }, escalatedOn);
+        ombudsman_from: computeOmbudsmanFrom(complaint, datesRule), rule: datesRule }, escalatedOn);
       if (!r.open) {
         await query(
           `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,

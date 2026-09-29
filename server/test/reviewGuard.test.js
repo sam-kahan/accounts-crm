@@ -321,6 +321,10 @@ test('missedStage2Requests: a request we sent that left the complaint at Stage 1
   // Two organisations and not sent from here with none named: a person says whose.
   const cder = { party_id: 'p1', org_name: 'CDER Group', stage: 'stage_1', state: 'open', raised_on: '2026-08-01' };
   assert.deepEqual(missedStage2Requests([main, cder], [{ ...ask, from_here: false }]), []);
+  // Sent from here with no organisation recorded, two on the complaint: offered, never acted on.
+  const unplaced = missedStage2Requests([main, cder], [{ ...ask, from_here: true }]);
+  assert.equal(unplaced.length, 1);
+  assert.equal(unplaced[0].certain, false);
   assert.equal(missedStage2Requests([main, cder], [{ ...ask, party_id: 'p1' }])[0].org_name, 'CDER Group');
 });
 
@@ -350,4 +354,36 @@ test('the AI review never sends anyone to the ombudsman too early', () => {
   // Saying when it could go is not advice to go now.
   assert.equal(recommendsReferral({ headline: 'Wait until 13 Oct; if they still haven’t replied, refer it to the ombudsman.' }), false);
   assert.equal(recommendsReferral({ headline: 'You can refer it to the Energy Ombudsman now.' }), true);
+});
+
+test('referral advice is caught however the sentence goes on', () => {
+  const now = [
+    'Refer the complaint to the Energy Ombudsman now, before the 12-month limit runs out.',
+    'Refer it to the Energy Ombudsman now: they have ignored us after two chasers.',
+    'You can refer it to the Energy Ombudsman now.',
+    'Refer the complaint to the Energy Ombudsman by 6 October 2026 and email British Gas today.',
+  ];
+  for (const h of now) assert.equal(recommendsReferral({ headline: h }), true, h);
+  const later = [
+    'Wait until 13 Oct; if they still haven’t replied, refer it to the ombudsman.',
+    'Don’t refer it to the Energy Ombudsman yet.',
+    'Once 8 weeks have passed, refer it to the Energy Ombudsman.',
+    'Refer it to the Energy Ombudsman from 4 Oct 2026.',
+    'Refer it to the Energy Ombudsman if they don’t reply by Friday.',
+    'Not the ombudsman yet: they can’t take it until Sun 4 Oct 2026.',
+  ];
+  for (const h of later) assert.equal(recommendsReferral({ headline: h }), false, h);
+});
+
+test('a Stage 2 threat, condition or question is never taken for the request', () => {
+  const no = [
+    'Please escalate this to Stage 2 if you cannot resolve it by Friday.',
+    'Please escalate this to Stage 2 unless you can resolve it this week.',
+    'Please escalate our complaint to Stage 2 if we have heard nothing by 5 October.',
+    'Please escalate our complaint to Stage 2 should you be unable to resolve it.',
+    'Please advise how we request a Stage 2 review.',
+    'We would like to know how to escalate to stage 2.',
+  ];
+  for (const b of no) assert.equal(isStage2Request({ subject: 'x', body: b }), false, b);
+  assert.equal(isStage2Request({ subject: 'x', body: 'We would be grateful if you could escalate our complaint to Stage 2.' }), true);
 });

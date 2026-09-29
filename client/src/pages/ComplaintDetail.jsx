@@ -969,9 +969,9 @@ export default function ComplaintDetail() {
               if (!confirm(`Move ${m.org_name} to Stage 2 from ${formatDate(m.sent_on)}? Their Stage 2 deadline runs from that day.`)) return;
               setCatchingUp(m.party_id || 'main');
               try {
-                await api.complaints.escalate(id, m.sent_on, m.party_id);
+                await api.complaints.confirmStage2Email(id, m.email_id);
                 await load();
-                setMsg(`Moved to Stage 2 from ${formatDate(m.sent_on)}. The next steps will update in a couple of minutes.`);
+                setMsg(`Moved to Stage 2 from ${formatDate(m.sent_on)}. If that was wrong, press Undo on that email below. The next steps will update in a couple of minutes.`);
               } catch (e) { setMsg(e.message); } finally { setCatchingUp(null); }
             }}>
             {catchingUp === (m.party_id || 'main') ? 'Moving…' : `Move to Stage 2 from ${formatDate(m.sent_on)}`}

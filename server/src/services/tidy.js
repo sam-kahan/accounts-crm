@@ -93,25 +93,61 @@ export async function tidySuggestions() {
 // re-pointed to the target track (and Undo with them); a source party row is
 // then removed. `fromPartyId` null = the main track of `fromComplaintId`;
 // `targetPartyId` null = the target complaint's main track.
-const FOLD_COLS = ['reference', 'acknowledged_on', 'responded_on', 'final_response_on', 'stage_started_on', 'outcome'];
-// The track's own dates and stage, taken whole from the EARLIER complaint.
-const ORIGINAL_COLS = ['raised_on', 'stage', 'stage_started_on', 'acknowledged_on', 'responded_on',
-  'final_response_on', 'response_due', 'response_due_manual'];
 const dayOf = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null);
-async function foldTrack(client, { fromComplaintId, fromPartyId, source, target, targetTable, targetPartyId }) {
+const STAGE_ORDER = { stage_1: 1, stage_2: 2, ombudsman: 3 };
+const STAGE_WORD = { stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'the ombudsman' };
+const DATE_WORD = { acknowledged_on: 'acknowledged', responded_on: 'responded', final_response_on: 'final response' };
+const trackIsOpen = (t) => (t.state || 'open') === 'open' && !['resolved', 'closed'].includes(t.stage);
+
+// Two records of the SAME organisation's complaint being combined (the same
+// account complained about twice, or a supplier added to a collector's
+// complaint while its own was open). Pure. Returns the values to write onto
+// `target`, and notes for the timeline. The rule, so nothing is lost or
+// moved backwards:
+//   - it was made on the EARLIER date of the two;
+//   - it is at the FURTHER stage of the two (an open one's), with that
+//     stage's start date and response; never moved back;
+//   - a date only one has is kept; two different dates keep the one from the
+//     record whose stage is kept, and the other is written in the notes.
+export function combineTracks(source, target) {
   const fill = {};
-  // The same organisation complained to twice: the earlier complaint is the
-  // real one (a supplier added to a debt collector's complaint "today" while
-  // its own complaint from June was still open), so its date, stage and dates
-  // are kept, not today's; the later one stays on the timeline.
-  const earlier = dayOf(source.raised_on) && dayOf(target.raised_on) && dayOf(source.raised_on) < dayOf(target.raised_on) &&
-    (source.state || 'open') === 'open' && !['resolved', 'closed'].includes(source.stage);
-  if (earlier) {
-    for (const c of ORIGINAL_COLS) if ((source[c] ?? null) !== (target[c] ?? null)) fill[c] = source[c] ?? null;
-    if (source.reference && !target.reference) fill.reference = source.reference;
-  } else {
-    for (const c of FOLD_COLS) if (!target[c] && source[c]) fill[c] = source[c];
+  const notes = [];
+  const sr = dayOf(source.raised_on);
+  const tr = dayOf(target.raised_on);
+  if (sr && (!tr || sr < tr)) {
+    fill.raised_on = sr;
+    notes.push(`made on ${ukDate(sr)} (the earlier of the two${tr ? `; the other was ${ukDate(tr)}` : ''})`);
   }
+  const lead = trackIsOpen(source) && (STAGE_ORDER[source.stage] || 0) > (STAGE_ORDER[target.stage] || 0) ? source : target;
+  if (lead === source) {
+    fill.stage = source.stage;
+    fill.stage_started_on = dayOf(source.stage_started_on);
+    fill.responded_on = dayOf(source.responded_on); // the answer at THIS stage
+    notes.push(`at ${STAGE_WORD[source.stage] || source.stage}, as the other record was${target.stage ? ` (this one was at ${STAGE_WORD[target.stage] || target.stage})` : ''}`);
+  } else if (source.stage === target.stage) {
+    const ss = dayOf(source.stage_started_on) || (source.stage === 'stage_1' ? sr : null);
+    const ts = dayOf(target.stage_started_on) || (target.stage === 'stage_1' ? tr : null);
+    if (ss && (!ts || ss < ts)) fill.stage_started_on = ss;
+  }
+  const other = lead === source ? target : source;
+  for (const col of ['acknowledged_on', 'responded_on', 'final_response_on']) {
+    if (col === 'responded_on' && lead === source) continue; // set above, for its stage
+    if (col === 'responded_on' && source.stage !== target.stage) continue; // another stage's answer
+    const kept = dayOf(lead[col]);
+    const alt = dayOf(other[col]);
+    const now = dayOf(target[col]);
+    const want = kept || alt || null;
+    if (want !== now) fill[col] = want;
+    if (kept && alt && kept !== alt) notes.push(`${DATE_WORD[col]} ${ukDate(kept)} kept (the other record says ${ukDate(alt)})`);
+  }
+  if (source.reference && !target.reference) fill.reference = source.reference;
+  if (source.outcome && !target.outcome) fill.outcome = source.outcome;
+  if (Object.keys(fill).some((k) => ['raised_on', 'stage', 'stage_started_on'].includes(k))) fill.response_due_manual = false;
+  return { fill, notes };
+}
+async function foldTrack(client, { fromComplaintId, fromPartyId, source, target, targetTable, targetPartyId }) {
+  // Nothing of either is lost or moved backwards (combineTracks).
+  const { fill, notes } = combineTracks(source, target);
   const cols = Object.keys(fill);
   if (cols.length) {
     await client.query(
@@ -130,11 +166,7 @@ async function foldTrack(client, { fromComplaintId, fromPartyId, source, target,
     [fromComplaintId, targetPartyId, fromPartyId],
   );
   if (fromPartyId) await client.query('DELETE FROM complaint_parties WHERE id = $1', [fromPartyId]);
-  const stageNote = earlier
-    ? ` (its complaint made on ${ukDate(dayOf(source.raised_on))} was kept as the original, with its stage and dates; the later one, made on ${ukDate(dayOf(target.raised_on))}, is on the timeline)`
-    : source.stage && target.stage && source.stage !== target.stage
-      ? ` (it was at ${source.stage.replace('_', ' ')} there, ${target.stage.replace('_', ' ')} here: check which is right)`
-      : '';
+  const stageNote = notes.length ? ` (${notes.join('; ')})` : '';
   return { filled: cols, stageNote };
 }
 
@@ -247,7 +279,6 @@ export async function mergeComplaints(keepId, mergeId, by) {
       movedParties.push(gp.id);
       keepParties.push(gp);
     }
-    const partyNote = partyNotes.length ? `; ${partyNotes.join('; ')}` : '';
     const moved = {};
     for (const t of ['complaint_emails', 'complaint_attachments', 'complaint_events']) {
       moved[t] = (await client.query(`UPDATE ${t} SET complaint_id = $1 WHERE complaint_id = $2`, [keepId, mergeId])).rowCount;
@@ -259,9 +290,17 @@ export async function mergeComplaints(keepId, mergeId, by) {
     const fill = {};
     const fillCols = secondOrg
       ? ['our_reference', 'property', 'category']
-      : ['reference', 'our_reference', 'property', 'category', 'organisation_id', 'acknowledged_on'];
+      : ['our_reference', 'property', 'category', 'organisation_id'];
     for (const col of fillCols) {
       if (!keep[col] && gone[col]) fill[col] = gone[col];
+    }
+    // The same organisation on both: its complaint's date, stage and dates
+    // are combined by the same rule as a further organisation's part (the
+    // earlier date, the further stage, no date lost), said on the timeline.
+    if (!secondOrg) {
+      const t = combineTracks(gone, keep);
+      Object.assign(fill, t.fill);
+      if (t.notes.length) partyNotes.push(`the complaint is ${t.notes.join('; ')}`);
     }
     // The account numbers are the issue's, whichever organisation quoted them.
     const accounts = dropDigitSlips([...new Set([...(keep.account_numbers || []), ...(gone.account_numbers || [])])]).kept;
@@ -284,7 +323,7 @@ export async function mergeComplaints(keepId, mergeId, by) {
         `Merged in ${gone.ref_code} ("${gone.subject}", raised ${ukDate(gone.raised_on)}): ` +
           `${plural(moved.complaint_emails, 'email')}, ${plural(moved.complaint_attachments, 'document')}, ` +
           `${plural(moved.complaint_events, 'timeline entry', 'timeline entries')} moved here` +
-          (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + partyNote + '.',
+          (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + (partyNotes.length ? `; ${partyNotes.join('; ')}` : '') + '.',
         by,
       ],
     );

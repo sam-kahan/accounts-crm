@@ -300,6 +300,8 @@ export const api = {
       request(`/complaints/${id}/events`, { method: 'POST', body: JSON.stringify(data) }),
     // partyId: a further organisation on the complaint (null: the main one).
     // `to: 'ombudsman'` records a referral from either stage (not one stage up).
+    // The Stage 2 request the page found in our emails: escalated from its date, with Undo on that email.
+    confirmStage2Email: (id, emailId) => request(`/complaints/${id}/stage2-missed/${emailId}`, { method: 'POST' }),
     escalate: (id, date, partyId = null, to = null) =>
       request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date, party_id: partyId, to }) }),
     // Say what an email that arrived was: acknowledgement | response | correspondence,

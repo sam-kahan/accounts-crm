@@ -80,8 +80,21 @@ export function chaseHeldUntil({ lastSentOn, lastTheirsOn, nextDue, today }) {
 // Does a review tell Greenco to go to the ombudsman (or a redress scheme)?
 // A sentence that only says when it could, or not to yet, doesn't count.
 const REFER = /\b(?:refer(?:red|ral|ring)?|escalat\w*|take (?:it|this|the complaint)|go(?:ing)?|complain|submit|send)\b[^.]{0,60}\b(?:ombudsman|redress scheme|tribunal)\b/i;
-const NOT_REFER = /\b(?:not yet|don['’]t|do not|can['’]t|cannot|before|until|once|after|from \w{3} \d|if (?:they|it|no|still)|unless|failing|otherwise)\b/i;
-const refersNow = (s) => REFER.test(s) && !NOT_REFER.test(s);
+// Only a condition or "later" that GOVERNS the referral makes it not advice
+// to refer now: before the verb ("if they still haven't replied, refer…",
+// "don't refer yet"), or a start date after it ("refer it from 4 Oct").
+// Words elsewhere in the sentence ("…now, before the 12-month limit runs
+// out", "they ignored us after two chasers") don't.
+const COND_BEFORE = /\b(?:not yet|don['’]t|do not|can['’]t|cannot|until|once|after|before|if|unless|when|should|whether)\b[^.;]{0,60}$/i;
+const LATER_AFTER = /^[^.;]{0,80}?\b(?:(?:from|on or after|after|once)\s+(?:(?:mon|tue|wed|thu|fri|sat|sun)\w*\s+)?\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3}|if (?:they|it|no|nothing|there|we)\b|unless\b|failing\b|should they\b)/i;
+const NOT_NOW_AFTER = /^[^.;]{0,40}?\b(?:yet|later)\b/i;
+const refersNow = (s) => {
+  const m = REFER.exec(s);
+  if (!m) return false;
+  const before = s.slice(0, m.index);
+  const from = s.slice(m.index);
+  return !COND_BEFORE.test(before) && !LATER_AFTER.test(from) && !(/\bnot\b/i.test(before) && NOT_NOW_AFTER.test(from));
+};
 export function recommendsReferral(r) {
   if (!r) return false;
   if (r.next_action?.type === 'refer_ombudsman') return true;

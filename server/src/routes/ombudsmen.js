@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse } from '../lib/http.js';
 import { organisationsUsing, DEFAULT_SCHEME } from '../services/ombudsmen.js';
-import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
+import { recomputeForOrganisation, recomputeLooseParties } from '../services/complaintDeadlines.js';
 
 // ---------------------------------------------------------------------------
 // The ombudsman register (migration 042): each scheme's rules for taking a
@@ -87,6 +87,7 @@ router.put(
         `SELECT id FROM complaints WHERE state = 'open' AND organisation_id IS NULL AND org_type = ANY($1::text[])`, [types],
       )).rows.map((r) => r.id);
       if (loose.length) recalculated += (await recomputeForOrganisation(null, loose, opts)) || 0;
+      recalculated += await recomputeLooseParties(types, opts);
     }
     res.json({ ...rows[0], recalculated });
   }),

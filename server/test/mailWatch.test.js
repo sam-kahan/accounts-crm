@@ -297,6 +297,9 @@ test('an organisation written slightly differently is the one on file, never a n
     ['Liverpool City Council', 'Knowsley Council'],
     ['Manchester City Council', 'Manchester Metropolitan University'],
     ['Places for People', 'Plus Dane'],
+    ['Bolton Council', 'Boston Council'],
+    ['Harrow Council', 'Barrow Council'],
+    ['Bolton at Home Ltd', 'Boston at Home Ltd'],
   ];
   for (const [a, b] of different) assert.equal(sameOrgName(a, b), false, `${a} / ${b}`);
   // Two saved organisations it could be: neither.
