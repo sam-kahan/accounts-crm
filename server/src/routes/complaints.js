@@ -1071,7 +1071,7 @@ router.post(
         `Received: ${em.received_at ? londonDateOf(new Date(em.received_at)) : ''}\n\n${em.body_text || em.body_preview || ''}`;
     }
     if (!text && !blocks.length) throw new HttpError(400, 'Paste the complaint, or attach the email or letter.');
-    const parsed = await parseImportedComplaint({ text, hint: d.hint, blocks });
+    const parsed = await parseImportedComplaint({ text, hint: d.hint, blocks, forLog: true });
     // The saved organisation it is about, by the same rule imports use, so the
     // form doesn't offer to set up a second one for a name written differently.
     const org = parsed?.org_name ? await findOrgByName(parsed.org_name) : null;

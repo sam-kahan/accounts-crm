@@ -426,8 +426,18 @@ Return ONLY a single JSON object with exactly these keys:
   "notes": string
 }`;
 
-export async function parseImportedComplaint({ text, hint, blocks = [] }) {
+// `forLog`: filling in the Log a complaint form, where the answer to
+// is_complaint decides whether the complaint still has to be sent, and the
+// rest of the form is wanted either way. (The past-complaints search leaves
+// it off: a thread that isn't a complaint needs nothing more.)
+export async function parseImportedComplaint({ text, hint, blocks = [], forLog = false }) {
   const user =
+    (forLog
+      ? 'This is to fill in the form for logging a complaint. Fill in every field from the material even ' +
+        'when "is_complaint" is false (Greenco\'s own request or dispute that has not become a formal complaint ' +
+        'yet); then "raised_on", "acknowledged_on" and "responded_on" are null and "stage" is "stage_1". Begin ' +
+        '"notes" with one sentence saying why it is, or is not, a formal complaint already made.\n\n'
+      : '') +
     (hint ? `Hint from the user: ${hint}\n\n` : '') +
     (text
       ? `Material about the complaint:\n<untrusted_content>\n${text}\n</untrusted_content>`

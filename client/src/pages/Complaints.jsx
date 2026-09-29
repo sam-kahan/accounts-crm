@@ -118,8 +118,17 @@ function NewComplaintModal({
         org_type: org ? org.type : p.org_type || f.org_type,
       }));
       setFilled(true);
+      // The AI's reading of whether this IS the complaint, already made to
+      // them, sets the answer to "sent yet?" (a person can change it): a
+      // request or a dispute that never became a complaint still has to be sent.
+      const made = p.is_complaint === true;
+      if (askSent) setNotSent(!made);
       setFillNotes(
-        [org ? `Matched to “${org.name}”, already saved.` : p.org_name ? `“${p.org_name}” isn’t saved yet. Research it below so the deadlines follow their procedure.` : '',
+        [askSent ? (made
+          ? `The AI reads this as the complaint itself, already made${p.raised_on ? ` on ${formatDate(p.raised_on)}` : ''}, so “Yes, it has been sent” is selected.`
+          : 'The AI doesn’t read this as a formal complaint made to them yet, so “Not yet” is selected: once saved, the complaint offers to draft it.') +
+          ' Change it if that’s wrong.' : '',
+        org ? `Matched to “${org.name}”, already saved.` : p.org_name ? `“${p.org_name}” isn’t saved yet. Research it below so the deadlines follow their procedure.` : '',
           p.confidence ? `Confidence: ${p.confidence}.` : '', p.notes || ''].filter(Boolean).join(' '),
       );
       setPasting(false);

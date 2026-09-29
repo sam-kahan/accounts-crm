@@ -749,7 +749,12 @@ the page says how far each date can be trusted.
 ### 2026-09-29 — a complaint logged before it was sent: the system drafts the complaint email
 - **The Log form asks "Has this complaint been sent to them yet?"** and
   assumes **not yet** (a complaint brought in by an import, or started from an
-  email, has been made and isn't asked). Not yet stores
+  email, has been made and isn't asked). Filling the form from the email or
+  letter sets the answer from the AI's `is_complaint` reading (a request or a
+  dispute that never became a complaint is "not yet"), and says so; a person
+  can change it. The read is asked to fill the whole form even when it isn't a
+  complaint (`parseImportedComplaint({ forLog: true })`; the past search leaves
+  it off, since a non-complaint thread needs nothing more). Not yet stores
   `complaints.not_sent_yet` (migration `054`), with no date raised asked for.
   **It is a person's answer, never guessed from what is on file**: an earlier
   version inferred it from "no emails on the complaint", which would have put
