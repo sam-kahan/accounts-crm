@@ -246,7 +246,7 @@ async function processClaimedEmail(claimed) {
 // Write the timeline entry for an email and, when the analysis makes it
 // clear-cut, record the step it represents — keeping the values it replaced so
 // Undo can put them back exactly.
-const EARLIER_BY = 'Automatic (arrived before the complaint was made)';
+export const EARLIER_BY = 'Automatic (arrived before the complaint was made)';
 const COPY_BY = 'Automatic (our copy of an email sent from here)';
 
 // The copy of an email we sent from here, arriving back through the complaint's

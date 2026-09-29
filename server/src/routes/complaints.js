@@ -18,7 +18,7 @@ import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
-import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
+import { processEmail, undoEmail, fileWaitingEmails, EARLIER_BY } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
 import { getSetting, setSetting, watchedMailboxes, mailboxAllowed, allowedMailboxList } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
@@ -1622,6 +1622,17 @@ router.get(
     )).rows;
     const evidence = await evidenceFor(decorated, { events, emails, attachments });
     const awaiting_first_email = await firstEmailPending(rows[0]);
+    if (awaiting_first_email) {
+      // Nothing is due from them until it has gone: the dates worked out from
+      // the day it was logged would say it was made and awaits an
+      // acknowledgement.
+      decorated.label = 'Not sent to them yet';
+      decorated.nextAction = `Send the complaint to ${decorated.org_name}: nothing is due from them until it has gone.`;
+      decorated.steps = [{
+        key: 'raised', label: 'Complaint made', date: null, state: 'pending',
+        note: 'Not sent to them yet. Their deadlines are worked out from the day it goes.',
+      }];
+    }
     res.json({ ...decorated, awaiting_first_email, events, emails, attachments, email_search, bounces, outbox, evidence, external_cc: config.smtp.externalCc });
   }),
 );
@@ -2411,9 +2422,16 @@ const FORMAL_MADE_SQL = `EXISTS (SELECT 1 FROM complaint_events WHERE complaint_
 async function firstEmailPending(c) {
   const [{ rows: [n] }, { rows: [f] }] = await Promise.all([
     query(
-      `SELECT (SELECT count(*) FROM complaint_emails WHERE complaint_id = $1)::int AS emails,
+      // An email from before the complaint was made (found later by its
+      // account number, say, like our own earlier request to them) is
+      // background, not the complaint: it doesn't count as it being under way.
+      `SELECT (SELECT count(*) FROM complaint_emails e WHERE e.complaint_id = $1
+                 AND e.reviewed_by IS DISTINCT FROM $2
+                 AND NOT (CASE WHEN e.analysis->>'sent_on' ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                               THEN (e.analysis->>'sent_on')::date < $3::date ELSE false END))::int AS emails,
               (SELECT count(*) FROM complaint_outbox WHERE complaint_id = $1)::int AS outbox,
-              (SELECT count(*) FROM complaint_parties WHERE complaint_id = $1)::int AS parties`, [c.id]),
+              (SELECT count(*) FROM complaint_parties WHERE complaint_id = $1)::int AS parties`,
+      [c.id, EARLIER_BY, c.raised_on]),
     query(`SELECT ${FORMAL_MADE_SQL} AS made`, [c.id]),
   ]);
   return awaitingFirstEmail(c, { hasParties: n.parties > 0, emailCount: n.emails, outboxCount: n.outbox, formallyMade: f.made });

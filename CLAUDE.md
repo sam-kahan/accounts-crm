@@ -761,6 +761,12 @@ the page says how far each date can be trusted.
   with a "Formal complaint made" entry, so it is never offered again
   (`startFormalComplaint`'s UPDATE checks the same conditions, so two presses
   can't both restart the dates).
+- An email from BEFORE the complaint was made doesn't count as it being under
+  way (`reviewed_by` = `EARLIER_BY`, or the AI's `sent_on` before `raised_on`):
+  the account-number search files our own earlier request to them as
+  background, and that had hidden the step. While the step shows, the page's
+  status is "Not sent to them yet" and its checklist has no dates (they would
+  run from the day it was logged, not the day it goes).
 
 ### 2026-09-29 — fixes from a review of the month end and the invoicing bridge
 - **Paid here stays paid** (`applyExternalState`): an invoice marked paid
