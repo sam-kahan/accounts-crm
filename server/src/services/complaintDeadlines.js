@@ -2,6 +2,7 @@ import { schemeFor } from './ombudsmen.js';
 import { query } from '../db/pool.js';
 import {
   effectiveRule,
+  awaitingFirstEmail,
   computeResponseDue,
   computeOmbudsmanDeadline,
   readable,
@@ -32,8 +33,11 @@ export async function recomputeDeadlines(id, db = { query }) {
   const c = (await db.query('SELECT * FROM complaints WHERE id = $1', [id])).rows[0];
   if (!c) return null;
   const { rule } = await ruleForComplaint(c, db);
-  const responseDue = c.response_due_manual ? c.response_due : computeResponseDue(c, rule);
-  const ombudsmanDeadline = computeOmbudsmanDeadline(c, rule);
+  // Not sent to them yet: nothing is due from them, and a date worked out
+  // from the day it was logged would later read as a missed deadline.
+  const unsent = awaitingFirstEmail(c);
+  const responseDue = unsent ? null : c.response_due_manual ? c.response_due : computeResponseDue(c, rule);
+  const ombudsmanDeadline = unsent ? null : computeOmbudsmanDeadline(c, rule);
   const { rows } = await db.query(
     `UPDATE complaints SET response_due = $2, ombudsman_deadline = $3
       WHERE id = $1 RETURNING *`,

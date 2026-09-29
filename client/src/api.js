@@ -387,7 +387,7 @@ export const api = {
       request(`/complaints/${id}/assist`, { method: 'POST', body: JSON.stringify(data) }),
     // Queued and sent in the background (202): the complaint's `outbox` says
     // how it is going.
-    resendDraft: (id, emailId) => request(`/complaints/${id}/emails/${emailId}/resend`),
+    resendDraft: (id, emailId) => request(`/complaints/${id}/emails/${emailId}/resend`, { method: 'POST' }),
     sendEmail: (id, data) =>
       request(`/complaints/${id}/send-email`, { method: 'POST', body: JSON.stringify(data) }),
     retryOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}/retry`, { method: 'POST' }),

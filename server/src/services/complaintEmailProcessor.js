@@ -2,7 +2,8 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { ukDate, trackOpen, readable, saysReturnedToClient } from './complaintRules.js';
+import { ukDate, trackOpen, readable, saysReturnedToClient, awaitingFirstEmail, usesComplaintWord } from './complaintRules.js';
+import { startFormalComplaint } from './complaintFormal.js';
 import { overallState } from './complaintParties.js';
 import { fetchMessageDetail } from './graphMail.js';
 import { analyseEmail, planFromAnalysis, resolutionSuggestion, isOurOwnEmail } from './emailAnalysis.js';
@@ -487,6 +488,18 @@ async function applyEmail(em, analysis, skipped = []) {
     return d && d !== ours;
   });
   const sentStep = (ownEmail || analysis?.kind === 'our_email') && (wentOutside || Boolean(analysis?.forwarded));
+  // The complaint itself, sent from Outlook (copied to the complaint's
+  // address) on a complaint logged before it was sent: it has been made now,
+  // so it runs from the day it went, exactly as if it had been sent from here.
+  // Only our own email, read, to someone outside, that asks for a complaint in
+  // so many words (Greenco's rule: usesComplaintWord).
+  if (ownEmail && analysis && wentOutside && awaitingFirstEmail(complaint) &&
+      usesComplaintWord(`${em.subject || ''}\n${em.body_text || em.body_preview || ''}`)) {
+    const on = /^\d{4}-\d{2}-\d{2}$/.test(analysis.sent_on || '') && analysis.sent_on <= arrived ? analysis.sent_on : arrived;
+    await startFormalComplaint(complaint.id, on, 'Automatic (from email)', {
+      subject: em.subject || null, how: 'sent from Outlook (its copy reached the complaint)',
+    });
+  }
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
   const offOrg = off && !off.conflict ? off.org.name : null;
   const recorded = offOrg
@@ -831,9 +844,7 @@ export async function settleRoutineEmails() {
   const rows = (await query(
     `SELECT e.id, e.subject, e.body_text, e.body_preview, e.analysis, e.party_id, e.complaint_id, e.sender_email
        FROM complaint_emails e
-      WHERE e.reviewed_at IS NULL AND e.direction <> 'outbound' AND e.complaint_id IS NOT NULL
-        AND (e.analysis IS NOT NULL OR ($1 <> '' AND lower(COALESCE(e.sender_email, '')) LIKE '%@' || $1))`,
-    [ourDomain],
+      WHERE e.reviewed_at IS NULL AND e.direction <> 'outbound' AND e.complaint_id IS NOT NULL AND e.analysis IS NOT NULL`,
   )).rows;
   let n = 0;
   for (const e of rows) {

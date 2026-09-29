@@ -270,8 +270,10 @@ export function isOurOwnEmail(email, a, ourDomain) {
 
 export function planFromAnalysis(complaint, a, { today = todayISO(), text = '', soleTrack = true, ownEmail = false } = {}) {
   // Ours (isOurOwnEmail): our Stage 2 request or referral moves its part on
-  // as usual; anything else is filed, whatever the AI made of it.
-  if (ownEmail) {
+  // as usual; anything else is filed, whatever the AI made of it. Only once
+  // it has been read: unread, it could be our Stage 2 request, and filing it
+  // would stop it ever being read (it waits, and is read again).
+  if (ownEmail && a) {
     if (a?.kind === 'our_email' && a.our_step) return planOurStep(complaint, a, today);
     return { auto: true, changes: {}, reviewedAs: 'correspondence', event: null };
   }

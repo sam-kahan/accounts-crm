@@ -5,6 +5,7 @@ import { londonDateOf, todayISO } from '../lib/dates.js';
 import { track } from './aiUsage.js';
 import { referLimitText, holdToComplaintWord } from './complaintRules.js';
 import { pickAttachments, staleNoReply, saysAttached } from './draftChecks.js';
+import { query } from '../db/pool.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -326,6 +327,21 @@ export async function callClaude({ system, user, blocks = [], maxTokens = 4000, 
 }
 
 export async function assistComplaint(input) {
+  // Each document described once, in a line, so the AI knows what
+  // "GreencoScan….pdf" is. Only here, on a paid drafting call a person or the
+  // review asked for; reading the complaint (a GET, the evidence zip) never
+  // spends on it.
+  if (input.complaint?.id && (input.docList || []).some((d) => !d.description)) {
+    try {
+      const { ensureDescriptions } = await import('./docChoice.js');
+      await ensureDescriptions(input.complaint.id);
+      const { rows } = await query('SELECT id, description FROM complaint_attachments WHERE complaint_id = $1', [input.complaint.id]);
+      const byId = new Map(rows.map((r) => [r.id, r.description]));
+      input = { ...input, docList: input.docList.map((d) => ({ ...d, description: byId.get(d.id) || d.description || null })) };
+    } catch (err) {
+      console.error('[documents] describing:', err.message);
+    }
+  }
   const ask = (user) => callClaude({
     system: SYSTEM, user, blocks: input.blocks, feature: input.feature || 'Complaint assistant',
   });
@@ -342,9 +358,15 @@ export async function assistComplaint(input) {
     .map((e) => staleNoReply(e?.body, today)).find(Boolean) || null;
   const stale = staleIn(result);
   if (stale) {
-    const again = extractJson(await ask(`${user}\n\nYOUR PREVIOUS DRAFT said: "${stale.sentence}". That was sent on ${letterDate(stale.date)}, ` +
+    let again = null;
+    try {
+      again = extractJson(await ask(`${user}\n\nYOUR PREVIOUS DRAFT said: "${stale.sentence}". That was sent on ${letterDate(stale.date)}, ` +
       `only days before TODAY (${letterDate(today)}): too soon to say they haven't replied. Redraft without saying so; mention it only as ` +
       'what we asked for and when. Return the whole JSON again.'));
+    } catch (err) {
+      // The first draft stands, with the caution below.
+      console.error('[assistant] redraft:', err.message);
+    }
     if (again?.email) result = again;
     const still = staleIn(result);
     if (still) {

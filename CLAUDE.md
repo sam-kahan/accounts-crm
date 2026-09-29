@@ -746,6 +746,32 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the day's complaint changes
+- **A document is described once, whatever happens** (`docChoice.js`): one
+  the call failed on, or the reply left out, is marked tried (`described_at`)
+  and keeps its file name, instead of being re-sent on every review; images
+  over 5 MB and PDFs over 10 MB (the API refuses them) aren't sent.
+- **Only paid calls a person or the review asked for describe documents**:
+  the describing moved from `gatherContext` (which the evidence zip, a GET,
+  also uses) into `assistComplaint`; **Send again** is a POST
+  (`POST /:id/emails/:emailId/resend`), since choosing its documents is an AI
+  call and a view-only person could run it.
+- **Our own email is filed by rule only once the AI has read it**
+  (`planFromAnalysis({ ownEmail })` needs the reading; `settleRoutineEmails`
+  only takes read ones): unread, it could be a Stage 2 request sent from
+  Outlook, and filing it would stop it ever being read.
+- **A complaint not sent yet has no stored deadlines**
+  (`recomputeDeadlines`; migration `057` cleared the ones already stored),
+  so the evidence checklist and referral pack never call a date missed that
+  was never due.
+- **The complaint sent from Outlook starts it**: our own email, read, to
+  someone outside, asking for a complaint in so many words, arriving on a
+  complaint marked not sent yet, starts it from the day it went
+  (`startFormalComplaint`, moved to `services/complaintFormal.js` so the
+  email processor can use it), as if it had been sent from here.
+- A redraft that fails (the second "no reply" call) keeps the first draft
+  with its caution instead of failing the whole draft or review.
+
 ### 2026-09-29 — the AI decides which documents go, from what each one is
 - **Never "attach everything".** Each document on a complaint is described
   once, in one line, by a low-effort read of just the undescribed ones

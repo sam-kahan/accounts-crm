@@ -11,6 +11,10 @@ import { callClaude, extractJson } from './complaintAssistant.js';
 
 const MAX_FILES_PER_READ = 8;
 const MAX_BYTES_PER_READ = 18 * 1024 * 1024;
+// What the API takes: an image over 5 MB is refused outright, and a large PDF
+// (over ~100 pages) can be too; neither is sent, just named by its file name.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const isPdf = (a) => /pdf/i.test(a.mimetype || '') || /\.pdf$/i.test(a.filename || '');
 const clamp = (s, n) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, n) : '');
 
@@ -47,6 +51,9 @@ export async function ensureDescriptions(complaintId) {
         blocks.push({ type: 'image', source: { type: 'base64', media_type: imageTypeOf(a), data: a.buf.toString('base64') } });
       }
     }
+    // Every document in the batch is marked as tried, described or not: one
+    // the call failed on, or the reply left out, is never sent again on every
+    // review (it keeps its file name; the chooser judges by that).
     try {
       const out = extractJson(await callClaude({
         system: DESCRIBE_SYSTEM, user: 'Describe each document above.', blocks,
@@ -54,11 +61,12 @@ export async function ensureDescriptions(complaintId) {
       }));
       const said = new Map((out?.documents || []).map((d) => [String(d?.file || '').trim().toLowerCase(), clamp(d?.description, 200)]));
       for (const a of batch) {
-        const d = said.get(a.filename.trim().toLowerCase());
-        if (d) await query('UPDATE complaint_attachments SET description = $2, described_at = now() WHERE id = $1', [a.id, d]);
+        const d = said.get(a.filename.trim().toLowerCase()) || null;
+        await query('UPDATE complaint_attachments SET description = $2, described_at = now() WHERE id = $1', [a.id, d]);
       }
     } catch (err) {
       console.error('[documents] describing:', err.message);
+      await query('UPDATE complaint_attachments SET described_at = now() WHERE id = ANY($1::uuid[])', [batch.map((a) => a.id)]);
     }
     batch = [];
     bytes = 0;
@@ -74,7 +82,7 @@ export async function ensureDescriptions(complaintId) {
         await query('UPDATE complaint_attachments SET described_at = now() WHERE id = $1', [a.id]);
         continue;
       }
-      if (a.buf.length > MAX_BYTES_PER_READ) {
+      if (a.buf.length > (isPdf(a) ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) {
         await query('UPDATE complaint_attachments SET described_at = now() WHERE id = $1', [a.id]);
         continue;
       }

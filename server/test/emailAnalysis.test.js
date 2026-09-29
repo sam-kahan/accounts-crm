@@ -196,7 +196,9 @@ import { isOurOwnEmail } from '../src/services/emailAnalysis.js';
 test('a colleague’s chaser is ours by its sender, filed without a person, whatever the AI made of it', () => {
   const chaser = { sender_email: 'Imogen.Moore@greenco.co.uk', subject: 'A44442483//A44442453' };
   // The AI unsure, or reading her "no response" wording as their response: still ours.
-  for (const a of [null, analysis({ forwarded: false, kind: 'response', from_organisation: false, confidence: 'medium' }),
+  // Unread, it waits (it could be our Stage 2 request; filing it would stop it ever being read).
+  assert.equal(planFromAnalysis(complaint(), null, { today: TODAY, ownEmail: true }).auto, false);
+  for (const a of [analysis({ forwarded: false, kind: 'response', from_organisation: false, confidence: 'medium' }),
     analysis({ forwarded: false, kind: 'correspondence', from_organisation: false, confidence: 'low' }),
     // Even read as theirs, if it isn't read as a forward: she wrote it.
     analysis({ forwarded: false, kind: 'acknowledgement', confidence: 'high' })]) {

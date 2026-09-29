@@ -28,6 +28,7 @@ import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImp
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, sameAccount, sameOrgName, PARTY_COLS } from '../services/orgMatch.js';
 import { tidySuggestions, mergeComplaints, mergeOrganisations } from '../services/tidy.js';
 import { refreshReview, scheduleReview, cancelScheduledReview } from '../services/complaintReview.js';
+import { startFormalComplaint } from '../services/complaintFormal.js';
 import { ruleForComplaint, recomputeDeadlines, recomputePartyDeadlines } from '../services/complaintDeadlines.js';
 import { fetchMailboxMessages, emailConfigured } from '../services/graphMail.js';
 import { lookFrom, nextCheckpoint } from '../services/mailCheckpoint.js';
@@ -464,7 +465,8 @@ function withAttachedLine(body, names, extra = '') {
 // has come again, and the complaint's documents ticked when the message says
 // something is attached. Nothing is sent here; it opens in the Send window.
 // A "no reply" to something sent only days ago is pointed out (caution).
-router.get(
+// A POST: choosing the documents is a paid AI call, so it needs edit access.
+router.post(
   '/:id/emails/:emailId/resend',
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.emailId).success) throw new HttpError(400, 'Invalid email id');
@@ -2530,48 +2532,6 @@ router.post(
 // then started from that day: Stage 1, every deadline and the ombudsman clock
 // running from the formal complaint, never from the earlier emails.
 // ---------------------------------------------------------------------------
-// Also the FIRST email of a complaint logged before it was sent to them
-// (`not_sent_yet`, awaitingFirstEmail): the same draft and send, and the
-// complaint then runs from the day it went.
-async function startFormalComplaint(id, sentOn, by, { subject = null, fromHere = false } = {}) {
-  const before = (await query('SELECT raised_on, stage, complaint_doubt, not_sent_yet FROM complaints WHERE id = $1', [id])).rows[0];
-  if (!before) return false;
-  const first = Boolean(before.not_sent_yet);
-  // Only while the question is still open (or, for a complaint logged before
-  // it was sent, while nothing has happened on it and it was never made from
-  // here), in the same statement that answers it, so two at once (a send and
-  // a record from Outlook) can't both start it: the second would wipe the
-  // dates recorded after the first.
-  const r = await query(
-    `UPDATE complaints
-        SET raised_on = $2, stage = 'stage_1', stage_started_on = $2, acknowledged_on = NULL,
-            responded_on = NULL, final_response_on = NULL, response_due_manual = false,
-            channel = 'email', complaint_doubt = NULL, not_sent_yet = false
-      WHERE id = $1 AND (
-        (complaint_doubt->>'kind' = 'not_complaint'
-          AND COALESCE((complaint_doubt->>'answered')::boolean, false) = false)
-        OR (not_sent_yet AND state = 'open' AND stage = 'stage_1' AND acknowledged_on IS NULL
-          AND responded_on IS NULL AND final_response_on IS NULL))
-      RETURNING id`,
-    [id, sentOn],
-  );
-  if (!r.rows[0]) return false;
-  await recomputeDeadlines(id);
-  await query(
-    `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'raised',$3,$4)`,
-    [id, sentOn,
-      `Formal complaint made${subject ? ` ("${subject}")` : ''}, ${fromHere ? 'sent from here' : 'sent from Outlook'}. ` +
-      (first
-        ? `Its deadlines, and when it can go to the ombudsman, run from ${ukDate(sentOn)}` +
-          (before.raised_on && String(before.raised_on) !== sentOn ? ` (it was logged here on ${ukDate(before.raised_on)}, before it was sent).` : '.')
-        : `Its deadlines, and when it can go to the ombudsman, now run from ${ukDate(sentOn)}; the earlier emails are the background ` +
-          `that led to it (it had been recorded as made on ${ukDate(before.raised_on)}, at ${String(before.stage).replace('_', ' ')}).`),
-      by],
-  );
-  scheduleReview(id);
-  return true;
-}
-
 router.post(
   '/:id/formal/draft',
   asyncHandler(async (req, res) => {
