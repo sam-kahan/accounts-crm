@@ -183,6 +183,12 @@ async function orgName(client, id) {
 // Merge complaint `mergeId` into `keepId`: every email, document, timeline
 // entry and found thread moves across, blanks on the kept one are filled from
 // the other, and the other is removed. One transaction: all of it or none.
+// How a filled-in column reads in the merge's timeline note.
+const MERGE_LABEL = {
+  outcome_wanted: 'the outcome we want', losses: 'money lost or extra costs', removed_orgs: 'organisations taken off',
+  account_numbers: 'account number', our_reference: 'our reference', organisation_id: 'the saved organisation',
+};
+
 export async function mergeComplaints(keepId, mergeId, by) {
   if (keepId === mergeId) throw Object.assign(new Error('Pick two different complaints.'), { status: 400 });
   const client = await pool.connect();
@@ -308,6 +314,20 @@ export async function mergeComplaints(keepId, mergeId, by) {
     if (gone.description && gone.description !== keep.description) {
       fill.description = [keep.description, `From ${gone.ref_code}: ${gone.description}`].filter(Boolean).join('\n\n');
     }
+    // What we want and what it cost (for the ombudsman): never lost, and
+    // two different statements are both kept, each saying where it came from.
+    for (const col of ['outcome_wanted', 'losses']) {
+      if (gone[col] && gone[col] !== keep[col]) {
+        fill[col] = keep[col] ? `${keep[col]}\n\nFrom ${gone.ref_code}: ${gone[col]}` : gone[col];
+      }
+    }
+    // Organisations taken off either one stay off the merged complaint (their
+    // emails and entries moved here still carry their tag).
+    const offBoth = [...(keep.removed_orgs || [])];
+    for (const r of gone.removed_orgs || []) {
+      if (!offBoth.some((x) => x.name === r.name && (x.organisation_id || null) === (r.organisation_id || null))) offBoth.push(r);
+    }
+    if (offBoth.length !== (keep.removed_orgs || []).length) fill.removed_orgs = JSON.stringify(offBoth);
     const cols = Object.keys(fill);
     if (cols.length) {
       await client.query(
@@ -323,7 +343,7 @@ export async function mergeComplaints(keepId, mergeId, by) {
         `Merged in ${gone.ref_code} ("${gone.subject}", raised ${ukDate(gone.raised_on)}): ` +
           `${plural(moved.complaint_emails, 'email')}, ${plural(moved.complaint_attachments, 'document')}, ` +
           `${plural(moved.complaint_events, 'timeline entry', 'timeline entries')} moved here` +
-          (cols.length ? `; filled in ${cols.map((c) => c.replace(/_/g, ' ')).join(', ')}` : '') + (partyNotes.length ? `; ${partyNotes.join('; ')}` : '') + '.',
+          (cols.length ? `; filled in ${cols.map((c) => MERGE_LABEL[c] || c.replace(/_/g, ' ')).join(', ')}` : '') + (partyNotes.length ? `; ${partyNotes.join('; ')}` : '') + '.',
         by,
       ],
     );
