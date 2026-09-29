@@ -120,7 +120,7 @@ export default function CommissionInvoices() {
         month,
       });
       setMsg(
-        `Raised ${res.invoice_number} from ${res.company_name} for ${row.contractor_name} (${res.lines} line(s)).` +
+        `Raised ${res.invoice_number} from ${res.company_name} for ${row.contractor_name} (${plural(res.lines, 'line')}).` +
           (res.pushed
             ? ` Sent to Greenco Invoicing as ${res.pushed.number}.`
             : res.push_error
@@ -464,7 +464,7 @@ export default function CommissionInvoices() {
                       <strong>{i.external_number || i.invoice_number}</strong>
                     </Link>
                     <div className="muted" style={{ fontSize: 12 }}>
-                      {i.line_count} line(s)
+                      {plural(i.line_count, 'line')}
                       {i.external_number ? ` · ${i.invoice_number}` : ''}
                     </div>
                     {/* No external id means it never got there — with or

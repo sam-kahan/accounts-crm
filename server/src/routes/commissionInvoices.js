@@ -22,7 +22,7 @@ import {
   fetchInvoiceState,
 } from '../services/invoicesManager.js';
 import { REGION_KEYS, REGION_LABEL, isRegion } from '../services/regions.js';
-import { releaseLinesOf, withdrawExternally } from '../services/commissionVoid.js';
+import { releaseLinesOf, voidRefusal, withdrawExternally } from '../services/commissionVoid.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -58,13 +58,18 @@ const decorate = (row) =>
 // back to the shared block and is otherwise left off rather than invented.
 function billingBlock(region) {
   const office = config.regions[region] || {};
+  // The shared VAT and company numbers are Greenco Group Limited's (the
+  // Manchester office, which raised everything before Liverpool had its
+  // own). Never under Greenco Liverpool Limited's name: its own numbers or
+  // none, and then the invoice isn't emailed (see /send).
+  const shared = region !== 'liverpool';
   return {
     name: office.company_name || config.billing.name,
     address: office.address || config.billing.address,
     email: config.billing.email,
     phone: config.billing.phone,
-    vat_number: office.vat_number || config.billing.vatNumber,
-    company_number: office.company_number || config.billing.companyNumber,
+    vat_number: office.vat_number || (shared ? config.billing.vatNumber : ''),
+    company_number: office.company_number || (shared ? config.billing.companyNumber : ''),
     bank_details: config.billing.bankDetails,
     complete: config.billing.complete,
     region: region || null,
@@ -184,6 +189,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : monthOf();
     const range = monthRange(month);
+    if (!range) throw new HttpError(400, `${month} isn’t a month.`);
     const from = req.query.from || range.from;
     const to = req.query.to || range.to;
 
@@ -246,6 +252,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const d = parse(raiseInput, req.body);
     const range = monthRange(d.month || monthOf());
+    if (!range) throw new HttpError(400, `${d.month} isn’t a month.`);
     const from = d.period_start || range.from;
     const to = d.period_end || range.to;
     if (to < from) throw new HttpError(400, 'The period ends before it starts.');
@@ -375,6 +382,14 @@ router.post(
     if (!invoice) throw new HttpError(404, 'Commission invoice not found');
     if (invoice.status === 'void') throw new HttpError(409, 'This invoice has been voided.');
 
+    // An invoice charging VAT must carry the VAT number of the company
+    // raising it: without one it isn't a valid VAT invoice.
+    const billing = billingBlock(invoice.region);
+    if (Number(invoice.vat_amount) > 0 && !billing.vat_number) {
+      throw new HttpError(409, `There is no VAT number set for ${billing.name}, so this invoice can’t be sent: it charges VAT. ` +
+        `Set REGION_${String(invoice.region || 'manchester').toUpperCase()}_VAT_NUMBER on the server.`);
+    }
+
     const to = (d.to || invoice.contractor_email || '').trim();
     if (!to) {
       throw new HttpError(400, 'No email address for this contractor — add one, or type one here.');
@@ -394,7 +409,7 @@ router.post(
         ...withNumbers(l, LINE_MONEY_COLS),
         commission_amount: fromPence(commissionNetPence(l, invoice.vat_rate)),
       })),
-      billing: billingBlock(invoice.region),
+      billing,
       invoicing: invoicingStatus(),
     });
 
@@ -513,6 +528,8 @@ router.post(
     // Same mapping the webhook uses, so a refresh and a pushed update can never
     // leave the invoice in different states.
     const next = applyExternalState(row, state);
+    // Only over the status read: a void (or a payment marked) while the read
+    // was out must not be written back over.
     const { rows: updated } = await query(
       `UPDATE commission_invoices SET
          external_status = $2,
@@ -521,9 +538,10 @@ router.post(
          external_error = NULL,
          status = $4,
          paid_on = $5
-       WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
-      [req.params.id, next.external_status, next.external_total, next.status, next.paid_on],
+       WHERE id = $1 AND status = $6 RETURNING ${COLS.replaceAll('ci.', '')}`,
+      [req.params.id, next.external_status, next.external_total, next.status, next.paid_on, row.status],
     );
+    if (!updated[0]) throw new HttpError(409, 'The invoice changed while it was being checked. Refresh again.');
 
     // Same as the webhook: an invoice cancelled over there is void here, and a
     // void hands its lines back or the commission is stranded on a dead invoice.
@@ -552,6 +570,16 @@ router.post(
     // Voiding releases the lines back to pending, so the commission can be
     // re-invoiced rather than being stranded on a dead invoice.
     if (d.status === 'void') {
+      // First ask Greenco Invoicing whether it has been paid there.
+      const { rows: [before] } = await query(
+        'SELECT id, invoice_number, region, status, external_id, external_error FROM commission_invoices WHERE id = $1',
+        [req.params.id],
+      );
+      if (!before) throw new HttpError(404, 'Commission invoice not found');
+      if (before.status !== 'void' && before.status !== 'paid') {
+        const refusal = await voidRefusal(before);
+        if (refusal) throw new HttpError(409, refusal);
+      }
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -602,9 +630,9 @@ router.post(
     const { rows } = await query(
       `UPDATE commission_invoices
           SET status = $2,
-              paid_on = CASE WHEN $2 = 'paid' THEN COALESCE($3::date, CURRENT_DATE) ELSE NULL END
+              paid_on = CASE WHEN $2 = 'paid' THEN COALESCE($3::date, $4::date) ELSE NULL END
         WHERE id = $1 AND status <> 'void' RETURNING ${COLS.replaceAll('ci.', '')}`,
-      [req.params.id, d.status, d.paid_on || null],
+      [req.params.id, d.status, d.paid_on || null, todayISO()],
     );
     // A void invoice's lines were released; bringing it back would leave an
     // invoice with nothing on it and hide its month's lines from month end.
@@ -663,7 +691,9 @@ router.delete(
     const { rows } = await query(
       // Never one that went across to Greenco Invoicing: it is numbered and
       // sent there, and deleting it here would leave it standing over there.
-      "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL RETURNING id",
+      // Nor one whose push failed: it may have landed there without our
+      // learning its id, and deleting it loses the reference to find it by.
+      "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL AND external_error IS NULL RETURNING id",
       [req.params.id],
     );
     if (!rows[0]) {

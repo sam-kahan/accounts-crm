@@ -746,6 +746,30 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the month end and the invoicing bridge
+- **Paid here stays paid** (`applyExternalState`): an invoice marked paid
+  here (paid to Greenco directly) turned back to `sent` on their next
+  `overdue`/`sent`, could then be voided and its settled commission billed
+  again. It now stays paid and the page says Greenco Invoicing still has it
+  unpaid; paid THERE and then unpaid there is followed (their correction).
+  Mark paid on a pushed invoice asks first (payments belong over there).
+- **Void asks Greenco Invoicing first** (`commissionVoid.js#voidRefusal`,
+  `paymentRecorded`): a payment or part-payment recorded there (a webhook
+  lost or late) refuses the void; a system that can't be reached refuses
+  it too. Before, the lines were released, the cancel was refused over
+  there, and the next month end billed the commission again.
+- **Status writes never undo a void**: Refresh, the nightly read and the
+  webhook write only over the status they read (`AND status = $read`; the
+  webhook re-reads and retries, Refresh says to try again).
+- **The nightly push** sends only draft/sent invoices, and not at all with
+  `INVOICING_AUTO_PUSH=false`.
+- **Each office's own numbers**: a Liverpool invoice never shows the shared
+  `BILLING_VAT_NUMBER`/`BILLING_COMPANY_NUMBER` (Greenco Group Limited's);
+  an invoice charging VAT with no VAT number for its office isn't emailed.
+- Delete refuses an invoice whose push failed (it may have landed); a
+  payment timestamp is dated on the UK day; notes to the contractor use UK
+  dates; an impossible month is a 400; "line(s)" is gone.
+
 ### 2026-09-29 — fixes from a review of companies and the reminders
 - **Done moves a recurring date ONE period on** (`lib/dates.js#nextOccurrence`,
   no `today`): a May VAT return marked done in August went to November,

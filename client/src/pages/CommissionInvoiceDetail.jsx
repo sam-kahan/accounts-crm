@@ -249,7 +249,12 @@ export default function CommissionInvoiceDetail() {
             </button>
           )}
           {inv.status !== 'paid' && inv.status !== 'void' && (
-            <button className="btn-primary" disabled={busy} onClick={() => changeStatus('paid')}>
+            <button className="btn-primary" disabled={busy} onClick={() => {
+              // Payments are recorded in Greenco Invoicing; marked here only,
+              // it carries on chasing the contractor for money they paid.
+              if (inv.external_id && !window.confirm('This invoice is in Greenco Invoicing, where payments are recorded and chasing happens. Record the payment there too, or the contractor will keep being chased. Mark it paid here now?')) return;
+              changeStatus('paid');
+            }}>
               Mark paid
             </button>
           )}
@@ -301,6 +306,12 @@ export default function CommissionInvoiceDetail() {
         </div>
       )}
 
+      {inv.status === 'paid' && inv.external_id && inv.external_status && !['paid', 'cancelled'].includes(inv.external_status) && (
+        <div className="inline-note warn no-print" style={{ marginBottom: 12 }}>
+          Paid here, but Greenco Invoicing still has it as <strong>{inv.external_status}</strong>. Record the payment
+          there too, or the contractor will keep being chased for it.
+        </div>
+      )}
       {invoicing?.enabled && (
         <div
           className={`inline-note ${inv.external_error ? 'warn' : ''} no-print`}

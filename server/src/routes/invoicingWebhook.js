@@ -56,46 +56,56 @@ router.post(
 
     // Match on their id first, then on our reference — a push that timed out
     // before we stored the id still leaves the reference to find it by.
-    const { rows } = await query(
-      `SELECT id, status, paid_on, external_status, external_id
-         FROM commission_invoices
-        WHERE ($1::text IS NOT NULL AND external_id = $1::text)
-           OR ($2::text IS NOT NULL AND invoice_number = $2::text)
-        LIMIT 1`,
-      [d.invoiceId != null ? String(d.invoiceId) : null, d.reference || null],
-    );
-    const current = rows[0];
-    if (!current) {
-      // Not ours: every invoice raised by hand over there also changes status,
-      // and that is not an error worth alarming anyone about.
-      return res.status(404).json({ ok: false, reason: 'No matching commission invoice' });
+    // Written only over the status read (a void made meanwhile is never
+    // overwritten); on a clash it is read and worked out again.
+    let current;
+    let next;
+    let updated = [];
+    for (let attempt = 0; attempt < 3 && !updated[0]; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await query(
+        `SELECT id, status, paid_on, external_status, external_id
+           FROM commission_invoices
+          WHERE ($1::text IS NOT NULL AND external_id = $1::text)
+             OR ($2::text IS NOT NULL AND invoice_number = $2::text)
+          LIMIT 1`,
+        [d.invoiceId != null ? String(d.invoiceId) : null, d.reference || null],
+      );
+      current = rows[0];
+      if (!current) {
+        // Not ours: every invoice raised by hand over there also changes status,
+        // and that is not an error worth alarming anyone about.
+        return res.status(404).json({ ok: false, reason: 'No matching commission invoice' });
+      }
+      next = applyExternalState(current, d);
+      // eslint-disable-next-line no-await-in-loop
+      ({ rows: updated } = await query(
+        `UPDATE commission_invoices SET
+           status = $2,
+           paid_on = $3,
+           external_status = $4,
+           external_total = COALESCE($5, external_total),
+           external_id = COALESCE(external_id, $6),
+           external_number = COALESCE($7, external_number),
+           external_url = COALESCE($8, external_url),
+           external_synced_at = now(),
+           external_error = NULL
+         WHERE id = $1 AND status = $9
+         RETURNING invoice_number, status, paid_on, external_status`,
+        [
+          current.id,
+          next.status,
+          next.paid_on,
+          next.external_status,
+          next.external_total,
+          d.invoiceId != null ? String(d.invoiceId) : null,
+          d.invoiceNumber || null,
+          d.url || null,
+          current.status,
+        ],
+      ));
     }
-
-    const next = applyExternalState(current, d);
-    const { rows: updated } = await query(
-      `UPDATE commission_invoices SET
-         status = $2,
-         paid_on = $3,
-         external_status = $4,
-         external_total = COALESCE($5, external_total),
-         external_id = COALESCE(external_id, $6),
-         external_number = COALESCE($7, external_number),
-         external_url = COALESCE($8, external_url),
-         external_synced_at = now(),
-         external_error = NULL
-       WHERE id = $1
-       RETURNING invoice_number, status, paid_on, external_status`,
-      [
-        current.id,
-        next.status,
-        next.paid_on,
-        next.external_status,
-        next.external_total,
-        d.invoiceId != null ? String(d.invoiceId) : null,
-        d.invoiceNumber || null,
-        d.url || null,
-      ],
-    );
+    if (!updated[0]) throw new HttpError(409, 'The invoice kept changing; send it again.');
 
     // Cancelled over there (by hand, on their screen) voids it here, and a void
     // has to hand its lines back — otherwise the commission stays claimed by an

@@ -514,7 +514,7 @@ test('a pushed invoice carries one line per contractor invoice', () => {
   assert.equal(payload.lines[0].description, 'Commission - INV-1001, 12 Mill St (Tap repair)');
   assert.equal(payload.lines[0].unitPrice, 10);
   assert.equal(payload.lines[0].quantity, 1);
-  assert.match(payload.notes, /2026-08-01/);
+  assert.match(payload.notes, /1 August 2026 and 31 August 2026/); // UK dates: the contractor reads it
 });
 
 test('a line still describes itself when the invoice number or works are missing', () => {
@@ -880,6 +880,17 @@ test('unpaying over there clears the paid date here', () => {
   );
   assert.equal(next.status, 'sent');
   assert.equal(next.paid_on, null);
+});
+
+test('paid here only stays paid while theirs is still unpaid (never voided and billed again)', () => {
+  const next = applyExternalState({ status: 'paid', paid_on: '2026-09-30', external_status: 'sent' }, { status: 'overdue' });
+  assert.equal(next.status, 'paid');
+  assert.equal(next.paid_on, '2026-09-30');
+});
+
+test('a payment timestamp is dated on the UK day', () => {
+  const next = applyExternalState({ status: 'sent' }, { status: 'paid', paidAt: '2026-09-28T23:30:00Z' });
+  assert.equal(next.paid_on, '2026-09-29');
 });
 
 test('falls back to the marked-paid date when no payment was recorded', () => {

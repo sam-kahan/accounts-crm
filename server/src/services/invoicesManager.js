@@ -89,7 +89,7 @@ export function buildInvoicePayload({ invoice, contractor, lines, companyId, asS
   if (!ALLOWED_VAT_RATES.includes(vatRate)) {
     throw new HttpError(
       400,
-      `Greenco Invoicing only accepts VAT at ${ALLOWED_VAT_RATES.join('%, ')}% — this invoice is at ${vatRate}%. Change the contractor's commission VAT rate and re-raise it.`,
+      `Greenco Invoicing only accepts VAT at ${ALLOWED_VAT_RATES.join('%, ')}% — this invoice is at ${vatRate}%. The rate is Greenco's own (COMMISSION_VAT_RATE on the server); correct it there and re-raise the invoice.`,
     );
   }
 
@@ -114,9 +114,17 @@ export function buildInvoicePayload({ invoice, contractor, lines, companyId, asS
     status: asSent ? 'sent' : 'draft',
     notes:
       invoice.notes ||
-      `Commission included in your invoices between ${invoice.period_start} and ${invoice.period_end}.`,
+      `Commission included in your invoices between ${ukLong(invoice.period_start)} and ${ukLong(invoice.period_end)}.`,
     lines: billable.map((l) => ({ ...lineFor(l, vatRate), vatRate })),
   };
+}
+
+// "1 August 2026": the contractor reads this, so never an ISO date.
+function ukLong(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(iso || ''))) return String(iso || '');
+  return new Date(`${String(iso).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  });
 }
 
 function requireEnabled() {
@@ -191,7 +199,7 @@ export async function pushInvoice({ invoice, contractor, lines }) {
 // Read an invoice's current state back — whether the contractor has paid is
 // recorded over there, where the chasing happens.
 export async function fetchInvoiceState(externalId) {
-  const data = await call(`/api/external/invoices/${encodeURIComponent(externalId)}`);
+  const data = await call(`/api/external/invoices/${encodeURIComponent(externalId)}`, { rejected: 'couldn’t give the invoice' });
   return data.invoice;
 }
 
@@ -203,7 +211,7 @@ export async function fetchInvoiceState(externalId) {
 export async function findInvoiceByReference(reference, region) {
   const companyId = companyIdFor(region);
   const qs = new URLSearchParams({ companyId: String(companyId), reference: String(reference) });
-  const data = await call(`/api/external/invoices?${qs}`);
+  const data = await call(`/api/external/invoices?${qs}`, { rejected: 'couldn’t look the invoice up' });
   if (!data.invoice) return null;
   return {
     external_company_id: companyId,

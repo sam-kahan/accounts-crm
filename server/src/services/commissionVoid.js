@@ -1,7 +1,7 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
-import { cancelInvoice, findInvoiceByReference } from './invoicesManager.js';
+import { cancelInvoice, findInvoiceByReference, fetchInvoiceState } from './invoicesManager.js';
 
 // ---------------------------------------------------------------------------
 // Reversing a month end.
@@ -25,6 +25,42 @@ import { cancelInvoice, findInvoiceByReference } from './invoicesManager.js';
 // of their books because of a correction over here. That refusal comes back as
 // a sentence to act on.
 // ---------------------------------------------------------------------------
+
+// Whether money is recorded against the invoice in Greenco Invoicing, asked
+// BEFORE a void releases its lines. Payments are recorded there, and a
+// webhook that was lost or late leaves ours at "sent": voiding then released
+// commission the contractor had settled, the cancel over there was refused,
+// and the next month end billed it again. Returns a sentence refusing the
+// void, or null. A system that can't be reached is a refusal too: the
+// question matters more than the wait.
+const PAID_STATUSES = new Set(['paid', 'partially_paid', 'part_paid', 'partial', 'partpaid']);
+export function paymentRecorded(state) {
+  if (!state) return false;
+  const status = String(state.status || '').toLowerCase().replace(/[\s-]+/g, '_');
+  const amount = Number(state.amountPaid ?? state.paidAmount ?? state.totalPaid ?? 0);
+  return PAID_STATUSES.has(status) || Boolean(state.lastPaymentOn) || Boolean(state.paidAt) || amount > 0;
+}
+export async function voidRefusal(row) {
+  if (!config.invoicing.enabled) return null;
+  if (!row.external_id && !row.external_error) return null; // never reached it
+  let state;
+  try {
+    if (row.external_id) {
+      state = await fetchInvoiceState(row.external_id);
+    } else {
+      // A push that failed may have landed: look it up by our reference.
+      const found = await findInvoiceByReference(row.invoice_number, row.region);
+      if (!found) return null;
+      state = await fetchInvoiceState(found.external_id);
+    }
+  } catch (err) {
+    return `Couldn’t check with Greenco Invoicing whether it has been paid (${err.message}). Try again shortly.`;
+  }
+  if (paymentRecorded(state)) {
+    return 'A payment is recorded against this invoice in Greenco Invoicing, so it can’t be voided (the contractor would be billed again for commission they have paid). Refresh it to bring the payment across.';
+  }
+  return null;
+}
 
 // Hand every line on this invoice back to "to invoice", so its commission can
 // be re-billed. Takes a client so the void path can do it in its transaction.

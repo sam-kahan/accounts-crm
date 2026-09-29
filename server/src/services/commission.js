@@ -1,5 +1,5 @@
 import { toPence, fromPence, percentOfPence, formatPence } from '../lib/money.js';
-import { addDays, monthLabel } from '../lib/dates.js';
+import { addDays, monthLabel, londonDateOf } from '../lib/dates.js';
 
 // ---------------------------------------------------------------------------
 // Contractor commission: the rules that turn "an invoice arrived from Bob's
@@ -599,6 +599,14 @@ export function applyExternalState(current, state) {
           : 'void'
         : externalStatus === 'paid'
           ? 'paid'
+          : current?.status === 'paid' && String(current?.external_status || '').toLowerCase() !== 'paid'
+            ? // Paid HERE only (the contractor paid Greenco directly and
+              // someone marked it) stays paid while theirs is still unpaid:
+              // turned back to sent it could be voided and its settled
+              // commission billed again. The two systems disagree in the
+              // open instead. (Paid over there and then unpaid over there is
+              // their correction, and is followed.)
+              'paid'
           : externalStatus === 'draft'
             ? // Never backwards: an invoice we hold as sent (it was emailed
               // from here, or their webhook said so) stays sent when a read
@@ -616,7 +624,8 @@ export function applyExternalState(current, state) {
   const paidOn =
     status === 'paid'
       ? (state?.lastPaymentOn ? String(state.lastPaymentOn).slice(0, 10) : null) ||
-        (state?.paidAt ? String(state.paidAt).slice(0, 10) : null) ||
+        // A timestamp's UK day: 23:30 UTC on the 28th is the 29th in London.
+        (state?.paidAt ? (/^\d{4}-\d{2}-\d{2}$/.test(String(state.paidAt)) ? String(state.paidAt) : londonDateOf(new Date(state.paidAt))) : null) ||
         current?.paid_on ||
         null
       : null;

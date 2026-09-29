@@ -63,7 +63,7 @@ async function loadForPush(id) {
 async function pushStranded() {
   const { rows } = await query(
     `SELECT id, invoice_number FROM commission_invoices
-      WHERE external_id IS NULL AND status <> 'void'
+      WHERE external_id IS NULL AND status IN ('draft', 'sent')
       ORDER BY issue_date DESC
       LIMIT $1`,
     [PUSH_LIMIT],
@@ -128,14 +128,15 @@ async function refreshOpen() {
       const next = applyExternalState(row, state);
       if (!next.changed) continue;
       // eslint-disable-next-line no-await-in-loop
-      await query(
+      const { rowCount } = await query(
         `UPDATE commission_invoices SET
            status = $2, paid_on = $3, external_status = $4,
            external_total = COALESCE($5, external_total),
            external_synced_at = now(), external_error = NULL
-         WHERE id = $1`,
-        [row.id, next.status, next.paid_on, next.external_status, next.external_total],
+         WHERE id = $1 AND status = $6`, // not over a void made meanwhile
+        [row.id, next.status, next.paid_on, next.external_status, next.external_total, row.status],
       );
+      if (!rowCount) continue;
       changed += 1;
     } catch (err) {
       failed += 1;
@@ -200,7 +201,9 @@ export async function syncInvoicing() {
   if (!config.invoicing.enabled) {
     return { skipped: 'Greenco Invoicing is not configured', orphans: await releaseOrphanedLines() };
   }
-  const pushes = await pushStranded();
+  // Automatic pushing switched off (INVOICING_AUTO_PUSH=false) means invoices
+  // are checked before they go: the nightly job mustn't send them anyway.
+  const pushes = config.invoicing.autoPush ? await pushStranded() : { sent: 0, failed: 0, considered: 0, skipped: 'automatic pushing is off' };
   const withdrawals = await withdrawVoided();
   const refreshes = await refreshOpen();
   // Last, so an invoice the refresh has just found cancelled over there
