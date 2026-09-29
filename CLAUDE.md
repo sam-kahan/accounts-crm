@@ -739,6 +739,38 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — never the ombudsman too early; only real complaints imported
+- **`complaintRules.js#referralOpen` is the one rule** for "can it go to the
+  ombudsman now" (on every decorated track as `referral`): never while the
+  complaint is unchecked (`needs_check`) or has an unanswered question
+  (`complaint_doubt`); otherwise once the scheme's wait is over
+  (`ombudsman_from`: e.g. 8 weeks for energy) or their final response came;
+  with no wait set, once they missed their Stage 2 deadline. Used by the
+  dates' next step ("Don't refer it … yet: …", and every "you can refer"
+  says why and from what date), the checklist, the AI review guard
+  (`reviewGuard.js#recommendsReferral`: referral advice is stripped clause
+  by clause and replaced with "Not the ombudsman yet: …"), the referral pack
+  ("NOT READY TO SEND: …"), and the Refer dialog (a warning). Recording a
+  referral dated before it could go adds a timeline note.
+- **Referring has its own steps on the page** (`referSection`), shown only
+  when `referral.open` and the step says to refer: build the referral pack,
+  open the ombudsman's website (referrals are a form, not an email), then
+  **I've referred it…** — `POST /escalate` with `to: 'ombudsman'`, which
+  refers from Stage 1 too (energy after 8 weeks) instead of moving one stage
+  up. "Refer to ombudsman…" shows at Stage 1 only once a referral is open.
+- **Imports need a formal complaint** (`complaintReconstruct.js`): the full
+  read must quote the sentence that made it (`complaint_evidence`), and
+  `raised_on` is that email's date — never the first email about the
+  problem. No quote: nothing is created (candidate `not_complaint`, "read in
+  full: …"). The first-pass reader has the same definition. An import whose
+  date isn't shown says "Please check the date this complaint was made" on
+  its timeline.
+- **Re-check questions the complaint itself** (migration `041`,
+  `complaints.complaint_doubt`): no formal complaint in its emails, or made
+  on a different day from the one recorded. Shown as a banner with **It is a
+  complaint: keep it** / **Use <date>** / **Keep <date>**
+  (`POST /:id/doubt`); an answered question isn't raised again.
+
 ### 2026-09-29 — imports stop setting up a second organisation for a name written differently
 - **`orgMatch.js#sameOrgName` matches more ways a name is written**: company
   words dropped ("CDER" / "CDER Group"), a brand plus sector words ("Octopus"

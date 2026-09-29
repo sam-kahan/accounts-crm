@@ -12,9 +12,10 @@ import {
   isStage2Request,
   procedureOnFile,
   ukDate,
+  referralOpen,
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
-import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks } from './attachments.js';
 
@@ -85,7 +86,10 @@ export async function decorateMany(rows) {
   return rows.map((r) => {
     const c = withParties(
       decorateWithOrg(r, orgOf(r)),
-      parties.filter((p) => p.complaint_id === r.id).map((p) => decorateTrack(p, orgOf(p))),
+      // A further organisation's part rests on the same checked (or unchecked)
+      // record, so it carries the complaint's check and any question about it.
+      parties.filter((p) => p.complaint_id === r.id)
+        .map((p) => decorateTrack({ ...p, needs_check: r.needs_check, complaint_doubt: r.complaint_doubt }, orgOf(p))),
     );
     // Overdue isn't the same as "chase them now": when Greenco has just
     // written to them, the next step is to wait (reviewGuard.js), so the
@@ -110,6 +114,7 @@ export async function decorateMany(rows) {
     // before the dates moved) can't say otherwise.
     if (c.ai_review) {
       c.ai_review = guardReview(c.ai_review, {
+        referral: c.parties.length ? anyReferral([c, ...c.parties]) : c.referral,
         anyOverdue: c.any_needs_chasing,
         nextDue: nextDueFromThem([c, ...c.parties]),
         lastSentOn: lastSent.get(r.id) || null,
@@ -120,13 +125,17 @@ export async function decorateMany(rows) {
       // the page offers "Send it and escalate" whatever the review called
       // its next step.
       if (c.ai_review?.email) c.ai_review.email_step = isStage2Request(c.ai_review.email) ? 'stage2_request' : null;
+      // Its advice (as guarded above) is to go to the ombudsman: the page
+      // shows how, next to the step, since that is a form, not an email.
+      if (c.ai_review) c.ai_review.refer_step = recommendsReferral(c.ai_review);
       // Each organisation's own step, checked against its own dates and
       // correspondence (reviewGuard.js#guardByOrg).
       if (c.parties.length && Array.isArray(c.ai_review.by_org)) {
         const tracks = tracksForReview(c);
         const mine = contact.get(r.id) || new Map();
         c.ai_review.by_org = guardByOrg(c.ai_review.by_org, tracks, (k) => mine.get(k) || {}).map((e) => (
-          e?.email ? { ...e, email_step: isStage2Request(e.email) ? 'stage2_request' : null } : e));
+          e?.email ? { ...e, email_step: isStage2Request(e.email) ? 'stage2_request' : null } : e))
+          .map((e) => (e ? { ...e, refer_step: recommendsReferral(e) } : e));
         c.ai_review = composeByOrg(c.ai_review, tracks);
       }
     }
@@ -165,6 +174,13 @@ function withParties(c, parties) {
 }
 
 // The organisations a review speaks for, main first, each with its key.
+// With more than one organisation, the whole-complaint advice may speak of
+// the ombudsman only if some open part can go there now.
+export function anyReferral(tracks) {
+  const open = tracks.filter((t) => trackOpen(t) && t.referral);
+  return open.find((t) => t.referral.open)?.referral || open[0]?.referral || null;
+}
+
 export function tracksForReview(c) {
   return [{ ...c, key: 'main' }, ...(c.parties || []).map((p) => ({ ...p, key: p.id }))];
 }
@@ -174,7 +190,7 @@ export function tracksForReview(c) {
 // through here, so the two can't be read differently.
 function decorateTrack(t, org) {
   const rule = effectiveRule(org, t.org_type);
-  return {
+  const out = {
     ...t,
     ...deriveStatus(t, rule),
     rule,
@@ -187,6 +203,9 @@ function decorateTrack(t, org) {
     // Their own procedure isn't known yet: the dates are the standard ones.
     procedure_missing: !procedureOnFile(org),
   };
+  // Whether it can go to the ombudsman now (never too early: referralOpen).
+  out.referral = referralOpen(out);
+  return out;
 }
 
 // What the deadlines rest on, so the page can say how far to trust them.

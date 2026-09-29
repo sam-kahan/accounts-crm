@@ -294,8 +294,9 @@ export const api = {
     addEvent: (id, data) =>
       request(`/complaints/${id}/events`, { method: 'POST', body: JSON.stringify(data) }),
     // partyId: a further organisation on the complaint (null: the main one).
-    escalate: (id, date, partyId = null) =>
-      request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date, party_id: partyId }) }),
+    // `to: 'ombudsman'` records a referral from either stage (not one stage up).
+    escalate: (id, date, partyId = null, to = null) =>
+      request(`/complaints/${id}/escalate`, { method: 'POST', body: JSON.stringify({ date, party_id: partyId, to }) }),
     // Say what an email that arrived was: acknowledgement | response | correspondence,
     // and, with more than one organisation on the complaint, which one it is from.
     reviewEmail: (id, emailId, as, date, partyId = null) =>
@@ -358,6 +359,8 @@ export const api = {
       request('/complaints/tidy/organisations', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_id: mergeId }) }),
     setAutoImport: (on) => request('/complaints/past/auto', { method: 'PUT', body: JSON.stringify({ on }) }),
     markChecked: (id) => request(`/complaints/${id}/checked`, { method: 'POST' }),
+    // Answer the question a re-check raised: is_complaint | keep_date | use_date.
+    answerDoubt: (id, answer) => request(`/complaints/${id}/doubt`, { method: 'POST', body: JSON.stringify({ answer }) }),
     linkPast: (candId, complaintId) =>
       request(`/complaints/past/candidates/${candId}/link`, {
         method: 'POST',

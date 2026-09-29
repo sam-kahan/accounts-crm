@@ -6,7 +6,7 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf } from '../services/complaintRecheck.js';
@@ -475,6 +475,12 @@ router.get(
     const lines = [];
     lines.push(`OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
     lines.push('='.repeat(48));
+    // Never sent too early: a pack prepared before it can go says so first.
+    const notReady = [c, ...(c.parties || [])].filter((t) => trackOpen(t) && t.referral && !t.referral.open);
+    for (const t of notReady) {
+      lines.push(`NOT READY TO SEND${c.parties?.length ? ` (${t.org_name})` : ''}: ${t.referral.why}.`);
+    }
+    if (notReady.length) lines.push('');
     lines.push(`Organisation: ${c.org_name} (${c.rule.label})`);
     lines.push(`Refer to: ${c.rule.ombudsman}${c.rule.ombudsmanUrl ? ` (${c.rule.ombudsmanUrl})` : ''}`);
     if (c.property) lines.push(`Property / account: ${c.property}`);
@@ -1184,6 +1190,51 @@ router.post(
   }),
 );
 
+// A person answers the doubt a re-check raised (complaint_doubt): it IS a
+// complaint; keep the recorded date; or use the date the emails show (which
+// re-dates the complaint, as Edit details would). Written on the timeline.
+const doubtInput = z.object({ answer: z.enum(['is_complaint', 'keep_date', 'use_date']) });
+router.post(
+  '/:id/doubt',
+  asyncHandler(async (req, res) => {
+    const d = parse(doubtInput, req.body || {});
+    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    const doubt = c.complaint_doubt;
+    if (!doubt || doubt.answered) throw new HttpError(409, 'There is no open question about this complaint.');
+    const fits = (d.answer === 'is_complaint' && doubt.kind === 'not_complaint') ||
+      (d.answer !== 'is_complaint' && doubt.kind === 'raised_date');
+    if (!fits) throw new HttpError(400, 'That answer is for a different question.');
+    let note;
+    if (d.answer === 'use_date') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(doubt.date || '') || doubt.date > todayISO()) throw new HttpError(400, 'The date from the emails isn’t usable; correct it with Edit details.');
+      // Claimed on the value the page saw, so two presses can't apply it twice.
+      const r = await query(
+        `UPDATE complaints
+            SET raised_on = $2,
+                stage_started_on = CASE WHEN stage = 'stage_1' THEN $2 ELSE stage_started_on END,
+                complaint_doubt = NULL
+          WHERE id = $1 AND complaint_doubt IS NOT NULL AND raised_on = $3 RETURNING id`,
+        [c.id, doubt.date, c.raised_on],
+      );
+      if (!r.rows[0]) throw new HttpError(409, 'It has changed since; reload the page.');
+      await recomputeDeadlines(c.id);
+      note = `Details corrected: date raised: ${ukDate(c.raised_on)} → ${ukDate(doubt.date)} (the date the emails show the complaint was made${doubt.quote ? `: "${doubt.quote}"` : ''})`;
+    } else {
+      await query(`UPDATE complaints SET complaint_doubt = complaint_doubt || '{"answered": true}'::jsonb WHERE id = $1`, [c.id]);
+      note = d.answer === 'is_complaint'
+        ? 'Confirmed as a complaint (the re-check had found no email clearly making one).'
+        : `Kept the recorded date raised, ${ukDate(c.raised_on)} (the emails suggested ${ukDate(doubt.date)}).`;
+    }
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [c.id, todayISO(), note, who(req)],
+    );
+    scheduleReview(c.id);
+    res.json(await decoratedById(c.id));
+  }),
+);
+
 // "Looks right": a person has checked a complaint the system created itself.
 router.post(
   '/:id/checked',
@@ -1301,13 +1352,16 @@ router.post(
 const escalateInput = z.object({
   date: isoDate.optional().nullable(),
   party_id: z.string().uuid().optional().nullable(),
+  // Straight to the ombudsman from either stage (energy after 8 weeks, for
+  // one): recorded as referred, not moved up one stage.
+  to: z.enum(['ombudsman']).optional().nullable(),
 });
 
 router.post(
   '/:id/escalate',
   asyncHandler(async (req, res) => {
     const d = parse(escalateInput, req.body || {});
-    await escalateTrack(req.params.id, d.party_id, d.date, who(req));
+    await escalateTrack(req.params.id, d.party_id, d.date, who(req), { to: d.to || null });
     res.json(await decoratedById(req.params.id));
   }),
 );
@@ -1422,11 +1476,12 @@ async function escalateFromEmail(complaintId, partyId, date, by, emailId) {
   );
 }
 
-async function escalateTrack(complaintId, partyId, date, by) {
+async function escalateTrack(complaintId, partyId, date, by, { to = null } = {}) {
     const track = await loadTrack(complaintId, partyId);
     const complaint = track.row;
 
     const next =
+      to === 'ombudsman' && ['stage_1', 'stage_2'].includes(complaint.stage) ? 'ombudsman' :
       complaint.stage === 'stage_1' ? 'stage_2' :
       complaint.stage === 'stage_2' ? 'ombudsman' : null;
     if (!next) throw new HttpError(400, 'Complaint cannot be escalated further');
@@ -1458,6 +1513,22 @@ async function escalateTrack(complaintId, partyId, date, by) {
       ],
     );
 
+    // Referred before the scheme could take it (by the dates on file): kept,
+    // since it happened, but said plainly so nobody assumes it was in time.
+    if (next === 'ombudsman') {
+      // The dates alone (a person is recording what they did, so the
+      // "not checked" rule doesn't apply), on the day it was referred.
+      const r = referralOpen({ ...complaint, needs_check: false, complaint_doubt: null,
+        ombudsman_from: computeOmbudsmanFrom(complaint, rule), rule }, escalatedOn);
+      if (!r.open) {
+        await query(
+          `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+          [complaintId, track.party?.id || null, escalatedOn,
+            `Note: by the dates on file, on ${ukDate(escalatedOn)} ${r.why}, so they may turn this referral away. Check the dates if that's wrong.`,
+            by],
+        );
+      }
+    }
     await recomputeTrack(track);
     scheduleReview(complaintId);
 }
@@ -1524,6 +1595,10 @@ router.put(
     });
     if (!clause) throw new HttpError(400, 'No fields to update');
     await query(`UPDATE complaints SET ${clause} WHERE id = $1`, [req.params.id, ...values]);
+    // The date it was made was corrected by hand: a question about it is answered.
+    if (d.raised_on && d.raised_on !== existing.raised_on && existing.complaint_doubt?.kind === 'raised_date') {
+      await query('UPDATE complaints SET complaint_doubt = NULL WHERE id = $1', [req.params.id]);
+    }
     const updated = await recomputeDeadlines(req.params.id);
 
     // Nothing changes silently: every corrected field goes on the timeline

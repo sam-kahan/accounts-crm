@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview } from './complaintContext.js';
+import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview, anyReferral } from './complaintContext.js';
 import { contactForOne } from './trackContact.js';
 import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction } from './complaintRules.js';
@@ -92,6 +92,7 @@ export async function refreshReview(id) {
     let review = guardReview(
       { ...raw, headline, supplier, next_action: normaliseNextAction(raw.next_action) },
       {
+        referral: (c.parties || []).length ? anyReferral([c, ...c.parties]) : c.referral,
         anyOverdue: Boolean(c.any_needs_chasing),
         nextDue: nextDueFromThem([c, ...(c.parties || [])]),
         lastSentOn: sent[sent.length - 1] || null,

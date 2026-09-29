@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { guardReview, recommendsChasing, nextDueFromThem, chaseHeldUntil } from '../src/services/reviewGuard.js';
+import { guardReview, recommendsChasing, nextDueFromThem, chaseHeldUntil, recommendsReferral } from '../src/services/reviewGuard.js';
 
 const TODAY = '2026-09-28';
 const chase = {
@@ -322,4 +322,32 @@ test('missedStage2Requests: a request we sent that left the complaint at Stage 1
   const cder = { party_id: 'p1', org_name: 'CDER Group', stage: 'stage_1', state: 'open', raised_on: '2026-08-01' };
   assert.deepEqual(missedStage2Requests([main, cder], [{ ...ask, from_here: false }]), []);
   assert.equal(missedStage2Requests([main, cder], [{ ...ask, party_id: 'p1' }])[0].org_name, 'CDER Group');
+});
+
+test('the AI review never sends anyone to the ombudsman too early', () => {
+  const notYet = { open: false, from: '2026-10-04', why: 'the Energy Ombudsman can’t take it until Sun 4 Oct 2026 (8 weeks after the complaint was made on Sun 9 Aug 2026)' };
+  const review = {
+    headline: 'Refer the complaint to the Energy Ombudsman now.',
+    next_action: { type: 'refer_ombudsman' },
+    email: { subject: 'Referral to the Energy Ombudsman', body: 'We wish to refer our complaint.' },
+    email_now: true,
+  };
+  const g = guardReview(review, { today: '2026-09-29', referral: notYet });
+  assert.equal(g.headline, `Not the ombudsman yet: ${notYet.why}.`);
+  assert.equal(g.next_action.type, 'wait');
+  assert.equal(g.next_action.by, '2026-10-04');
+  assert.equal(g.email_now, false);
+  // Mixed advice keeps the part that is right.
+  const mixed = guardReview({ headline: 'Chase E.ON for their Stage 1 response. You can also refer it to the Energy Ombudsman now.' },
+    { today: '2026-09-29', referral: notYet, anyOverdue: true });
+  assert.match(mixed.headline, /^Chase E\.ON for their Stage 1 response\. Not the ombudsman yet: /);
+  // One sentence, two actions: the referral goes, the email stays.
+  const bg = guardReview({ headline: 'Refer the complaint to the Energy Ombudsman by 6 October 2026 and email British Gas today.' },
+    { today: '2026-09-29', referral: { open: false, why: 'this imported complaint hasn’t been checked' }, anyOverdue: true });
+  assert.equal(bg.headline, 'Email British Gas today. Not the ombudsman yet: this imported complaint hasn’t been checked.');
+  // Once it can go, the advice stands.
+  assert.equal(guardReview(review, { today: '2026-10-05', referral: { open: true } }).headline, review.headline);
+  // Saying when it could go is not advice to go now.
+  assert.equal(recommendsReferral({ headline: 'Wait until 13 Oct; if they still haven’t replied, refer it to the ombudsman.' }), false);
+  assert.equal(recommendsReferral({ headline: 'You can refer it to the Energy Ombudsman now.' }), true);
 });

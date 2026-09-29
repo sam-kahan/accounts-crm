@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  referralOpen,
   procedureOnFile,
   addWorkingDays,
   workingDaysUntil,
@@ -304,8 +305,31 @@ test('deriveStatus: waiting on them with the ombudsman already open says wait fi
   assert.equal(d.status, 'awaiting_response');
   assert.match(d.nextAction, /^Nothing to send yet: wait for their final \(Stage 2\) response, due /);
   assert.match(d.nextAction, /If you'd rather not wait, you can already refer it to the Energy Ombudsman \(8 weeks have passed since the complaint was made on Mon 6 Jan 2020\)\.$/);
-  // Imported and not yet checked: the date it rests on is to be checked first.
+  // Imported and not yet checked: never "you can refer", only "don't yet".
   const u = deriveStatus({ ...c, needs_check: true }, effectiveRule(null, 'energy'));
-  assert.match(u.nextAction, /made on Mon 6 Jan 2020; check that date first, as this complaint hasn.t been checked yet\)\.$/);
+  assert.doesNotMatch(u.nextAction, /can already refer|You can also refer/);
+  assert.match(u.nextAction, /Don’t refer it to the Energy Ombudsman yet: this imported complaint hasn’t been checked: confirm the date it was made \(recorded as Mon 6 Jan 2020\)/);
   assert.doesNotMatch(d.nextAction, /^You can also/);
+});
+
+test('referralOpen: never too early for the ombudsman', () => {
+  const energy = effectiveRule(null, 'energy');
+  const base = { stage: 'stage_1', raised_on: '2026-08-09', rule: energy };
+  // Energy: 8 weeks from the complaint. Made 9 Aug: not until Sun 4 Oct.
+  const early = referralOpen({ ...base, ombudsman_from: computeOmbudsmanFrom(base, energy) }, '2026-09-29');
+  assert.equal(early.open, false);
+  assert.equal(early.from, '2026-10-04');
+  assert.match(early.why, /can’t take it until Sun 4 Oct 2026 \(8 weeks after the complaint was made on Sun 9 Aug 2026\)/);
+  assert.equal(referralOpen({ ...base, ombudsman_from: '2026-10-04' }, '2026-10-04').open, true);
+  // The dates say yes, but nobody has checked the import, or there is a question: no.
+  assert.equal(referralOpen({ ...base, ombudsman_from: '2026-10-04', needs_check: true }, '2026-11-01').open, false);
+  assert.equal(referralOpen({ ...base, ombudsman_from: '2026-10-04', complaint_doubt: { kind: 'raised_date', date: '2026-09-01' } }, '2026-11-01').open, false);
+  assert.equal(referralOpen({ ...base, ombudsman_from: '2026-10-04', complaint_doubt: { kind: 'raised_date', answered: true } }, '2026-11-01').open, true);
+  // A final response opens it from that day.
+  assert.equal(referralOpen({ ...base, stage: 'stage_2', final_response_on: '2026-09-20', ombudsman_from: '2026-09-20' }, '2026-09-29').open, true);
+  // No wait set by the scheme: only once their procedure has run out (Stage 2 missed).
+  const council = { stage: 'stage_2', raised_on: '2026-06-01', rule: effectiveRule(null, 'council'), ombudsman_from: null };
+  assert.equal(referralOpen({ ...council, response_due: '2026-09-30' }, '2026-09-29').open, false);
+  assert.equal(referralOpen({ ...council, response_due: '2026-09-20' }, '2026-09-29').open, true);
+  assert.equal(referralOpen({ ...council, stage: 'stage_1', response_due: '2026-09-20' }, '2026-09-29').open, false);
 });

@@ -51,9 +51,13 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
   const changes = {};
   const notes = [];
   const differs = [];
-  const out = (skip = null) => ({ changes, notes, differs, skip });
+  let doubt = null;
+  const out = (skip = null) => ({ changes, notes, differs, skip, doubt });
   if (!x) return out('The emails could not be read');
-  if (x.is_complaint === false) return out('The emails don’t read as a complaint');
+  if (x.is_complaint === false) {
+    doubt = { kind: 'not_complaint', why: x.not_complaint_why || 'no email shows a formal complaint being made' };
+    return out('The emails don’t show a formal complaint being made');
+  }
 
   // What the emails show, whatever happens to it.
   const said = `emails show ${x.state === 'resolved' ? 'it resolved' : LABEL[x.stage]}` +
@@ -146,6 +150,10 @@ export function planRecheck(c, x, { hasParties = false, today = todayISO() } = {
   }
   if (x.raised_on && c.raised_on && x.raised_on !== c.raised_on) {
     differs.push(`It is recorded as made on ${ukDate(c.raised_on)}, the emails say ${ukDate(x.raised_on)}`);
+    // Every deadline and the ombudsman date run from this day, so it is put
+    // to a person on the complaint itself (never changed by the re-check).
+    doubt = { kind: 'raised_date', date: x.raised_on, quote: x.complaint_evidence?.quote || null,
+      why: `the emails show the complaint was made on ${ukDate(x.raised_on)}, but it is recorded as ${ukDate(c.raised_on)}` };
   }
   return out();
 }
@@ -326,9 +334,16 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
        VALUES ($1,$2,'note',$3,$4) RETURNING id`,
       [id, todayISO(), `Re-checked against its emails. ${text}`, by],
     );
+    // A doubt a person has already answered ("it is a complaint", "keep the
+    // recorded date") is not raised again by reading the same thing.
+    const prior = cur.complaint_doubt;
+    const answeredSame = prior?.answered && plan.doubt && prior.kind === plan.doubt.kind && (prior.date || null) === (plan.doubt.date || null);
+    const doubtValue = answeredSame ? JSON.stringify(prior)
+      : plan.doubt ? JSON.stringify({ ...plan.doubt, at: new Date().toISOString() }) : null;
     await client.query(
       `UPDATE complaints SET rechecked_at = now(), recheck_signature = $2,
-              last_recheck = COALESCE($3::jsonb, last_recheck), needs_check = needs_check OR $4
+              last_recheck = COALESCE($3::jsonb, last_recheck), needs_check = needs_check OR $4,
+              complaint_doubt = $5::jsonb
         WHERE id = $1`,
       [
         id, sig,
@@ -338,7 +353,8 @@ export async function recheckComplaint(id, { by = RECHECK_BY, force = false, rev
             before_deadlines: beforeDeadlines, event_id: ev.rows[0].id, reviewed_emails: readIds,
           })
           : null,
-        flag,
+        flag || Boolean(plan.doubt),
+        doubtValue,
       ],
     );
     await client.query('COMMIT');

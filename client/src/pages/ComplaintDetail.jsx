@@ -76,6 +76,23 @@ const ESCALATE = (t, multi) => ({
   intro: t.stage === 'stage_1'
     ? 'The date you asked them for Stage 2. Their Stage 2 deadline is counted from it.'
     : `The date you referred the complaint to ${theOmbudsman(t.rule?.ombudsman)}.`,
+  // Referring too early gets it turned away: said plainly before it is recorded.
+  warn: t.stage !== 'stage_1' && t.referral && !t.referral.open
+    ? `Not yet: ${t.referral.why}. A referral before then is likely to be turned away. Only record this if it has already been referred.`
+    : null,
+  noNote: true,
+});
+// Recording a referral to the ombudsman, from Stage 1 or Stage 2 (energy can
+// go after 8 weeks without Stage 2): never one stage up by mistake.
+const REFER = (t, multi) => ({
+  kind: 'escalate',
+  to: 'ombudsman',
+  party: partyIdOf(t),
+  title: withOrg(t, multi, `Record the referral to ${theOmbudsman(t.rule?.ombudsman)}`),
+  intro: `The date you referred the complaint to ${theOmbudsman(t.rule?.ombudsman)} on their website.`,
+  warn: t.referral && !t.referral.open
+    ? `Not yet: ${t.referral.why}. A referral before then is likely to be turned away. Only record this if it has already been referred.`
+    : null,
   noNote: true,
 });
 const RESOLVE = (t, multi) => ({
@@ -196,6 +213,7 @@ export default function ComplaintDetail() {
   const [rechecking, setRechecking] = useState(false);
   // Moving an organisation to Stage 2 from the request we already sent.
   const [catchingUp, setCatchingUp] = useState(null);
+  const [answering, setAnswering] = useState(null);
 
   // Timers started by a button (watching a search or a re-check finish) are
   // stopped when the page is left or another complaint is opened, so one
@@ -591,7 +609,8 @@ export default function ComplaintDetail() {
     const map = {
       send_email: c.ai_review?.email?.body && ['Review & send the email…', () => openSend(c.ai_review.email)],
       escalate_stage2: stage1 && ['Escalate to Stage 2…', () => setAction(ESCALATE(c))],
-      refer_ombudsman: c.stage === 'stage_2' && ['Refer to the ombudsman…', () => setAction(ESCALATE(c))],
+      // Referring has its own three steps under the next step (referSection).
+      refer_ombudsman: null,
       record_acknowledgement: stage1 && !c.acknowledged_on && ['Record their acknowledgement…', () => setAction(ACK(c))],
       record_response: !c.responded_on && ['Record their response…', () => setAction(RESPONSE(c))],
       resolve: ['Mark resolved…', () => setAction(RESOLVE(c))],
@@ -620,7 +639,7 @@ export default function ComplaintDetail() {
   // so it is always asked for, defaulting to today.
   async function recordAction({ date, note }) {
     const a = action;
-    if (a.kind === 'escalate') await api.complaints.escalate(id, date, a.party || null);
+    if (a.kind === 'escalate') await api.complaints.escalate(id, date, a.party || null, a.to || null);
     else {
       await api.complaints.addEvent(id, {
         event_date: date, type: a.kind, note: note || a.defaultNote, party_id: a.party || null,
@@ -787,6 +806,36 @@ export default function ComplaintDetail() {
     };
   };
 
+  // How to refer, next to a step that says to: it is done on the ombudsman's
+  // website, not by email, so the page gives the three steps in order. Shown
+  // only when a referral is really open (referralOpen on the server), so it
+  // can never invite one too early.
+  const refersNow = (text) => /\brefer\b/i.test(text || '') && !/Don’t refer|Not the ombudsman|can’t take it|Before any referral/i.test(text || '');
+  const referSection = (t, advice, aiSaysRefer) => {
+    if (!trackOpen(t) || !['stage_1', 'stage_2'].includes(t.stage) || !t.referral?.open) return null;
+    if (!(aiSaysRefer || refersNow(advice))) return null;
+    const who = theOmbudsman(t.rule?.ombudsman);
+    return (
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border, #e5e7eb)' }}>
+        <div><strong>Referring it to {who}</strong> is done on their website, not by email:</div>
+        <ol style={{ margin: '6px 0 8px', paddingLeft: 20, fontSize: 14 }}>
+          <li>Build the referral pack: the facts, dates, timeline and grounds, ready to copy into their form (uses the AI once).</li>
+          <li>Make the referral on {who}’s website{t.rule?.ombudsmanUrl ? '' : ' (find it on their site: no website is on file for it)'}.</li>
+          <li>Record it here with the date you referred it, so the complaint moves on.</li>
+        </ol>
+        <div className="btn-row">
+          <button className="btn btn-sm" disabled={referralBusy} onClick={buildReferral}>
+            {referralBusy ? 'Building…' : '1. Build the referral pack'}
+          </button>
+          {t.rule?.ombudsmanUrl && (
+            <a className="btn btn-sm" href={t.rule.ombudsmanUrl} target="_blank" rel="noreferrer">2. Open their website ↗</a>
+          )}
+          <button className="btn-primary btn-sm" onClick={() => setAction(REFER(t, multi))}>3. I’ve referred it…</button>
+        </div>
+      </div>
+    );
+  };
+
   const trackButtons = (t, secondary = false) => {
     const tAt = t.stage === 'stage_1' || t.stage === 'stage_2';
     if (!trackOpen(t)) return null;
@@ -812,8 +861,10 @@ export default function ComplaintDetail() {
             </button>
           </>
         )}
-        {t.stage === 'stage_2' && (
-          <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => setAction(ESCALATE(t, multi))}>
+        {/* At Stage 1 only once a referral is really open (energy: 8 weeks);
+            at Stage 2 always, with a warning while it is too early. */}
+        {(t.stage === 'stage_2' || (t.stage === 'stage_1' && t.referral?.open)) && (
+          <button className={secondary ? 'btn btn-sm' : 'btn-navy btn-sm'} onClick={() => setAction(REFER(t, multi))}>
             Refer to ombudsman…
           </button>
         )}
@@ -828,6 +879,50 @@ export default function ComplaintDetail() {
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+      {/* The emails put the complaint itself in question (a re-check found no
+          formal complaint, or a different date it was made): answered here,
+          and until it is, nothing says it can go to the ombudsman. */}
+      {c.complaint_doubt && !c.complaint_doubt.answered && (() => {
+        const q = c.complaint_doubt;
+        const answer = async (a, ask) => {
+          if (ask && !confirm(ask)) return;
+          setAnswering(a);
+          try { const fresh = await api.complaints.answerDoubt(id, a); setC((x) => ({ ...x, ...fresh })); await load(); }
+          catch (e) { setMsg(e.message); } finally { setAnswering(null); }
+        };
+        return (
+          <div className="inline-note warn" style={{ marginBottom: 16 }} role="alert">
+            {q.kind === 'not_complaint' ? (
+              <>
+                <strong>⚠ The emails don’t show a formal complaint being made</strong> ({q.why}). It may have been imported
+                from a query or a disputed bill. Until this is answered, it won’t be treated as ready for the ombudsman.
+                <div className="btn-row" style={{ marginTop: 8 }}>
+                  <button className="btn-sm" disabled={answering !== null}
+                    onClick={() => answer('is_complaint', 'Keep it as a complaint? Only if a formal complaint really was made to them.')}>
+                    {answering === 'is_complaint' ? 'Saving…' : 'It is a complaint: keep it'}
+                  </button>
+                  <span className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>If it isn’t, use Delete at the top.</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <strong>⚠ Check the date this complaint was made.</strong> It is recorded as {formatDate(c.raised_on)}, but
+                the emails show it was made on {formatDate(q.date)}{q.quote ? <> (“{q.quote}”)</> : ''}. Every deadline, and
+                when it can go to the ombudsman, is worked out from this date.
+                <div className="btn-row" style={{ marginTop: 8 }}>
+                  <button className="btn-primary btn-sm" disabled={answering !== null}
+                    onClick={() => answer('use_date', `Change the date it was made to ${formatDate(q.date)}? Its deadlines will be worked out again.`)}>
+                    {answering === 'use_date' ? 'Changing…' : `Use ${formatDate(q.date)}`}
+                  </button>
+                  <button className="btn-sm" disabled={answering !== null} onClick={() => answer('keep_date')}>
+                    {answering === 'keep_date' ? 'Saving…' : `Keep ${formatDate(c.raised_on)}`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
       {/* We sent the Stage 2 request but the complaint is still at Stage 1
           (sent before its words were recognised, or from Outlook). */}
       {(c.stage2_missed || []).map((m) => (
@@ -987,6 +1082,7 @@ export default function ComplaintDetail() {
                         </button>
                       </div>
                     )}
+                    {referSection(t, text, Boolean(own?.refer_step))}
                   </div>
                 );
               })}
@@ -1044,6 +1140,7 @@ export default function ComplaintDetail() {
                     ) : btn}
                   </div>
                 )}
+                {referSection(c, text, live && c.ai_review.refer_step)}
               </div>
             );
           })()}
@@ -2014,6 +2111,7 @@ function DatedActionModal({ action, onClose, onSubmit }) {
       {error && <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>}
       <form onSubmit={save}>
         <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>{action.intro}</p>
+        {action.warn && <div className="inline-note warn" style={{ marginBottom: 12 }} role="alert"><strong>⚠ </strong>{action.warn}</div>}
         <label className="field">
           <span className="lbl">Date *</span>
           <input type="date" required value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} />

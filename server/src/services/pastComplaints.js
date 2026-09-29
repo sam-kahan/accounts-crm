@@ -13,6 +13,7 @@ import { findOrgByName, groupCandidates, mergeExtracted, findExistingMatch, post
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
 import { recomputeDeadlines } from './complaintDeadlines.js';
 import { scheduleReview } from './complaintReview.js';
+import { ukDate } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // "Find past complaints": search the chosen mailboxes for complaint emails,
@@ -527,6 +528,20 @@ async function importClaimed(id, group, by) {
       console.error('[complaints] full read failed, using the thread summaries:', err.message);
     }
   }
+  // Read in full, no formal complaint was ever made (a query, a disputed bill
+  // that never became a complaint): nothing is created. It is put with the
+  // threads ruled out, with the reason, and never read again.
+  if (x && !x.is_complaint) {
+    await query(
+      `UPDATE complaint_import_candidates
+          SET status = 'not_complaint', error = NULL, decided_by = $2,
+              extracted = COALESCE(extracted, '{}'::jsonb) || $3::jsonb
+        WHERE id = ANY($1::uuid[])`,
+      [(group.length ? group : [cand]).map((c) => c.id), by,
+        JSON.stringify({ is_complaint: false, why: `read in full: ${x.not_complaint_why || 'no formal complaint was made'}` })],
+    );
+    return null;
+  }
   const pick = (k) => (x && x[k] != null && x[k] !== '' ? x[k] : seed[k] ?? null);
   const iso = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
   const firstDay = londonDateOf(new Date(cand.first_at));
@@ -555,6 +570,12 @@ async function importClaimed(id, group, by) {
     await query('UPDATE organisations SET complaints_email = $2 WHERE id = $1', [org.id, x.org_complaints_email]);
   }
 
+  // The day the formal complaint was made (the full read quotes the sentence
+  // that made it). If no email shows it, the first email's date stands in,
+  // and the complaint says so: its deadlines and ombudsman dates rest on it.
+  const raisedOn = iso(pick('raised_on')) || firstDay;
+  const raisedGuessed = !iso(pick('raised_on'));
+
   // 5. The complaint, as complete as the emails allow.
   const stage = ['stage_1', 'stage_2', 'ombudsman'].includes(pick('stage')) ? pick('stage') : 'stage_1';
   const description = [pick('description') || seed.summary, x?.outcome ? `Outcome: ${x.outcome}` : null]
@@ -573,7 +594,7 @@ async function importClaimed(id, group, by) {
       // Every account number read, from the whole story and each thread.
       account_numbers: [...new Set([...(x?.account_numbers || []), ...(seed.account_numbers || [])])],
       channel: pick('channel') || 'email',
-      raised_on: iso(pick('raised_on')) || firstDay,
+      raised_on: raisedOn,
       stage,
       stage_started_on: stage === 'stage_1' ? null : iso(x?.stage_started_on),
       acknowledged_on: iso(pick('acknowledged_on')),
@@ -603,6 +624,20 @@ async function importClaimed(id, group, by) {
     await query(
       `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,$3,$4,$5)`,
       [complaint.id, e.date, e.type, e.note, 'Import (read from the emails)'],
+    );
+  }
+  if (x?.complaint_evidence?.quote) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [complaint.id, raisedOn, `The complaint was made in the email of ${ukDate(raisedOn)}: "${x.complaint_evidence.quote}"`, 'Import (read from the emails)'],
+    );
+  }
+  if (raisedGuessed || !x?.complaint_evidence?.quote) {
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [complaint.id, londonDateOf(new Date()),
+        `Please check the date this complaint was made: ${raisedGuessed ? `no email clearly shows it, so the first email's date (${ukDate(raisedOn)}) was used` : `the full reading of the emails wasn't available, so ${ukDate(raisedOn)} is from a quicker reading`}. Its deadlines and when it can go to the ombudsman are worked out from this date; correct it with Edit details if it's wrong.`,
+        'Import (read from the emails)'],
     );
   }
   if (x?.uncertain?.length) {
@@ -807,8 +842,7 @@ export async function runAutoImport(by = AUTO_SEARCH) {
           await linkCandidate(group[0].id, hit.id, AUTO_SEARCH);
           linked += 1;
         } else if (plan.will === 'import') {
-          await importCandidate(group[0].id, by);
-          imported += 1;
+          if (await importCandidate(group[0].id, by)) imported += 1;
         }
       }).catch((err) => {
         if (err.status !== 409) console.error(`[complaints] auto-import ${first[0].id} failed:`, err.message);

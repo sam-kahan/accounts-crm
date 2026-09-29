@@ -397,6 +397,42 @@ export function computeOmbudsmanFrom(complaint, rule) {
 const plural = (n, word) => `${n} working day${n === 1 ? '' : 's'}${word ? ` ${word}` : ''}`;
 
 // Derive live status + a plain-English "next action" for a complaint.
+// Can this organisation's part go to the ombudsman NOW? Going too early gets
+// a complaint turned away, so this is strict, and everything that suggests or
+// records a referral asks it (the dates' next step, the AI review's guard,
+// the Refer button). `t` is a track with ombudsman_from (computeOmbudsmanFrom)
+// and its rule. Open only when:
+//   - it has been checked (an imported complaint nobody has confirmed, or one
+//     with an unanswered question about it, rests on dates that may be wrong);
+//   - and the ombudsman's own wait is over (e.g. 8 weeks for energy) or their
+//     final response has come;
+//   - or, where the scheme sets no wait, they have missed their Stage 2
+//     deadline (their procedure has run out).
+// Returns { open, from, why }: `from` the day it opens (when known), `why`
+// a sentence part saying why not.
+export function referralOpen(t, today = todayISO()) {
+  if (t.stage === 'ombudsman') return { open: true, from: null, why: null };
+  const doubt = t.complaint_doubt && !t.complaint_doubt.answered ? t.complaint_doubt : null;
+  if (doubt) {
+    return { open: false, from: null, why: doubt.kind === 'not_complaint'
+      ? 'the emails don’t show a formal complaint being made; answer that on the complaint first'
+      : 'check the date the complaint was made first (the question on the complaint)' };
+  }
+  if (t.needs_check) {
+    return { open: false, from: null, why: `this imported complaint hasn’t been checked: confirm the date it was made (recorded as ${ukDate(t.raised_on)}) and press Looks right first` };
+  }
+  const from = t.ombudsman_from || null;
+  if (from && from <= today) return { open: true, from, why: null };
+  const weeks = t.rule?.ombudsmanAfterWeeks;
+  if (from) {
+    const basis = t.final_response_on === from ? `their final response on ${ukDate(from)}`
+      : weeks ? `${weeks} week${weeks === 1 ? '' : 's'} after the complaint was made on ${ukDate(t.raised_on)}` : null;
+    return { open: false, from, why: `${theOmbudsman(t.rule?.ombudsman)} can’t take it until ${ukDate(from)}${basis ? ` (${basis})` : ''}` };
+  }
+  if (t.stage === 'stage_2' && t.response_due && t.response_due < today && !t.responded_on) return { open: true, from: null, why: null };
+  return { open: false, from: null, why: 'their complaints procedure hasn’t finished yet: there is no final response' };
+}
+
 export function deriveStatus(complaint, rule) {
   const base = { overdue: false, ack_overdue: false, needs_chasing: false };
   if (complaint.state === 'resolved' || complaint.stage === 'resolved')
@@ -421,17 +457,20 @@ export function deriveStatus(complaint, rule) {
   const ackOverdue = !responded && ackWd !== null && ackWd < 0;
   const referFrom = computeOmbudsmanFrom(complaint, rule);
   const canReferNow = referFrom && referFrom <= today;
+  const referral = referralOpen({ ...complaint, ombudsman_from: referFrom, rule }, today);
   // Why a referral is open, with the date it rests on, so a wrong date (an
   // import that took an early email for the complaint) is visible rather
-  // than a bare "you can refer" — and on a complaint nobody has checked yet,
-  // a prompt to check that date first.
+  // than a bare "you can refer". (Unchecked or in question: referralOpen.)
   const referWhy = !canReferNow ? ''
     : complaint.final_response_on && complaint.final_response_on === referFrom
       ? `their final response was on ${ukDate(complaint.final_response_on)}`
-      : `${rule.ombudsmanAfterWeeks} week${rule.ombudsmanAfterWeeks === 1 ? ' has' : 's have'} passed since the complaint was made on ${ukDate(complaint.raised_on)}` +
-        (complaint.needs_check ? '; check that date first, as this complaint hasn’t been checked yet' : '');
+      : `${rule.ombudsmanAfterWeeks} week${rule.ombudsmanAfterWeeks === 1 ? ' has' : 's have'} passed since the complaint was made on ${ukDate(complaint.raised_on)}`;
+  // By the dates it could go, but it isn't safe yet (not checked, or in
+  // question): said so, never "you can refer".
   const referNote = canReferNow
-    ? ` You can also refer it to ${theOmbudsman(rule.ombudsman)} now (${referWhy}).`
+    ? (referral.open
+      ? ` You can also refer it to ${theOmbudsman(rule.ombudsman)} now (${referWhy}).`
+      : ` Don’t refer it to ${theOmbudsman(rule.ombudsman)} yet: ${referral.why}.`)
     : '';
 
   if (responded) {
@@ -441,7 +480,9 @@ export function deriveStatus(complaint, rule) {
         'Stage 1 response received. If it doesn’t resolve things, ask for Stage 2 in writing, ' +
         'setting out each point you want reviewed and why.' + referNote;
     } else if (complaint.stage === 'stage_2') {
-      nextAction = `Final response received. If still unresolved, you can refer to ${theOmbudsman(rule.ombudsman)}.`;
+      nextAction = referral.open
+        ? `Final response received. If still unresolved, you can refer to ${theOmbudsman(rule.ombudsman)}.`
+        : `Final response received. Before any referral to ${theOmbudsman(rule.ombudsman)}: ${referral.why}.`;
     }
     return { ...base, status: 'responded', label: 'Response received', nextAction };
   }
@@ -451,8 +492,11 @@ export function deriveStatus(complaint, rule) {
       complaint.stage === 'stage_1'
         ? `No Stage 1 outcome by ${ukDate(due)} (${basisOf(rule, 'stage1Days')}). Chase in writing; missing the ` +
           'deadline is itself a complaint-handling failure, and you can ask for Stage 2.' + referNote
-        : `No Stage 2 response by ${ukDate(due)} (${basisOf(rule, 'stage2Days')}). You can refer ` +
-          `the complaint to ${theOmbudsman(rule.ombudsman)}, citing their failure to respond.`;
+        : referral.open
+          ? `No Stage 2 response by ${ukDate(due)} (${basisOf(rule, 'stage2Days')}). You can refer ` +
+            `the complaint to ${theOmbudsman(rule.ombudsman)}, citing their failure to respond.`
+          : `No Stage 2 response by ${ukDate(due)} (${basisOf(rule, 'stage2Days')}). Chase them for it. ` +
+            `Not the ombudsman yet: ${referral.why}.`;
     return {
       ...base,
       status: 'response_overdue',
@@ -498,7 +542,9 @@ export function deriveStatus(complaint, rule) {
     // The wait comes first, always: the referral note on its own ("You can
     // also refer it…") read as the only step, next to a review saying wait.
     nextAction: (due ? `Nothing to send yet: wait for ${waitFor}, due ${ukDate(due)}.` : `Wait for ${waitFor}.`) +
-      (canReferNow ? ` If you'd rather not wait, you can already refer it to ${theOmbudsman(rule.ombudsman)} (${referWhy}).` : ''),
+      (canReferNow ? (referral.open
+        ? ` If you'd rather not wait, you can already refer it to ${theOmbudsman(rule.ombudsman)} (${referWhy}).`
+        : ` Don’t refer it to ${theOmbudsman(rule.ombudsman)} yet: ${referral.why}.`) : ''),
   };
 }
 
@@ -583,8 +629,14 @@ export function procedureSteps(complaint, rule) {
   steps.push({
     key: 'ombudsman_from', label: `Can refer to the ombudsman`,
     date: from,
-    state: at >= 3 ? 'done' : closed ? 'past' : !from ? 'pending' : from <= today ? 'available' : 'upcoming',
-    note: at >= 3 ? `Referred to ${theOmbudsman(rule.ombudsman)}` : earlyNote,
+    // Open by the dates is not enough on an unchecked or questioned record
+    // (referralOpen): then it is not shown as available, and says why.
+    state: at >= 3 ? 'done' : closed ? 'past' : !from ? 'pending'
+      : from <= today ? (referralOpen({ ...complaint, ombudsman_from: from, rule }, today).open ? 'available' : 'upcoming') : 'upcoming',
+    note: at >= 3 ? `Referred to ${theOmbudsman(rule.ombudsman)}`
+      : from && from <= today && !referralOpen({ ...complaint, ombudsman_from: from, rule }, today).open
+        ? `Not yet: ${referralOpen({ ...complaint, ombudsman_from: from, rule }, today).why}`
+        : earlyNote,
   });
 
   const by = complaint.ombudsman_deadline || null;

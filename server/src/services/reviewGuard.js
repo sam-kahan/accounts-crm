@@ -77,13 +77,57 @@ export function chaseHeldUntil({ lastSentOn, lastTheirsOn, nextDue, today }) {
   return sentLately || (ballTheirs && day < until) ? until : null;
 }
 
-// facts: { anyOverdue, nextDue: {date, what} | null, lastSentOn, lastTheirsOn, today }
+// Does a review tell Greenco to go to the ombudsman (or a redress scheme)?
+// A sentence that only says when it could, or not to yet, doesn't count.
+const REFER = /\b(?:refer(?:red|ral|ring)?|escalat\w*|take (?:it|this|the complaint)|go(?:ing)?|complain|submit|send)\b[^.]{0,60}\b(?:ombudsman|redress scheme|tribunal)\b/i;
+const NOT_REFER = /\b(?:not yet|don['’]t|do not|can['’]t|cannot|before|until|once|after|from \w{3} \d|if (?:they|it|no|still)|unless|failing|otherwise)\b/i;
+const refersNow = (s) => REFER.test(s) && !NOT_REFER.test(s);
+export function recommendsReferral(r) {
+  if (!r) return false;
+  if (r.next_action?.type === 'refer_ombudsman') return true;
+  return [r.headline, r.recommended_action].filter(Boolean).join(' ')
+    .split(/(?<=[.!?;])\s+/).some(refersNow);
+}
+
+// facts: { anyOverdue, nextDue: {date, what} | null, lastSentOn, lastTheirsOn, today,
+//          referral: { open, from, why } (complaintRules.js#referralOpen) }
 //   lastSentOn    the last day Greenco wrote to them (an email sent, a chaser logged)
 //   lastTheirsOn  the last day an email arrived FROM them
 // Returns the review unchanged, or corrected with `guarded` saying why.
 export function guardReview(review, facts) {
   if (!review) return review;
   const today = facts.today || todayISO();
+  // Never the ombudsman too early: a complaint referred before the scheme
+  // can take it is turned away. Advice to refer, when the system's own dates
+  // and checks say it can't go yet, loses that sentence and says when (or
+  // what has to happen first); the rest of the advice stands, and the
+  // checks below still apply to it.
+  if (facts.referral && !facts.referral.open && recommendsReferral(review)) {
+    // Sentence by sentence, and clause by clause within one ("Refer it to the
+    // ombudsman by 6 October and email British Gas today" keeps "Email
+    // British Gas today").
+    const strip = (h) => String(h || '').split(/(?<=[.!?;])\s+/).map((sent) => {
+      if (!refersNow(sent)) return sent;
+      const kept = sent.replace(/[.!?;]\s*$/, '').split(/,?\s+(?:and|then)\s+(?=[a-z])/i).filter((cl) => !refersNow(cl));
+      if (!kept.length) return '';
+      const t = kept.join(' and ').trim();
+      return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
+    }).filter(Boolean).join(' ').trim();
+    const rest = strip(review.headline);
+    const not = `Not the ombudsman yet: ${facts.referral.why}.`;
+    const h = [rest, not].filter(Boolean).join(' ');
+    const referralEmail = review.email && REFER.test(`${review.email.subject || ''} ${review.email.to || ''}`);
+    review = {
+      ...review,
+      headline: h,
+      recommended_action: h,
+      next_action: review.next_action?.type === 'refer_ombudsman'
+        ? { type: 'wait', by: facts.referral.from || facts.nextDue?.date || null } : review.next_action,
+      email_now: referralEmail ? false : review.email_now,
+      caution: [review.caution, `It suggested going to the ombudsman, but ${facts.referral.why}.`].filter(Boolean).join(' '),
+      guarded: 'referral too early',
+    };
+  }
   // The Stage 2 request has gone and the complaint is past Stage 1 (no part
   // of it is still there): a review written before that still offers the
   // same request. It is never offered twice; the next step is their answer.
@@ -91,8 +135,9 @@ export function guardReview(review, facts) {
     // Their Stage 2 answer is overdue: asking for Stage 2 again is still
     // wrong, but "wait" would be too. Chase that answer, or refer.
     if (facts.anyOverdue) {
-      const h = 'Stage 2 has already been asked for and their answer is overdue: chase them for it, ' +
-        'or refer the complaint to the ombudsman if their procedure allows it now.';
+      const h = 'Stage 2 has already been asked for and their answer is overdue: chase them for it' +
+        (facts.referral?.open ? ', or refer the complaint to the ombudsman now.'
+          : `. Not the ombudsman yet: ${facts.referral?.why || 'check their procedure allows it first'}.`);
       return { ...review, headline: h, recommended_action: h, email: null, email_now: false, next_action: null };
     }
     const h = `Stage 2 has been asked for. Nothing to send now: ${facts.nextDue
@@ -256,6 +301,7 @@ export function factsForTrack(t, contact = {}, today = undefined) {
     lastSentOn: contact.lastSentOn || null,
     lastTheirsOn: contact.lastTheirsOn || null,
     stage2Asked: trackOpen(t) && t.stage && t.stage !== 'stage_1',
+    referral: t.referral || null,
   };
 }
 
