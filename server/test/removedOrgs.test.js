@@ -123,3 +123,19 @@ test('an unsure acknowledgement still waits when it could be the first one, or r
   // Low confidence never.
   assert.equal(planFromAnalysis(ovo, { ...ack, confidence: 'low' }, { today: '2026-09-29', text: subject }).auto, false);
 });
+
+test('an organisation added back by name is read as usual again', () => {
+  const tracks = tracksOf({ org_name: 'British Gas', organisation_id: 'o-bg' }, [{ id: 'p2', org_name: 'LCS', organisation_id: null }], orgs);
+  assert.equal(removedOrgFor({ removed, tracks, analysis: { kind: 'acknowledgement', author_org: 'LCS' }, email: { sender_email: 'x@lcs.example' }, ourDomain: 'greenco.co.uk' }), null);
+});
+
+import { offEmail } from '../src/services/complaintRecheck.js';
+test('the re-check leaves out a removed organisation\'s emails', () => {
+  const rm = [{ name: 'LCS', domains: ['lcs.example'] }];
+  assert.equal(offEmail({ removed_org: 'LCS' }, [], 'greenco.co.uk'), true);
+  assert.equal(offEmail({ sender_email: 'Info <info@lcs.example>' }, rm, 'greenco.co.uk'), true);
+  assert.equal(offEmail({ sender_email: 'x@bg.example' }, rm, 'greenco.co.uk'), false);
+  assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: ['c@lcs.example'] }, rm, 'greenco.co.uk'), true);
+  assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: ['c@lcs.example', 'c@bg.example'] }, rm, 'greenco.co.uk'), false);
+  assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: [] }, rm, 'greenco.co.uk'), false);
+});

@@ -769,6 +769,10 @@ the page says how far each date can be trusted.
   as history and never recorded on another part; signs pointing at both wait
   for a person. Undo of an automatic record on a removed organisation's part
   is refused (it would have reset the new main organisation's dates).
+  The re-check's reading and the Stage 2 catch-up / prompt leave its emails
+  out too (`complaintRecheck.js#offEmail`: tagged, or from / only to its
+  addresses), so our Stage 2 request to it never moves another's part. One
+  added back later (same saved organisation or same name) is read as usual.
 - **An unsure acknowledgement that can set no date is filed by itself**
   (`ackChangesNothing` in `emailAnalysis.js`): past Stage 1, or already
   acknowledged, with no response wording (final response, decision,

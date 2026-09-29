@@ -10,7 +10,7 @@ import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/
 import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
-import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf } from '../services/complaintRecheck.js';
+import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
@@ -1447,20 +1447,23 @@ router.post(
 // (complaintRules.js#missedStage2Requests), for one complaint or several.
 async function stage2MissedFor(ids) {
   if (!ids.length) return new Map();
-  const complaints = (await query(`SELECT id, org_name, stage, state, raised_on FROM complaints WHERE id = ANY($1::uuid[])`, [ids])).rows;
+  const complaints = (await query(`SELECT id, org_name, stage, state, raised_on, removed_orgs FROM complaints WHERE id = ANY($1::uuid[])`, [ids])).rows;
   const parties = (await query(`SELECT id, complaint_id, org_name, stage, state, raised_on FROM complaint_parties WHERE complaint_id = ANY($1::uuid[])`, [ids])).rows;
   const emails = (await query(
     `SELECT id, complaint_id, subject, COALESCE(body_text, body_preview) AS body, party_id, direction = 'outbound' AS from_here,
+            sender_email, to_addresses,
             analysis->>'our_step' AS our_step,
             CASE WHEN analysis->>'sent_on' ~ '^\d{4}-\d{2}-\d{2}$' THEN analysis->>'sent_on'
                  ELSE to_char((received_at AT TIME ZONE 'Europe/London')::date, 'YYYY-MM-DD') END AS sent_on
        FROM complaint_emails
-      WHERE complaint_id = ANY($1::uuid[]) AND (direction = 'outbound' OR analysis->>'kind' = 'our_email')`,
+      WHERE complaint_id = ANY($1::uuid[]) AND (direction = 'outbound' OR analysis->>'kind' = 'our_email')
+        -- An organisation taken off the complaint: its Stage 2 request never moves another's part.
+        AND removed_org IS NULL`,
     [ids],
   )).rows;
   const events = (await query(
     `SELECT complaint_id, type, party_id, to_char(event_date, 'YYYY-MM-DD') AS event_date, note FROM complaint_events
-      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%' OR note LIKE 'Automatic record from the email%')`,
+      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%' OR note LIKE 'Automatic record from the email%' OR note ~ '^What .+ recorded from the email')`,
     [ids],
   )).rows;
   const out = new Map();
@@ -1469,7 +1472,8 @@ async function stage2MissedFor(ids) {
       { party_id: null, org_name: c.org_name, stage: c.stage, state: c.state, raised_on: c.raised_on },
       ...parties.filter((p) => p.complaint_id === c.id).map((p) => ({ party_id: p.id, org_name: p.org_name, stage: p.stage, state: p.state, raised_on: p.raised_on })),
     ];
-    out.set(c.id, missedStage2Requests(tracks, emails.filter((e) => e.complaint_id === c.id), events.filter((e) => e.complaint_id === c.id)));
+    const own = emails.filter((e) => e.complaint_id === c.id && !offEmail(e, c.removed_orgs || [], config.complaintEmail.domain));
+    out.set(c.id, missedStage2Requests(tracks, own, events.filter((e) => e.complaint_id === c.id)));
   }
   return out;
 }

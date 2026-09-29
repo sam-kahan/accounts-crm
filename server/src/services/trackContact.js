@@ -128,10 +128,11 @@ export function removalTags(input, removeKey) {
     .filter((ev) => (removeKey === 'main' ? !stays(ev.keys) : ev.keys.length && !stays(ev.keys)))
     .map((ev) => ev.row.id);
   const domains = new Set(domainsOf(removeKey));
-  // The addresses emails counted only for them came from (never ours, never
-  // a free mail service a tenant uses).
+  // The addresses of emails counted only for them: the ones they wrote from
+  // and the ones we wrote to them at (never ours, never a free mail service
+  // a tenant uses).
   for (const e of emails) {
-    if (e.field === 'lastTheirsOn' && e.keys.length && !stays(e.keys)) for (const d of e.outside) domains.add(d);
+    if (e.keys.length && !stays(e.keys)) for (const d of e.outside) domains.add(d);
   }
   return {
     emailIds,

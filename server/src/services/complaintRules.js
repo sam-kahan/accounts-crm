@@ -886,7 +886,7 @@ export function missedStage2Requests(tracks, emails, events = []) {
     // A person put it back to Stage 1 (or recorded an escalation) after it
     // was sent: their decision stands.
     const later = events.some((ev) => (ev.party_id || null) === (t.party_id || null) && ev.event_date >= e.sent_on &&
-      (ev.type === 'escalated' || /^(?:Details corrected:|Automatic record from the email).*\bstage\b/i.test(ev.note || '')));
+      (ev.type === 'escalated' || /^(?:Details corrected:|Automatic record from the email|What .+ recorded from the email).*\bstage\b/i.test(ev.note || '')));
     if (later) continue;
     // The latest per organisation, but a certain request is never replaced
     // by a later email that only mentions Stage 2.

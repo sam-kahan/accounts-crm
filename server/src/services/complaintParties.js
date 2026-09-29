@@ -115,7 +115,11 @@ export function overallState(complaint, parties = []) {
 //   neither                     null               read as usual
 export function removedOrgFor({ removed = [], tracks = [], analysis, email, ourDomain }) {
   const keptIds = new Set(tracks.map((t) => t.row?.organisation_id).filter(Boolean));
-  const gone = (removed || []).filter((r) => r?.name && !(r.organisation_id && keptIds.has(r.organisation_id)));
+  // One added back since (the same saved organisation, or the same name) is
+  // on the complaint again: its emails are read as usual.
+  const gone = (removed || []).filter((r) => r?.name &&
+    !(r.organisation_id && keptIds.has(r.organisation_id)) &&
+    !tracks.some((t) => t.names.some((n) => sameOrgName(n, r.name))));
   if (!gone.length) return null;
   const ours = String(ourDomain || '').toLowerCase();
   const isOurs = analysis?.kind === 'our_email' || email?.direction === 'outbound';
