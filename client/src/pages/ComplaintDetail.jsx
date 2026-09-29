@@ -210,6 +210,35 @@ export default function ComplaintDetail() {
       .then(setC)
       .catch((e) => setLoadError(e.message));
   };
+  // An email going out in the background: look again every few seconds
+  // until it has gone (then it is on the complaint, and any escalation done)
+  // or failed (then it says so, with Try again).
+  const sendingNow = Boolean(c?.outbox?.some((o) => o.status === 'pending' || o.status === 'sending'));
+  useEffect(() => {
+    if (!sendingNow) return undefined;
+    const t = setTimeout(() => {
+      api.complaints.get(id).then((fresh) => {
+        setC(fresh);
+        const was = c.outbox.filter((o) => o.status !== 'failed').map((o) => o.id);
+        const still = new Set((fresh.outbox || []).map((o) => o.id));
+        const gone = was.filter((x) => !still.has(x));
+        if (gone.length) {
+          const esc = c.outbox.find((o) => gone.includes(o.id) && o.then_escalate);
+          setMsg(esc ? 'Sent, and the complaint has moved to Stage 2. Their Stage 2 deadline is on the checklist.' : 'Sent, and logged on this complaint.');
+        }
+      }).catch(() => {});
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [c, sendingNow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function retryOutbox(o) {
+    try { await api.complaints.retryOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
+  }
+  async function discardOutbox(o) {
+    if (!confirm(`Discard "${o.subject}"? It wasn't sent, and won't be.`)) return;
+    try { await api.complaints.discardOutbox(id, o.id); await load(); } catch (e) { setMsg(e.message); }
+  }
+
   // While the review is being brought up to date, look again every few
   // seconds (for up to a minute) so it appears without a reload.
   const stale = Boolean(c && aiEnabled && c.state === 'open' && !c.ai_review_current);
@@ -318,12 +347,14 @@ export default function ComplaintDetail() {
     setSending(true);
     setMsg(null);
     try {
+      // Queued at once; it goes out in the background, so nobody waits on
+      // the mail server. The banner below follows it until it has gone.
       const r = await api.complaints.sendEmail(id, send);
       setSend(null);
       await load();
-      setMsg(r?.escalated
-        ? `Sent, and ${r.escalated_org ? `${r.escalated_org}'s part of the complaint` : 'the complaint'} is now at Stage 2 (from today). Their Stage 2 deadline is on the checklist.`
-        : 'Email sent and logged to this complaint.');
+      setMsg(r?.escalating
+        ? 'Sending now. The complaint moves to Stage 2 as soon as it has gone; you can carry on.'
+        : 'Sending now; you can carry on.');
     } catch (e) {
       setMsg(e.message);
     } finally {
@@ -727,6 +758,22 @@ export default function ComplaintDetail() {
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
       {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+      {(c.outbox || []).map((o) => (
+        o.status === 'failed' ? (
+          <div key={o.id} className="inline-note warn" style={{ marginBottom: 12 }}>
+            <strong>Not sent: “{o.subject}”</strong> to {o.to_addresses.join(', ')}.
+            <div style={{ fontSize: 13, marginTop: 2 }}>{o.error}</div>
+            <div className="btn-row" style={{ marginTop: 6 }}>
+              <button className="btn-primary btn-sm" onClick={() => retryOutbox(o)}>Try again</button>
+              <button className="btn btn-sm" onClick={() => discardOutbox(o)}>Discard</button>
+            </div>
+          </div>
+        ) : (
+          <div key={o.id} className="inline-note" style={{ marginBottom: 12 }}>
+            Sending “{o.subject}” to {o.to_addresses.join(', ')}…{o.then_escalate ? ' The complaint moves to Stage 2 once it has gone.' : ''}
+          </div>
+        )
+      ))}
 
       {/* Where it stands, and what to do next */}
       <div className="card" style={{ marginBottom: 20 }}>

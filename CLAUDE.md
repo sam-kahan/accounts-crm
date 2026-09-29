@@ -713,6 +713,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — Send doesn't make you wait: emails go out in the background
+- **Pressing Send answers at once** (`POST /complaints/:id/send-email` → 202).
+  The email is queued in `complaint_outbox` (migration `037`) and
+  `deliverOutbox()` in `routes/complaints.js` sends it, records it on the
+  complaint and, for a Stage 2 request, escalates that organisation's track
+  dated the day Send was pressed. The row is claimed atomically
+  (`pending` → `sending`), so it can never go twice.
+- **A failure is never silent**: the complaint page shows "Not sent: …" with
+  the reason, **Try again** and **Discard**; nothing is recorded or escalated
+  until the email has really gone. While one is sending the page says so and
+  updates itself when it has gone. If recording fails after a successful send,
+  a timeline note says so and it is never re-sent.
+- **A restart mid-send** marks the row failed with a note to check
+  utilities@ for the copy before trying again (it may or may not have gone);
+  rows still `pending` at start-up are sent.
+
 ### 2026-09-29 — one search box for everything
 - **The top bar searches every section the viewer may see**
   (`components/GlobalSearch.jsx`, `GET /api/search?q=` in `routes/search.js`,

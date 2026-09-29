@@ -193,6 +193,21 @@ app.listen(config.port, () => {
     .then(() => searchAccountEmails().catch((err) => console.error('  Account search:', err.message)))
     .then(() => runAutoImport())
     .catch((err) => console.error('  Automatic import could not carry on:', err.message));
+  // Emails queued to send when the server stopped. One never started goes
+  // now; one that was part-way (handed to the mail server) may or may not
+  // have gone, so it is never re-sent blindly: it is shown as failed, with a
+  // note to check the copy in utilities@ before trying again.
+  query(
+    `UPDATE complaint_outbox SET status = 'failed', finished_at = now(),
+            error = 'The system restarted while this was being sent, so it may or may not have gone. Check for the copy in utilities@ before trying again.'
+      WHERE status = 'sending'`,
+  )
+    .then(() => query(`SELECT id FROM complaint_outbox WHERE status = 'pending'`))
+    .then(async ({ rows }) => {
+      const { deliverOutbox } = await import('./routes/complaints.js');
+      for (const r of rows) await deliverOutbox(r.id).catch((err) => console.error('  Outbox:', err.message));
+    })
+    .catch((err) => console.error('  Outbox:', err.message));
   // Emails left as "new" that arrived before their complaint was made, and
   // account numbers kept beside the same number with a digit missing: both
   // tidied (no AI), with the timeline saying what was removed.

@@ -366,8 +366,12 @@ export const api = {
     aiConfig: () => request('/complaints/ai/config'),
     assist: (id, data) =>
       request(`/complaints/${id}/assist`, { method: 'POST', body: JSON.stringify(data) }),
+    // Queued and sent in the background (202): the complaint's `outbox` says
+    // how it is going.
     sendEmail: (id, data) =>
       request(`/complaints/${id}/send-email`, { method: 'POST', body: JSON.stringify(data) }),
+    retryOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}/retry`, { method: 'POST' }),
+    discardOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}`, { method: 'DELETE' }),
     checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
     referralPack: (id) => request(`/complaints/${id}/referral-pack`),
     // Fill the log form from the complaint itself: pasted text, an uploaded

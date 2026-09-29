@@ -269,6 +269,11 @@ function parseRecipients(raw) {
   return list;
 }
 
+// Sending runs in the background: the page is answered as soon as the email
+// is checked and queued (complaint_outbox), and doesn't wait on the mail
+// server. Once it has gone it is recorded on the complaint and, when it was
+// the Stage 2 request, the complaint is escalated. A failure stays on the
+// complaint with Try again / Discard.
 router.post(
   '/:id/send-email',
   asyncHandler(async (req, res) => {
@@ -276,13 +281,14 @@ router.post(
     const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
     if (!rows[0]) throw new HttpError(404, 'Complaint not found');
     const complaint = await decorate(rows[0]);
-    // Checked before anything is sent, so an email never goes out for a step
-    // that then can't be recorded.
+    // Checked before anything is queued, so an email never goes out for a
+    // step that then can't be recorded.
     const party = d.party_id ? (complaint.parties || []).find((p) => p.id === d.party_id) : null;
     if (d.party_id && !party) throw new HttpError(400, 'That organisation isn’t on this complaint.');
     if (d.then === 'escalate' && (party || complaint).stage !== 'stage_1') {
       throw new HttpError(400, `Only ${party ? `${party.org_name}'s part` : 'a complaint'} at Stage 1 can be escalated to Stage 2 this way.`);
     }
+    if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
 
     const to = parseRecipients(d.to);
     const cc = parseRecipients(d.cc);
@@ -295,37 +301,104 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
-    // Signed by whoever is sending (a draft's "[Name]" never goes out).
-    d.body = signEmail(d.body, req.user);
-    d.subject = signEmail(d.subject, req.user);
-    const sent = await sendMail({ to, cc, subject: d.subject, text: d.body });
+    const out = (await query(
+      `INSERT INTO complaint_outbox (complaint_id, party_id, to_addresses, cc_addresses, subject, body, then_escalate, sent_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [
+        complaint.id, party?.id || null, to, cc,
+        // Signed by whoever is sending (a draft's "[Name]" never goes out).
+        signEmail(d.subject, req.user), signEmail(d.body, req.user),
+        d.then === 'escalate', who(req),
+      ],
+    )).rows[0];
+    setImmediate(() => deliverOutbox(out.id).catch((err) => console.error('[outbox]', err.message)));
+    res.status(202).json({ queued: true, outbox_id: out.id, escalating: d.then === 'escalate' });
+  }),
+);
+
+// Send one queued email, then record it and take the step it was. Claimed
+// by one statement (pending → sending), so it is never sent twice.
+export async function deliverOutbox(outboxId) {
+  const o = (await query(
+    `UPDATE complaint_outbox SET status = 'sending' WHERE id = $1 AND status = 'pending' RETURNING *`, [outboxId],
+  )).rows[0];
+  if (!o) return;
+  let sent;
+  try {
+    sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body });
+  } catch (err) {
+    await query(`UPDATE complaint_outbox SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`,
+      [o.id, String(err.message || err).slice(0, 500)]);
+    return;
+  }
+  // It has gone: from here on nothing may put it back to "not sent".
+  await query(`UPDATE complaint_outbox SET status = 'sent', error = NULL, finished_at = now() WHERE id = $1`, [o.id]);
+  try {
     await recordOutboundEmail({
-      complaintId: complaint.id,
+      complaintId: o.complaint_id,
       fromEmail: fromAddress(),
-      to,
-      cc,
-      subject: d.subject,
-      body: d.body,
-      sentBy: who(req),
+      to: o.to_addresses,
+      cc: o.cc_addresses,
+      subject: o.subject,
+      body: o.body,
+      sentBy: o.sent_by,
       messageId: sent?.messageId || null,
-      partyId: party?.id || null,
+      partyId: o.party_id,
     });
     // The Stage 2 request moves the complaint on whichever button sent it:
     // "Send it and escalate" says so, and otherwise the email's own words do
     // (isStage2Request, no AI), so a plain Send can't leave it at Stage 1
     // with the review offering the same request again.
-    const track = d.then === 'escalate'
-      ? { party }
-      : isStage2Request({ subject: d.subject, body: d.body })
-        ? (d.party_id ? (party.stage === 'stage_1' ? { party } : null) : await stage2TrackFor(complaint.id, to))
+    const party = o.party_id
+      ? (await query('SELECT * FROM complaint_parties WHERE id = $1', [o.party_id])).rows[0] || null
+      : null;
+    const cur = (await query('SELECT * FROM complaints WHERE id = $1', [o.complaint_id])).rows[0];
+    const atStage1 = (party || cur)?.stage === 'stage_1';
+    const track = o.then_escalate
+      ? (atStage1 ? { party } : null)
+      : isStage2Request({ subject: o.subject, body: o.body })
+        ? (o.party_id ? (atStage1 ? { party } : null) : await stage2TrackFor(o.complaint_id, o.to_addresses))
         : null;
-    if (track) await escalateTrack(complaint.id, track.party?.id || null, todayISO(), who(req));
-    const updated = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
-    scheduleReview(complaint.id);
-    res.json({
-      sent: true, escalated: Boolean(track), escalated_org: track?.party?.org_name || null,
-      complaint: await decorate(updated),
-    });
+    if (track) await escalateTrack(o.complaint_id, track.party?.id || null, londonDateOf(new Date(o.created_at)), o.sent_by);
+    else if (o.then_escalate && !atStage1) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+        [o.complaint_id, o.party_id, todayISO(), 'The Stage 2 request was sent, but it was already past Stage 1 by then, so nothing was escalated.', o.sent_by],
+      );
+    }
+    scheduleReview(o.complaint_id);
+  } catch (err) {
+    // Sent, but recording it failed: said on the complaint, never re-sent.
+    console.error('[outbox] sent but not recorded:', err.message);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+      [o.complaint_id, todayISO(), `The email "${o.subject}" was sent, but recording it here failed (${String(err.message).slice(0, 200)}). Record the step by hand if it was one.`, 'Automatic (sending)'],
+    ).catch(() => {});
+  }
+}
+
+// A failed email: try again, or discard it.
+router.post(
+  '/:id/outbox/:outboxId/retry',
+  asyncHandler(async (req, res) => {
+    const r = await query(
+      `UPDATE complaint_outbox SET status = 'pending', error = NULL WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING id`,
+      [req.params.outboxId, req.params.id],
+    );
+    if (!r.rows[0]) throw new HttpError(409, 'That email isn’t waiting to be tried again.');
+    setImmediate(() => deliverOutbox(req.params.outboxId).catch((err) => console.error('[outbox]', err.message)));
+    res.status(202).json({ queued: true });
+  }),
+);
+router.delete(
+  '/:id/outbox/:outboxId',
+  asyncHandler(async (req, res) => {
+    const r = await query(
+      `DELETE FROM complaint_outbox WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING id`,
+      [req.params.outboxId, req.params.id],
+    );
+    if (!r.rows[0]) throw new HttpError(409, 'Only an email that failed to send can be discarded.');
+    res.status(204).end();
   }),
 );
 
@@ -923,7 +996,12 @@ router.get(
       addresses: [decorated, ...decorated.parties].map((t) => t.org_email).filter(Boolean),
     });
     // Copied in on every email sent from here (utilities@), so the page can say so.
-    res.json({ ...decorated, events, emails, attachments, email_search, bounces, external_cc: config.smtp.externalCc });
+    // Emails still going out, or that failed, shown on the complaint.
+    const outbox = (await query(
+      `SELECT id, subject, to_addresses, status, error, then_escalate, created_at FROM complaint_outbox
+        WHERE complaint_id = $1 AND status <> 'sent' ORDER BY created_at`, [rows[0].id],
+    )).rows;
+    res.json({ ...decorated, events, emails, attachments, email_search, bounces, outbox, external_cc: config.smtp.externalCc });
   }),
 );
 
