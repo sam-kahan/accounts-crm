@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
-import { saysAttached } from '../services/draftChecks.js';
+import { saysAttached, pickAttachments, staleNoReply } from '../services/draftChecks.js';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
@@ -457,6 +457,58 @@ function withAttachedLine(body, names, extra = '') {
   const at = clean.search(/\n(Kind regards|Yours sincerely|Yours faithfully|Many thanks|Regards),?\s*\n/i);
   return at >= 0 ? `${clean.slice(0, at).trimEnd()}\n\n${listed}\n${clean.slice(at)}` : `${clean.trimEnd()}\n\n${listed}`;
 }
+
+// Sending an email of ours again (it went without its documents, say):
+// the same people, subject and message, with a line at the top saying why it
+// has come again, and the complaint's documents ticked when the message says
+// something is attached. Nothing is sent here; it opens in the Send window.
+// A "no reply" to something sent only days ago is pointed out (caution).
+router.get(
+  '/:id/emails/:emailId/resend',
+  asyncHandler(async (req, res) => {
+    if (!z.string().uuid().safeParse(req.params.emailId).success) throw new HttpError(400, 'Invalid email id');
+    const em = (await query(
+      `SELECT id, subject, body_text, body_preview, to_addresses, party_id, direction, received_at
+         FROM complaint_emails WHERE id = $1 AND complaint_id = $2`, [req.params.emailId, req.params.id],
+    )).rows[0];
+    if (!em) throw new HttpError(404, 'Email not found');
+    if (em.direction !== 'outbound') throw new HttpError(400, 'Only an email sent from here can be sent again.');
+    // Their addresses only: ours (the complaint's own address, utilities@)
+    // are copied in again by the send itself.
+    const ours = String(config.complaintEmail.domain || '').toLowerCase();
+    const to = (em.to_addresses || []).filter((a) => {
+      const x = String(a).toLowerCase();
+      return x && !x.endsWith(`@${ours}`);
+    });
+    const sentOn = em.received_at ? londonDateOf(new Date(em.received_at)) : null;
+    const which = sentOn === todayISO()
+      ? 'our email from earlier today'
+      : sentOn
+        ? `our email of ${new Date(`${sentOn}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`
+        : 'our earlier email';
+    const original = String(em.body_text || em.body_preview || '').replace(/\n*Attached: [^\n]*(\n|$)/, '\n');
+    const docs = (await listAttachments(req.params.id)).map((d) => ({ id: d.id, filename: d.filename }));
+    const attachmentIds = pickAttachments({ body: original }, docs);
+    const why = attachmentIds.length
+      ? `We are sending ${which} again below, as the documents did not come through with it.`
+      : `We are sending ${which} again below.`;
+    const greet = original.match(/^\s*((?:Dear|Hello|Hi|Good (?:morning|afternoon))[^\n]*,?)\s*\n/i);
+    const body = greet
+      ? `${greet[1]}\n\n${why}\n\n${original.slice(greet[0].length).trimStart()}`
+      : `${why}\n\n${original.trimStart()}`;
+    const stale = staleNoReply(original, todayISO());
+    res.json({
+      to: to.join(', '),
+      subject: em.subject || '',
+      body,
+      party_id: em.party_id || null,
+      attachment_ids: attachmentIds,
+      caution: stale
+        ? `This says they haven't replied to something sent on ${ukDate(stale.date)}, only days ago: take that out before sending ("${stale.sentence}").`
+        : null,
+    });
+  }),
+);
 
 // Send one queued email, then record it and take the step it was. Claimed
 // by one statement (pending → sending), so it is never sent twice.

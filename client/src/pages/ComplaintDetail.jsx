@@ -502,6 +502,27 @@ export default function ComplaintDetail() {
     }
   }
 
+  // Send an email of ours again (it went without its documents, say): the
+  // same message with a line at the top saying why, the documents ticked when
+  // it says something is attached. It opens in the Send window to check.
+  const [resending, setResending] = useState(null);
+  async function openResend(em) {
+    setResending(em.id);
+    setMsg(null);
+    try {
+      const d = await api.complaints.resendDraft(id, em.id);
+      setSend({
+        to: d.to, party_id: d.party_id || null, org_name: null, cc: '',
+        subject: d.subject, body: signEmail(d.body, me),
+        attachment_ids: d.attachment_ids || [], caution: d.caution || null, then: null,
+      });
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setResending(null);
+    }
+  }
+
   // Open the compose modal, optionally pre-filled from an AI draft.
   // `then: 'escalate'`: the email is the Stage 2 request, so sending it also
   // moves the complaint to Stage 2 (one press, not two).
@@ -1934,7 +1955,16 @@ export default function ComplaintDetail() {
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     {em.direction === 'outbound' ? (
-                      <span className="badge navy">Sent</span>
+                      <>
+                        <span className="badge navy">Sent</span>
+                        {c.state === 'open' && (
+                          <div style={{ marginTop: 6 }}>
+                            <button className="btn btn-sm" disabled={resending === em.id} onClick={() => openResend(em)}>
+                              {resending === em.id ? 'Opening…' : 'Send again…'}
+                            </button>
+                          </div>
+                        )}
+                      </>
                     ) : em.reviewed_at ? (
                       <span className="badge grey" title={em.reviewed_by ? `Marked by ${em.reviewed_by}` : ''}>
                         {em.analysis?.kind === 'our_email' ? 'Our email' : REVIEWED_AS[em.reviewed_as] || 'Reviewed'}
@@ -2243,6 +2273,7 @@ export default function ComplaintDetail() {
           }
         >
           {send.error && <div className="login-error" style={{ marginBottom: 12 }}>Not sent: {send.error}</div>}
+          {send.caution && <div className="inline-note warn" style={{ marginBottom: 12, fontSize: 13 }}><strong>Check:</strong> {send.caution}</div>}
           {send.then === 'refer' && (
             <div className="inline-note" style={{ marginBottom: 12 }}>
               <strong>The evidence goes with it:</strong> a summary with the timeline, all the correspondence as one

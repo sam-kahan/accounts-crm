@@ -746,6 +746,18 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — Send again
+- **Every email sent from a complaint has Send again…** (open complaints):
+  `GET /:id/emails/:emailId/resend` builds it without sending (no AI): the
+  same people (ours left off, the send copies them in again), subject and
+  message, a line after the greeting saying why it has come again ("as the
+  documents did not come through with it" when it says something is
+  attached), the documents ticked by `pickAttachments`, and a `caution` from
+  `staleNoReply` when it complains of no reply to something only days old.
+  It opens in the Send window, which now shows a `caution`. The Liverpool
+  complaint's first email went before attachments existed and couldn't be
+  sent again.
+
 ### 2026-09-29 — the AI chooses what to attach; no "no response" to yesterday's email
 - **Every AI draft chooses its own attachments.** The prompt lists the
   complaint's DOCUMENTS ON FILE (`gatherContext` → `docList`) and the AI
