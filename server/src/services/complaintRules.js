@@ -296,6 +296,11 @@ export function trackOpen(t) {
   return (t?.state || 'open') === 'open' && !['resolved', 'closed'].includes(t?.stage);
 }
 
+// A value for a sentence: an ISO date as ukDate, anything else unchanged.
+export function readable(v) {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? ukDate(v) : v;
+}
+
 // A date as people read it in a sentence: "Thu 1 Oct 2026".
 export function ukDate(iso) {
   if (!iso) return iso;
@@ -584,7 +589,7 @@ export function describeChanges(before, after) {
     if (col === 'description') out.push('details edited');
     else if (col === 'organisation_id') out.push(b ? 'linked to a saved organisation' : 'organisation link removed');
     else if (col === 'org_type') out.push(`type: ${ruleFor(a).label} → ${ruleFor(b).label}`);
-    else out.push(`${label}: ${a ?? '(blank)'} → ${b ?? '(blank)'}`);
+    else out.push(`${label}: ${readable(a) ?? '(blank)'} → ${readable(b) ?? '(blank)'}`);
   }
   return out;
 }

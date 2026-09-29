@@ -1,3 +1,4 @@
+import { readable } from '../services/complaintRules.js';
 import { Router } from 'express';
 import { query } from '../db/pool.js';
 import { asyncHandler } from '../lib/http.js';
@@ -78,7 +79,7 @@ router.get(
         [like],
       );
       for (const r of rows) {
-        results.push({ kind: 'Task', id: r.id, url: '/tasks', title: r.title, detail: [r.due_date && `due ${r.due_date}`, r.status === 'done' ? 'done' : null].filter(Boolean).join(' · ') });
+        results.push({ kind: 'Task', id: r.id, url: '/tasks', title: r.title, detail: [r.due_date && `due ${readable(r.due_date)}`, r.status === 'done' ? 'done' : null].filter(Boolean).join(' · ') });
       }
     }
 

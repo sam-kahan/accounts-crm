@@ -6,7 +6,7 @@ import { config, complaintInboxAddress } from '../config.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/auth.js';
-import { describeChanges, theOmbudsman, trackOpen, isStage2Request } from '../services/complaintRules.js';
+import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { recheckComplaint, undoRecheck, startRecheck, recheckStatus } from '../services/complaintRecheck.js';
@@ -480,21 +480,21 @@ router.get(
     if (c.property) lines.push(`Property / account: ${c.property}`);
     if (c.reference) lines.push(`Their reference: ${c.reference}`);
     lines.push(`Subject: ${c.subject}`);
-    lines.push(`Raised: ${c.raised_on}   Stage: ${c.stage}   Status: ${c.label}`);
-    if (c.acknowledged_on) lines.push(`Acknowledged: ${c.acknowledged_on}`);
-    if (c.responded_on) lines.push(`Their response: ${c.responded_on}`);
-    if (c.ombudsman_from) lines.push(`Can refer from: ${c.ombudsman_from}`);
-    lines.push(`Refer by: ${c.ombudsman_deadline || 'n/a'}`);
+    lines.push(`Raised: ${readable(c.raised_on)}   Stage: ${c.stage}   Status: ${c.label}`);
+    if (c.acknowledged_on) lines.push(`Acknowledged: ${readable(c.acknowledged_on)}`);
+    if (c.responded_on) lines.push(`Their response: ${readable(c.responded_on)}`);
+    if (c.ombudsman_from) lines.push(`Can refer from: ${readable(c.ombudsman_from)}`);
+    lines.push(`Refer by: ${readable(c.ombudsman_deadline) || 'n/a'}`);
     if (c.rule.procedureRef) lines.push(`Their procedure: ${c.rule.procedureRef}`);
     for (const p of c.parties || []) {
       lines.push('');
       lines.push(`Also complained to: ${p.org_name} (${p.rule.label})${p.relationship ? `, ${p.relationship}` : ''}`);
       if (p.reference) lines.push(`  Their reference: ${p.reference}`);
-      lines.push(`  Raised: ${p.raised_on}   Stage: ${p.stage}   Status: ${p.label}`);
-      if (p.acknowledged_on) lines.push(`  Acknowledged: ${p.acknowledged_on}`);
-      if (p.responded_on) lines.push(`  Their response: ${p.responded_on}`);
-      if (p.final_response_on) lines.push(`  Their final response: ${p.final_response_on}`);
-      lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${p.ombudsman_deadline || 'n/a'}`);
+      lines.push(`  Raised: ${readable(p.raised_on)}   Stage: ${p.stage}   Status: ${p.label}`);
+      if (p.acknowledged_on) lines.push(`  Acknowledged: ${readable(p.acknowledged_on)}`);
+      if (p.responded_on) lines.push(`  Their response: ${readable(p.responded_on)}`);
+      if (p.final_response_on) lines.push(`  Their final response: ${readable(p.final_response_on)}`);
+      lines.push(`  Refer to: ${p.rule.ombudsman}; refer by: ${readable(p.ombudsman_deadline) || 'n/a'}`);
     }
     lines.push('');
     lines.push('GROUNDS FOR REFERRAL');
@@ -504,7 +504,7 @@ router.get(
     lines.push('CASE TIMELINE');
     lines.push('-'.repeat(48));
     for (const e of [...ctx.events].reverse()) {
-      lines.push(`${e.event_date}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
+      lines.push(`${readable(e.event_date)}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
     }
     lines.push('');
     lines.push('CORRESPONDENCE LOG');
@@ -1108,9 +1108,9 @@ router.post(
     // Replacing a date already recorded is allowed, but never silently.
     const replacing =
       d.as === 'acknowledgement' && complaint.acknowledged_on && complaint.acknowledged_on !== on
-        ? `acknowledged: ${complaint.acknowledged_on} → ${on}`
+        ? `acknowledged: ${readable(complaint.acknowledged_on)} → ${readable(on)}`
         : d.as === 'response' && complaint.responded_on && complaint.responded_on !== on
-          ? `responded: ${complaint.responded_on} → ${on}`
+          ? `responded: ${readable(complaint.responded_on)} → ${readable(on)}`
           : null;
     const cid = req.params.id;
     if (replacing) {

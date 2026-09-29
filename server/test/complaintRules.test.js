@@ -222,7 +222,7 @@ test('describeChanges lists each corrected field with old and new values', () =>
   assert.deepEqual(out, [
     'their reference: (blank) → X1',
     'details edited',
-    'acknowledged: 2026-09-30 → 2026-09-29',
+    'acknowledged: Wed 30 Sep 2026 → Tue 29 Sep 2026',
   ]);
   assert.deepEqual(describeChanges({ subject: 's' }, { subject: 's' }), []);
 });

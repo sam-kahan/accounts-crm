@@ -3,6 +3,7 @@ import {
   effectiveRule,
   computeResponseDue,
   computeOmbudsmanDeadline,
+  readable,
 } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
@@ -79,10 +80,10 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
     const moves = [];
     const label = r.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
     if ((r.response_due || null) !== (after.response_due || null)) {
-      moves.push(`${label} ${r.response_due || '(none)'} → ${after.response_due || '(none)'}`);
+      moves.push(`${label} ${readable(r.response_due) || '(none)'} → ${readable(after.response_due) || '(none)'}`);
     }
     if ((r.ombudsman_deadline || null) !== (after.ombudsman_deadline || null)) {
-      moves.push(`refer-by date ${r.ombudsman_deadline || '(none)'} → ${after.ombudsman_deadline || '(none)'}`);
+      moves.push(`refer-by date ${readable(r.ombudsman_deadline) || '(none)'} → ${readable(after.ombudsman_deadline) || '(none)'}`);
     }
     if (moves.length) {
       changed += 1;
@@ -109,10 +110,10 @@ export async function recomputeForOrganisation(orgId, extraIds = [], { by = 'Aut
     const moves = [];
     const label = p.stage === 'stage_2' ? 'Stage 2 response due' : 'Stage 1 outcome due';
     if ((p.response_due || null) !== (after.response_due || null)) {
-      moves.push(`${label} ${p.response_due || '(none)'} → ${after.response_due || '(none)'}`);
+      moves.push(`${label} ${readable(p.response_due) || '(none)'} → ${readable(after.response_due) || '(none)'}`);
     }
     if ((p.ombudsman_deadline || null) !== (after.ombudsman_deadline || null)) {
-      moves.push(`refer-by date ${p.ombudsman_deadline || '(none)'} → ${after.ombudsman_deadline || '(none)'}`);
+      moves.push(`refer-by date ${readable(p.ombudsman_deadline) || '(none)'} → ${readable(after.ombudsman_deadline) || '(none)'}`);
     }
     if (moves.length) {
       await query(
