@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatDate } from '../api';
+import { useAuth } from '../auth';
 
 // ---------------------------------------------------------------------------
 // The Complaints page's view of the email automation: whether it is working
@@ -20,6 +21,8 @@ const ago = (iso) => {
 };
 
 export default function EmailAutomation({ onChanged }) {
+  const { canEdit } = useAuth();
+  const isAdmin = canEdit('admin');
   const [a, setA] = useState(null);
   const [err, setErr] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -151,7 +154,7 @@ export default function EmailAutomation({ onChanged }) {
           <div style={{ fontSize: 13 }}>
             <strong>Watching:</strong>{' '}
             {a.watching.length ? a.watching.join(', ') : <span className="muted">no mailbox yet</span>}{' '}
-            {!editing && (
+            {!editing && isAdmin && (
               <button className="btn-ghost btn-sm" onClick={() => { setMailboxes(a.watching.join(', ') || 'accounts@greenco.co.uk'); setEditing(true); }}>
                 Change
               </button>
@@ -187,6 +190,7 @@ export default function EmailAutomation({ onChanged }) {
                   complaints it finds for you to import or skip. Nothing is created until you choose.
                   It looks at the last 12 months only (an ombudsman won’t normally take anything older), and
                   never reads the same thread twice, so running it again only reads new threads.
+                  {!isAdmin && ' You can search your own mailbox and the watched ones; an administrator can search others.'}
                 </div>
                 <div className="btn-row">
                   <input value={scanBoxes} onChange={(e) => setScanBoxes(e.target.value)} style={{ maxWidth: 380 }}

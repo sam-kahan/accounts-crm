@@ -223,8 +223,8 @@ export async function backfillAccountNumbers({ limit = 20 } = {}) {
 
 
 async function mailboxesToSearch() {
-  const { watchedMailboxes, getSetting } = await import('./settings.js');
-  const past = (await getSetting('past_scan'))?.mailboxes || [];
+  const { watchedMailboxes, getSetting, mailboxAllowed } = await import('./settings.js');
+  const past = ((await getSetting('past_scan'))?.mailboxes || []).filter(mailboxAllowed);
   return [...new Set([...(await watchedMailboxes()), config.ms.mailbox, ...past].filter(Boolean).map((m) => m.toLowerCase()))];
 }
 

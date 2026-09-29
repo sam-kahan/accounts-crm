@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
 import { config } from '../config.js';
 import { ruleFor, ombudsmanUrlFor } from '../services/complaintRules.js';
 import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
@@ -386,7 +386,7 @@ router.get(
     // Always a download, never rendered inline on our origin (see complaints).
     res.setHeader('Content-Type', doc.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', attachmentDisposition(doc.filename, 'procedure'));
     doc.stream().pipe(res);
   }),
 );

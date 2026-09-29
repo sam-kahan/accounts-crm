@@ -379,7 +379,7 @@ export default function Users() {
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(u)}>Edit</button>
-                    {u.active && !u.last_login_at && u.invited_at && (
+                    {u.active && !u.last_login_at && !u.password_set_at && u.invited_at && (
                       <button className="btn-ghost btn-sm" disabled={Boolean(resending)} onClick={() => resend(u)}>
                         {resending === u.id ? 'Sending…' : 'Resend invite'}
                       </button>

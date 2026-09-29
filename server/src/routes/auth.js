@@ -93,6 +93,22 @@ router.post(
 );
 
 // --- password reset --------------------------------------------------------
+const FORGOT_WINDOW_MS = 15 * 60 * 1000;
+const forgotSeen = new Map(); // key -> { count, first }
+function forgotLimited(key, max) {
+  const now = Date.now();
+  if (forgotSeen.size > 5000) {
+    for (const [k, r] of forgotSeen) if (now - r.first > FORGOT_WINDOW_MS) forgotSeen.delete(k);
+  }
+  const rec = forgotSeen.get(key);
+  if (!rec || now - rec.first > FORGOT_WINDOW_MS) {
+    forgotSeen.set(key, { count: 1, first: now });
+    return false;
+  }
+  rec.count += 1;
+  return rec.count > max;
+}
+
 const forgotInput = z.object({ email: z.string().email() });
 const resetInput = z.object({
   token: z.string().min(10),
@@ -105,6 +121,12 @@ router.post(
   '/forgot',
   asyncHandler(async (req, res) => {
     const { email } = parse(forgotInput, req.body);
+    // At most a few a quarter-hour per address and per IP: a reset email
+    // can't be used to flood someone's inbox or spend the mail quota.
+    // Refused quietly (the same answer), so it says nothing about the address.
+    if (forgotLimited(`ip:${req.ip}`, 10) || forgotLimited(`to:${email.toLowerCase()}`, 3)) {
+      return res.json({ ok: true });
+    }
     const { rows } = await query(
       'SELECT id, email FROM users WHERE lower(email) = lower($1)',
       [email],
@@ -119,12 +141,12 @@ router.post(
         [user.id, sha256(token)],
       );
       const link = `${config.appUrl}/reset?token=${token}`;
-      try {
-        await sendPasswordResetEmail({ to: user.email, link });
-      } catch (err) {
+      // Not waited for: the answer takes the same time whether or not the
+      // address has an account.
+      sendPasswordResetEmail({ to: user.email, link }).catch((err) => {
         // eslint-disable-next-line no-console
         console.error('Password reset email failed:', err.message);
-      }
+      });
       if (process.env.NODE_ENV !== 'production') devToken = token;
     }
     res.json({ ok: true, ...(devToken ? { devToken } : {}) });

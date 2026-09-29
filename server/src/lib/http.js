@@ -38,3 +38,16 @@ export const parse = (schema, data) => {
   }
   return result.data;
 };
+
+// Content-Disposition for a download, safe for any file name. A header can
+// only carry Latin-1, so a name with "’" or "–" (Outlook puts them in
+// attachment names) made the download fail; the plain filename is an ASCII
+// copy and filename* carries the real name (RFC 6266 / 5987).
+export function attachmentDisposition(name, fallback = 'download') {
+  const real = String(name || '').replace(/[\r\n"\\]/g, '').trim() || fallback;
+  const ascii = real.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '').replace(/[–—]/g, '-')
+    .replace(/[^\x20-\x7e]/g, '_');
+  const encoded = encodeURIComponent(real).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}

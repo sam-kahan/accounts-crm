@@ -2,8 +2,9 @@ import { Router } from 'express';
 import fs from 'node:fs/promises';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
+import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
 import { zipStore, safeName } from '../lib/zip.js';
@@ -19,7 +20,7 @@ import { decorate, decorateMany, gatherContext, listEvents } from '../services/c
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
-import { getSetting, setSetting, watchedMailboxes } from '../services/settings.js';
+import { getSetting, setSetting, watchedMailboxes, mailboxAllowed, allowedMailboxList } from '../services/settings.js';
 import { backfillAccountNumbers, searchAccountEmails, searchStatus, searchNow, dropDigitSlips } from '../services/accountNumbers.js';
 import { startScan, scanStatus, importInBackground, linkInBackground, setAutoImport, runAutoImport, skipCandidate, onFileFor, autoPlan, importsPaused, relatedSkipped } from '../services/pastComplaints.js';
 import { findExistingComplaint, groupCandidates, mergeExtracted, sameIssue, matchOrgName, findOrgByName, sameAccount, sameOrgName, PARTY_COLS } from '../services/orgMatch.js';
@@ -785,7 +786,9 @@ async function packText(ctx, grounds, { outward = false, track = null } = {}) {
 }
 
 // Build an ombudsman/ADR referral pack (facts + timeline + AI-drafted grounds).
-router.get(
+// A POST, so it needs edit access: it is a paid AI call, and a GET would let
+// view-only access spend credits.
+router.post(
   '/:id/referral-pack',
   asyncHandler(async (req, res) => {
     const ctx = await gatherContext(req.params.id);
@@ -875,7 +878,7 @@ router.get(
     const files = await evidenceFiles(ctx);
     const zip = zipStore(files);
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName(`${c.ref_code} evidence for the ombudsman`)}.zip"`);
+    res.setHeader('Content-Disposition', attachmentDisposition(`${safeName(`${c.ref_code} evidence for the ombudsman`)}.zip`));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(zip);
   }),
@@ -1161,7 +1164,7 @@ router.get(
     // origin. `nosniff` stops the browser second-guessing the content type.
     res.setHeader('Content-Type', a.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', `attachment; filename="${a.filename.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', attachmentDisposition(a.filename, 'attachment'));
     a.stream().pipe(res);
   }),
 );
@@ -1337,10 +1340,24 @@ const EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 const watchInput = z.object({
   mailboxes: z.array(z.string().trim().toLowerCase().regex(EMAIL, 'Not an email address')).max(10),
 });
+function refuseMailboxes(list) {
+  const bad = list.filter((m) => !mailboxAllowed(m));
+  if (!bad.length) return;
+  const rule = allowedMailboxList().length
+    ? 'isn’t one the server allows (MS_ALLOWED_MAILBOXES)'
+    : `isn’t an @${config.complaintEmail.domain} mailbox`;
+  throw new HttpError(400, `${bad.join(', ')} ${rule}.`);
+}
 router.put(
   '/automation',
   asyncHandler(async (req, res) => {
     const d = parse(watchInput, req.body);
+    // Watching a mailbox copies its complaint mail onto complaints everyone
+    // with the section can read, so choosing one is an administrator's call.
+    if (!can(req.user, 'admin', 'edit')) {
+      throw new HttpError(403, 'Only an administrator can change which mailboxes are watched.');
+    }
+    refuseMailboxes(d.mailboxes);
     await setSetting('watch_mailboxes', { mailboxes: [...new Set(d.mailboxes)] }, who(req));
     res.json({ watching: await watchedMailboxes() });
   }),
@@ -1356,6 +1373,17 @@ router.post(
   '/past/scan',
   asyncHandler(async (req, res) => {
     const d = parse(scanInput, req.body);
+    refuseMailboxes(d.mailboxes);
+    // Anyone may search their own mailbox and the ones already watched; any
+    // other is an administrator's choice (its mail lands on complaints).
+    if (!can(req.user, 'admin', 'edit')) {
+      const own = new Set([String(req.user?.email || '').toLowerCase(), ...(await watchedMailboxes()),
+        String(config.ms.mailbox || '').toLowerCase()].filter(Boolean));
+      const other = d.mailboxes.filter((m) => !own.has(m));
+      if (other.length) {
+        throw new HttpError(403, `You can search your own mailbox and the watched ones. An administrator can search ${other.join(', ')}.`);
+      }
+    }
     try {
       await startScan({ ...d, by: who(req) });
     } catch (err) {

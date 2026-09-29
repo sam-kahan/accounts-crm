@@ -393,7 +393,7 @@ export const api = {
     outboxWent: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}/went`, { method: 'POST' }),
     discardOutbox: (id, outboxId) => request(`/complaints/${id}/outbox/${outboxId}`, { method: 'DELETE' }),
     checkStatus: (id) => request(`/complaints/${id}/check-status`, { method: 'POST' }),
-    referralPack: (id) => request(`/complaints/${id}/referral-pack`),
+    referralPack: (id) => request(`/complaints/${id}/referral-pack`, { method: 'POST' }),
     // The referral as an email to the ombudsman (where it takes one), drafted
     // from the facts on file (and the pack's grounds when built); sent in the
     // background with the evidence attached, and the part moves to the

@@ -746,6 +746,27 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a security review
+- **Which mailboxes can be read** (`settings.js#mailboxAllowed`): the Graph
+  connection reaches every mailbox in the tenant, so a chosen mailbox must be
+  in `MS_ALLOWED_MAILBOXES` when set, otherwise on our own domain; checked
+  when chosen and whenever the list is read (watcher, reference search,
+  resumed past search). Changing the watched list is admin-only; anyone may
+  search their own mailbox and the watched ones for past complaints, any
+  other is an administrator's choice. (Also worth limiting the Azure app to
+  those mailboxes with an Exchange application access policy.)
+- **Resend invite** is refused for an account already in use (password set
+  or signed in; they use Forgot password), and the link is only ever shown
+  for an account made by invitation.
+- **Forgot password** is limited per address (3) and per IP (10) every 15
+  minutes, answered the same either way, and doesn't wait for the email.
+- **Cross-site requests refused**: a non-GET `/api` request whose `Origin`
+  isn't this app (or `CORS_ORIGIN`, or the same host) gets 403. SameSite=Lax
+  counts every greenco.co.uk site as the same site.
+- The referral pack (a paid AI call) is a POST, so it needs edit access.
+- Downloads with names like "Stage 2 – Octopus’s reply.pdf" work
+  (`lib/http.js#attachmentDisposition`: ASCII name plus `filename*`).
+
 ### 2026-09-29 — fixes from a review of procedure research and reading
 - **No figure without its quote** (`orgResearch.js#normaliseProfile`): a
   date-setting figure (the day counts, clock, ombudsman wait and time

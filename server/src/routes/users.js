@@ -233,7 +233,17 @@ router.post(
     const user = rows[0];
     if (!user) throw new HttpError(404, 'User not found');
     if (!user.active) throw new HttpError(400, 'That account is deactivated.');
+    // An invitation is for someone who hasn't started. For an account in use
+    // it would hand whoever pressed it a way into a colleague's login:
+    // they use "Forgot password" on the sign-in page instead, which only
+    // ever goes to their own inbox.
+    if (user.password_set_at || user.last_login_at) {
+      throw new HttpError(400, 'They have already set a password. If they have forgotten it, they can use “Forgot password” on the sign-in page.');
+    }
     const invite = await issueInvite(user, req.user?.name || req.user?.email);
+    // The link itself is shown only for an account made by invitation (when
+    // the email couldn't go); any other account's link goes by email only.
+    if (!user.created_by_invite) delete invite.link;
     res.json({ ...decorate(user), invite });
   }),
 );

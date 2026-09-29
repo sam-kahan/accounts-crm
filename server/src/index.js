@@ -94,6 +94,26 @@ app.use(
   }),
 );
 
+// A change made from a browser must come from this app's own pages. The
+// session cookie is SameSite=Lax, and "same site" includes every
+// greenco.co.uk site on the box, so a form on one of them could otherwise
+// post here with a signed-in person's cookie. Browsers always send Origin on
+// such a request; one with no Origin is a server (cron, webhook) or a tool,
+// which the cookie doesn't reach and which has its own key.
+const APP_ORIGIN = (() => { try { return new URL(config.appUrl).origin; } catch { return null; } })();
+const LOCAL_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
+app.use('/api', (req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (!origin) return next();
+  let host = null;
+  try { host = new URL(origin).host; } catch { /* malformed: refused below */ }
+  const ok = origin === APP_ORIGIN || config.corsOrigins.includes(origin) || (host && host === req.get('host'))
+    || (process.env.NODE_ENV !== 'production' && LOCAL_ORIGIN.test(origin));
+  if (ok) return next();
+  return res.status(403).json({ error: 'That request didn’t come from this app.' });
+});
+
 const PgSession = connectPgSimple(session);
 app.use(
   session({

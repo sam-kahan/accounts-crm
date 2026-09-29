@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
 import { config } from '../config.js';
 import { monthRange, monthOf, monthLabel } from '../lib/dates.js';
 import { withNumbers, toPence, fromPence } from '../lib/money.js';
@@ -967,10 +967,7 @@ router.get(
     // would otherwise execute as script on our own origin.
     res.setHeader('Content-Type', doc.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${(doc.filename || 'invoice').replace(/"/g, '')}"`,
-    );
+    res.setHeader('Content-Disposition', attachmentDisposition(doc.filename, 'invoice'));
     documentStream(doc.storage_path).pipe(res);
   }),
 );

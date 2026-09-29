@@ -7,7 +7,7 @@ import { parseImportedComplaint, triageComplaintThread } from './complaintAssist
 import { reconstructComplaint, belongsToComplaint, cleanQuickReading } from './complaintReconstruct.js';
 import { domainOf } from './mailWatch.js';
 import { storeEmail } from './emailIngest.js';
-import { getSetting, setSetting } from './settings.js';
+import { getSetting, setSetting, mailboxAllowed } from './settings.js';
 import { createComplaint } from './complaintCreate.js';
 import { findOrgByName, groupCandidates, mergeExtracted, findExistingMatch, postcodeOf, sameIssue, PARTY_COLS } from './orgMatch.js';
 import { processHistoricalEmail, processEmail } from './complaintEmailProcessor.js';
@@ -787,7 +787,7 @@ export async function resumeInterruptedScan() {
   }
   running = true;
   await progress({ stage: 'Carrying on after a restart' });
-  runScan({ mailboxes: s.mailboxes || [], months: s.months || 12, carry: { read: s.read || 0, found: s.found || 0 } })
+  runScan({ mailboxes: (s.mailboxes || []).filter(mailboxAllowed), months: s.months || 12, carry: { read: s.read || 0, found: s.found || 0 } })
     .catch(async (err) => progress({ status: 'failed', error: err.message }))
     .finally(() => { running = false; });
   return true;
