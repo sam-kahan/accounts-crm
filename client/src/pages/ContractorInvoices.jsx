@@ -863,6 +863,11 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
     excludeId: invoice.id,
   });
 
+  // The total the save will cost from: the stated one only if it was edited,
+  // otherwise the server re-derives it from net + VAT (see totalTouched), so
+  // the preview must too or it quotes the old total's commission.
+  const pricedTotal = totalTouched ? form.total_amount : '';
+
   // The deal as it stood when this invoice was logged, not the contractor's
   // deal today — the same snapshot the server recomputes from.
   const computed = useMemo(
@@ -870,14 +875,14 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
       previewCommission(invoice, {
         net: form.net_amount,
         vat: form.vat_amount,
-        total: form.total_amount,
+        total: pricedTotal,
         commissionable: form.commissionable_amount,
       }),
     [
       invoice,
       form.net_amount,
       form.vat_amount,
-      form.total_amount,
+      pricedTotal,
       form.commissionable_amount,
     ],
   );
@@ -1079,7 +1084,7 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
           onChange={(v) => set('commissionable_amount', v)}
           onNote={(v) => set('commissionable_note', v)}
           contractor={invoice}
-          amounts={{ net: form.net_amount, vat: form.vat_amount, total: form.total_amount }}
+          amounts={{ net: form.net_amount, vat: form.vat_amount, total: pricedTotal }}
         />
 
         <div className={`calc-box ${overridden ? 'overridden' : ''}`}>
@@ -1092,7 +1097,7 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
               {describePart(form.commissionable_amount, form.commissionable_note, invoice, {
                 net: form.net_amount,
                 vat: form.vat_amount,
-                total: form.total_amount,
+                total: pricedTotal,
               })}
               {overridden ? ` · that rate gives ${formatMoney(computed)}` : ''}
             </div>

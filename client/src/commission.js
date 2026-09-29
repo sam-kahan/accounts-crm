@@ -40,12 +40,25 @@ function percentOfPence(pence, ratePercent) {
 // this figure is only sent if the user deliberately overrides it. It is the
 // server's commissionPence() line for line, in whole pence, so the two agree
 // to the penny.
+// The amounts as the server settles them before costing anything
+// (server/src/services/commission.js#reconcileAmounts): a blank net is the
+// total less the VAT, a blank total is the net plus the VAT.
+function reconcile({ net, vat, total }) {
+  let netP = toPence(net);
+  const vatP = toPence(vat);
+  let totalP = toPence(total);
+  if (netP === null && totalP !== null) netP = totalP - (vatP ?? 0);
+  if (totalP === null && netP !== null) totalP = netP + (vatP ?? 0);
+  if (netP === null && totalP === null) {
+    netP = 0;
+    totalP = vatP ?? 0;
+  }
+  return { netP: Math.max(0, netP), totalP: Math.max(0, totalP) };
+}
+
 export function previewCommission(contractor, { net, vat, total, commissionable }) {
   if (!contractor) return 0;
-  const netP = toPence(net) ?? 0;
-  const vatP = toPence(vat) ?? 0;
-  const statedTotal = toPence(total);
-  const totalP = statedTotal === null ? netP + vatP : statedTotal;
+  const { netP, totalP } = reconcile({ net, vat, total });
   const whole = Math.max(0, contractor.commission_on === 'gross' ? totalP : netP);
   // The part of the invoice carrying commission, when it isn't all of it.
   const partP = toPence(commissionable);
@@ -74,9 +87,8 @@ export function previewCommission(contractor, { net, vat, total, commissionable 
 // whichever the contractor's deal takes the rate on. Matches
 // commissionableCeiling() on the server.
 export function ceilingFor(contractor, { net, vat, total }) {
-  const netN = Number(net || 0);
-  const totalN = Number(total || 0) || netN + Number(vat || 0);
-  return contractor?.commission_on === 'gross' ? totalN : netN;
+  const { netP, totalP } = reconcile({ net, vat, total });
+  return (contractor?.commission_on === 'gross' ? totalP : netP) / 100;
 }
 
 // One line saying what the rate was applied to, for the commission callout —

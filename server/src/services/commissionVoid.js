@@ -1,7 +1,7 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
-import { cancelInvoice } from './invoicesManager.js';
+import { cancelInvoice, findInvoiceByReference } from './invoicesManager.js';
 
 // ---------------------------------------------------------------------------
 // Reversing a month end.
@@ -44,13 +44,42 @@ export async function releaseLinesOf(id, client = { query }) {
 // reached the other side has nothing standing against it.
 export async function withdrawExternally(id, reason) {
   const { rows } = await query(
-    `SELECT id, invoice_number, status, external_id, external_status
+    `SELECT id, invoice_number, status, region, external_id, external_status, external_error
        FROM commission_invoices WHERE id = $1`,
     [id],
   );
   const row = rows[0];
   if (!row) throw new HttpError(404, 'Commission invoice not found');
 
+  // A push that failed may still have landed (it timed out after they had
+  // created it), so an invoice with a push error is looked up by our
+  // reference before it is taken as never having got there.
+  if (!row.external_id && row.external_error && config.invoicing.enabled) {
+    try {
+      const found = await findInvoiceByReference(row.invoice_number, row.region);
+      if (!found) {
+        await query('UPDATE commission_invoices SET external_error = NULL WHERE id = $1', [id]);
+        return { skipped: 'It never reached Greenco Invoicing.' };
+      }
+      await query(
+        `UPDATE commission_invoices SET
+           external_id = $2, external_number = $3, external_url = $4,
+           external_status = $5, external_total = $6, external_company_id = $7,
+           external_synced_at = now()
+         WHERE id = $1`,
+        [id, found.external_id, found.external_number, found.external_url,
+          found.external_status, found.external_total, found.external_company_id],
+      );
+      row.external_id = found.external_id;
+      row.external_status = found.external_status;
+    } catch (err) {
+      await query('UPDATE commission_invoices SET external_error = $2 WHERE id = $1', [
+        id,
+        `Couldn’t check whether it reached Greenco Invoicing: ${err.message}`,
+      ]).catch(() => {});
+      return { error: err.message };
+    }
+  }
   if (!row.external_id) return { skipped: 'It never reached Greenco Invoicing.' };
   if (row.external_status === 'cancelled') {
     return { skipped: 'It is already cancelled in Greenco Invoicing.', cancelled: false };

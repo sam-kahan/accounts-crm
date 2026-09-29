@@ -195,6 +195,26 @@ export async function fetchInvoiceState(externalId) {
   return data.invoice;
 }
 
+// Find the invoice a push created, by our GC-COM reference, in the company
+// the region raises from. For a push that timed out: it may have landed
+// there without us learning its id, and pushing again to find out would
+// create (and possibly send) an invoice nobody wants. Read-only. Null when
+// there is no such invoice.
+export async function findInvoiceByReference(reference, region) {
+  const companyId = companyIdFor(region);
+  const qs = new URLSearchParams({ companyId: String(companyId), reference: String(reference) });
+  const data = await call(`/api/external/invoices?${qs}`);
+  if (!data.invoice) return null;
+  return {
+    external_company_id: companyId,
+    external_id: String(data.invoice.id),
+    external_number: data.invoice.invoiceNumber,
+    external_url: data.invoice.url,
+    external_status: data.invoice.status,
+    external_total: data.invoice.grandTotal,
+  };
+}
+
 // Withdraw an invoice over there, because it has been voided here.
 //
 // Cancelling is not deleting: the contractor already has the emailed PDF, so

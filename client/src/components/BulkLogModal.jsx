@@ -424,6 +424,34 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
       patch(row.id, { state: 'saving', error: null });
       try {
         const f = row.fields;
+        // Asked again now rather than trusting the check made while it was
+        // read: an earlier row of THIS batch may be the same invoice, and an
+        // invoice with no number isn't stopped by the unique index, so both
+        // would be logged and its commission claimed twice.
+        // eslint-disable-next-line no-await-in-loop
+        const again = await api.contractorInvoices
+          .duplicates({
+            contractor_id: f.contractor_id,
+            invoice_number: f.invoice_number,
+            invoice_date: f.invoice_date,
+            net_amount: f.net_amount,
+            vat_amount: f.vat_amount,
+            total_amount: f.total_amount,
+          })
+          .catch(() => null);
+        const justLogged = new Set(done.map((d) => String(d.id)));
+        const sameBatch = again?.similar?.find((m) => justLogged.has(String(m.invoice.id)))?.invoice;
+        if (again?.exact || sameBatch) {
+          // Pressing Log again takes it: by then it has been looked at.
+          patch(row.id, {
+            state: 'error',
+            duplicates: again,
+            error: again.exact
+              ? `Already logged as ${again.exact.ref || again.exact.invoice_number}.`
+              : `Looks like ${sameBatch.ref || 'the invoice'} just logged from this batch (same date and amount), so it was held back. If it really is a separate invoice, press Log again.`,
+          });
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         const saved = await api.contractorInvoices.create(
           {

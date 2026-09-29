@@ -713,6 +713,33 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of commission
+- **A late invoice is never carried into a month already invoiced**
+  (`monthOpenSql` in `services/commission.js`, used by `monthEndLinesSql` and
+  the month-end summary): it waits for the next month end not yet raised for
+  that contractor and office, so no month can be invoiced twice.
+- **Status never moves backwards**: a nightly read of Greenco Invoicing that
+  still says `draft` leaves an invoice we hold as `sent` as sent
+  (`applyExternalState`).
+- **A void after a push that timed out is found and cancelled there**: the
+  push may have landed without our learning its id, so an invoice with a push
+  error is looked up by its GC-COM reference
+  (`invoicesManager.js#findInvoiceByReference`,
+  `GET /api/external/invoices?companyId=&reference=` in
+  `sam-kahan/invoices-manager`: written, awaiting the owner to ship it there;
+  until it exists the check fails visibly and is retried nightly) before being
+  taken as never sent. Never
+  re-pushed to find out: that would create an invoice. `needsWithdrawing()`
+  counts these until checked.
+- **The postcode is the last one in the address** (`findOutwardCode`):
+  "Unit A1 1ST FLOOR, … L2 2BT" is L2, not A1.
+- **The forms' commission preview settles blank amounts as the server does**
+  (a blank net is the total less VAT), and Amend previews from the total the
+  save will use (re-derived from net + VAT unless Total was edited).
+- **A batch can't log the same invoice twice**: each row is checked again just
+  before it is saved, so a numberless twin of a row logged moments earlier is
+  held back (pressing Log again takes it, once looked at).
+
 ### 2026-09-29 — Send doesn't make you wait: emails go out in the background
 - **Pressing Send answers at once** (`POST /complaints/:id/send-email` → 202).
   The email is queued in `complaint_outbox` (migration `037`) and

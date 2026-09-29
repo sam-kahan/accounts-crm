@@ -283,10 +283,20 @@ export default function CommissionInvoiceDetail() {
           month end goes out they are holding two. Say so at the top. */}
       {inv.needs_withdrawing && (
         <div className="inline-note warn no-print" style={{ marginBottom: 12 }}>
-          <strong>This invoice is voided here but still stands in Greenco Invoicing.</strong>{' '}
-          {inv.contractor_name} is still being chased for {inv.external_number || 'it'}.{' '}
+          {inv.external_id ? (
+            <>
+              <strong>This invoice is voided here but still stands in Greenco Invoicing.</strong>{' '}
+              {inv.contractor_name} is still being chased for {inv.external_number || 'it'}.{' '}
+            </>
+          ) : (
+            <>
+              <strong>This invoice is voided here, but its send to Greenco Invoicing failed</strong>{' '}
+              and it may have got there anyway. Checking finds it by {inv.invoice_number} and cancels it if it is
+              there.{' '}
+            </>
+          )}
           <button className="btn-ghost btn-sm" disabled={busy} onClick={withdrawFromInvoicing}>
-            Cancel it there now
+            {inv.external_id ? 'Cancel it there now' : 'Check and cancel it there'}
           </button>
         </div>
       )}

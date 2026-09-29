@@ -246,10 +246,23 @@ export function carriedLineSql(alias = 'i') {
 // What a month end covers: the period's own lines, minus any whose month has
 // already been invoiced (they have moved on), plus the ones carried in from
 // earlier months that were.
+// A late line is carried only into a month end that hasn't been raised yet
+// for that contractor and office: carried into one already invoiced, it would
+// invite a second invoice for that month. It waits for the next open one.
+export function monthOpenSql(alias, fromParam, toParam) {
+  return `NOT EXISTS (
+    SELECT 1 FROM commission_invoices raised
+     WHERE raised.contractor_id = ${alias}.contractor_id
+       AND raised.region = ${alias}.region
+       AND raised.status <> 'void'
+       AND raised.period_start <= ${toParam} AND raised.period_end >= ${fromParam}
+  )`;
+}
+
 export function monthEndLinesSql(alias, fromParam, toParam) {
   const carried = carriedLineSql(alias);
   return `((${alias}.invoice_date BETWEEN ${fromParam} AND ${toParam} AND NOT ${carried})
-        OR (${alias}.invoice_date < ${fromParam} AND ${carried}))`;
+        OR (${alias}.invoice_date < ${fromParam} AND ${carried} AND ${monthOpenSql(alias, fromParam, toParam)}))`;
 }
 
 // Where a logged invoice stands in the cycle. Derived rather than stored, so it
@@ -560,7 +573,12 @@ export function applyExternalState(current, state) {
         : externalStatus === 'paid'
           ? 'paid'
           : externalStatus === 'draft'
-            ? 'draft'
+            ? // Never backwards: an invoice we hold as sent (it was emailed
+              // from here, or their webhook said so) stays sent when a read
+              // of theirs still says draft.
+              current?.status === 'sent'
+              ? 'sent'
+              : 'draft'
             : 'sent';
 
   // When the money actually arrived, falling back to when it was marked paid.
@@ -591,7 +609,10 @@ export function applyExternalState(current, state) {
 // still being chased, and about to be joined by the corrected month end.
 export function needsWithdrawing(row) {
   return Boolean(
-    row && row.status === 'void' && row.external_id && row.external_status !== 'cancelled',
+    row && row.status === 'void' &&
+      // A push that failed may have landed without our learning its id: until
+      // it has been looked up, it may still be standing there.
+      ((row.external_id && row.external_status !== 'cancelled') || (!row.external_id && row.external_error)),
   );
 }
 

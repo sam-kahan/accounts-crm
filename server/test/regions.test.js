@@ -176,3 +176,8 @@ test('no default set leaves the answer exactly as the address gave it', () => {
   // A junk default is not a default.
   assert.equal(regionForJob('The flat above the shop', 'birmingham').region, null);
 });
+
+test('the address ends with its postcode: an earlier look-alike is not it', () => {
+  assert.equal(findOutwardCode('Unit A1 1ST FLOOR, 2 Moorfields, Liverpool L2 2BT'), 'L2');
+  assert.equal(findOutwardCode('Unit B1 2AB Business Park, Salford M5 4WT'), 'M5');
+});

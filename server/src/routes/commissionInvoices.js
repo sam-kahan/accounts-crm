@@ -118,8 +118,10 @@ router.get(
           -- mirror of ?unsent, and not month-scoped for the same reason — a
           -- contractor being chased for a withdrawn June invoice is exactly
           -- the one nobody would think to look for.
-          AND ($7 = '' OR (ci.status = 'void' AND ci.external_id IS NOT NULL
-                           AND (ci.external_status IS DISTINCT FROM 'cancelled')))
+          AND ($7 = '' OR (ci.status = 'void' AND (
+                 (ci.external_id IS NOT NULL AND ci.external_status IS DISTINCT FROM 'cancelled')
+                 -- a push that failed may have landed: looked up before it's settled
+                 OR (ci.external_id IS NULL AND ci.external_error IS NOT NULL))))
         ORDER BY ci.issue_date DESC, ci.invoice_number DESC`,
       [
         req.query.contractor_id || null,

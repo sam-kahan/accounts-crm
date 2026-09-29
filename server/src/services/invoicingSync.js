@@ -155,8 +155,9 @@ async function refreshOpen() {
 async function withdrawVoided() {
   const { rows } = await query(
     `SELECT id, invoice_number FROM commission_invoices
-      WHERE status = 'void' AND external_id IS NOT NULL
-        AND external_status IS DISTINCT FROM 'cancelled'
+      WHERE status = 'void'
+        AND ((external_id IS NOT NULL AND external_status IS DISTINCT FROM 'cancelled')
+             OR (external_id IS NULL AND external_error IS NOT NULL))
       ORDER BY issue_date DESC
       LIMIT $1`,
     [WITHDRAW_LIMIT],

@@ -46,6 +46,7 @@ export function isRegion(value) {
 // A UK outward code is 1–2 letters, then 1–2 digits, then an optional letter:
 // M1, M20, WA9, CH41, L1, EC1A. We only ever need the outward half.
 const OUTWARD = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\s*\d[A-Z]{2}\b/i;
+const OUTWARD_ALL = new RegExp(OUTWARD.source, 'gi');
 const OUTWARD_ALONE = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\b(?!\s*[A-Z]{2}\b)/i;
 
 // Pull the postcode out of a free-text address. Prefers a full postcode
@@ -53,7 +54,9 @@ const OUTWARD_ALONE = /\b([A-Z]{1,2})(\d{1,2})([A-Z]?)\b(?!\s*[A-Z]{2}\b)/i;
 // confuse with a flat number — "Flat 2B" is not a postcode.
 export function findOutwardCode(address) {
   const text = String(address || '').toUpperCase();
-  const full = text.match(OUTWARD);
+  // The LAST full postcode: an address ends with its postcode, and something
+  // earlier can look like one ("Unit A1 1ST FLOOR, … L2 2BT" is not A1).
+  const full = [...text.matchAll(OUTWARD_ALL)].pop();
   if (full) return `${full[1]}${full[2]}${full[3]}`;
 
   // No inward half. Accept a bare outward code only as the last word of the

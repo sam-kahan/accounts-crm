@@ -1150,3 +1150,16 @@ test('canRead takes the file types an invoice actually arrives as', () => {
   assert.equal(canRead('application/msword', 'invoice.doc'), false);
   assert.equal(canRead('application/zip', 'invoices.zip'), false);
 });
+
+test('a read that still says draft never moves our sent invoice backwards', () => {
+  const next = applyExternalState({ status: 'sent', external_status: 'draft' }, { status: 'draft' });
+  assert.equal(next.status, 'sent');
+  assert.equal(next.changed, false);
+  assert.equal(applyExternalState({ status: 'draft' }, { status: 'draft' }).status, 'draft');
+});
+
+test('a voided invoice whose push failed may still be standing there', () => {
+  assert.equal(needsWithdrawing({ status: 'void', external_id: null, external_error: 'didn’t respond in time' }), true);
+  assert.equal(needsWithdrawing({ status: 'void', external_id: null, external_error: null }), false);
+  assert.equal(needsWithdrawing({ status: 'sent', external_id: null, external_error: 'x' }), false);
+});

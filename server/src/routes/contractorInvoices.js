@@ -17,6 +17,7 @@ import {
   commissionStatus,
   commissionableCeiling,
   carriedLineSql,
+  monthOpenSql,
   monthEndLinesSql,
   amountsDisagree,
   invoiceTotalsFromLines,
@@ -436,7 +437,7 @@ async function summarise({ from, to }) {
        FROM contractors c
        JOIN contractor_invoices i
          ON i.contractor_id = c.id
-        AND (${inWindow} OR (i.invoice_date < $1 AND ${carried}))
+        AND (${inWindow} OR (i.invoice_date < $1 AND ${carried} AND ${monthOpenSql('i', '$1', '$2')}))
       GROUP BY c.id, c.name, c.email, i.region
       HAVING count(i.id) > 0
       ORDER BY pending_commission DESC, c.name ASC, i.region ASC`,
