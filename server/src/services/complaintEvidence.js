@@ -117,7 +117,7 @@ export function evidenceChecklist({ complaint, parties = [], emails = [], docs =
       } else if (s1Mail) {
         items.push({ key: 'response1', label: 'Their Stage 1 response', state: 'ok', detail: `Their email of ${ukDate(s1Mail.on)}: “${s1Mail.subject || '(no subject)'}”` });
       } else {
-        items.push({ key: 'response1', label: 'Their Stage 1 response', state: 'na', detail: 'None recorded: it moved on without one' });
+        items.push({ key: 'response1', label: 'Their Stage 1 response', state: 'na', detail: 'none recorded (it moved on to Stage 2 without one)' });
       }
     }
 

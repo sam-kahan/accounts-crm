@@ -3020,7 +3020,7 @@ function EvidenceCard({ c, onSaved }) {
               {asks.length > 0 && (
                 <details style={{ marginTop: 4 }}>
                   <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
-                    What {tr.rule.scheme.name} asks for
+                    What {/^the\b/i.test(tr.rule.scheme.name) ? '' : 'the '}{tr.rule.scheme.name} asks for
                   </summary>
                   <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>{asks.map((a) => <li key={a}>{a}</li>)}</ul>
                 </details>
