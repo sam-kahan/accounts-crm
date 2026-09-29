@@ -17,11 +17,13 @@ const STAGE_LABEL = {
 };
 
 function StatusBadge({ c }) {
-  if (c.needs_chasing) return <span className="badge red">{c.label}</span>;
+  // The labels are sentences ("No response, 47 working days overdue"): they
+  // wrap in their cell rather than pushing the table past its card.
+  if (c.needs_chasing) return <span className="badge red wrap">{c.label}</span>;
   if (c.status === 'responded') return <span className="badge ok">Response received</span>;
   if (c.status === 'resolved') return <span className="badge ok">Resolved</span>;
   if (c.status === 'closed') return <span className="badge grey">Closed</span>;
-  return <span className="badge amber">{c.label}</span>;
+  return <span className="badge amber wrap">{c.label}</span>;
 }
 
 // Map the AI's parsed import into the review form's initial values.

@@ -517,11 +517,12 @@ export function accountOrReference(c) {
 export function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));
+  // "Sep", as the server writes it (ukDate), not the browser's "Sept".
   return date.toLocaleDateString('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
-  });
+  }).replace('Sept', 'Sep');
 }
 
 export function daysUntil(d) {

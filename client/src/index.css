@@ -339,6 +339,7 @@ tbody tr:hover { background: #fafbfc; }
   font-weight: 600;
   white-space: nowrap;
 }
+.badge.wrap { white-space: normal; line-height: 1.35; border-radius: 8px; }
 .badge.green { background: var(--green-050); color: var(--green-600); }
 .badge.navy { background: #eef0f6; color: var(--navy); }
 .badge.grey { background: #f1f3f7; color: var(--text-muted); }
