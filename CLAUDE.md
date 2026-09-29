@@ -746,6 +746,31 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of the emailed referral
+- **What goes to the ombudsman**: a colleague's FORWARD of their email (or of
+  our Outlook-sent request) is evidence and goes; only an email between our
+  own people that carries nothing outside is left out, with its attachments
+  (`internalOnly`: all addresses ours, not read as theirs, no outside
+  address in its text). A removed organisation's timeline steps are left
+  out of the outward summary, which no longer lists documents (the email's
+  "Attached:" line names what was really sent); no "could not be included"
+  file goes out.
+- **Referring a further organisation** leads the summary with ITS part
+  (`packText(..., { track })`, `referralAttachments(id, partyId)`).
+- **Newest documents first** when not all fit: the form their procedure
+  asks for, added just before sending, is never the one left behind.
+- **Try again** rebuilds the attachment list from the body as written (it
+  was appended again on each retry), and refuses a referral whose part was
+  recorded as referred another way meanwhile, or whose organisation was
+  taken off.
+- The draft is a **POST** (the pack's grounds are too long for a URL); any
+  [gap in square brackets] blocks the send (`GAP_RE`, checked once the
+  sender's name is filled in); the draft says "their Stage 1 response of
+  <date>" rather than implying a missed date, and the weeks sentence only
+  with the scheme's own wait.
+- Migration `052` clears a "checked" tick given to a scheme BEFORE `050`
+  added its email address (that tick didn't check the address).
+
 ### 2026-09-29 — fixes from a review of Tidy up merges
 - **A merged-away complaint still gets its email** (migration `051`,
   `complaints.merged_refs`, backfilled from the "Merged in GC-C-…" timeline

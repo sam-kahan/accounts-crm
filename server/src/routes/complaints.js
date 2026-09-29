@@ -406,7 +406,10 @@ export async function deliverOutbox(outboxId) {
     // the email itself, and the body kept is exactly the one that went.
     let attachments;
     if (o.attach_evidence) {
-      const r = await referralAttachments(o.complaint_id);
+      const r = await referralAttachments(o.complaint_id, o.party_id || null);
+      // Built from the body as written: a Try again after a failure must not
+      // add the list a second time.
+      o.body = o.body.replace(/\n*Attached: [^\n]*(\n|$)/, '\n');
       attachments = r.attachments;
       const listed = `Attached: ${attachments.map((x) => x.filename).join('; ')}.` +
         (r.left.length ? ` Too large to email together, and available on request: ${r.left.join('; ')}.` : '');
@@ -554,6 +557,16 @@ router.post(
   '/:id/outbox/:outboxId/retry',
   asyncHandler(async (req, res) => {
     if (!z.string().uuid().safeParse(req.params.outboxId).success) throw new HttpError(400, 'Invalid id');
+    // A referral to the ombudsman is sent again only if that part is still
+    // waiting to be referred: recorded as referred another way meanwhile, or
+    // its organisation taken off, and the evidence must not go a second time.
+    const row = (await query('SELECT then_refer, party_id, to_party FROM complaint_outbox WHERE id = $1 AND complaint_id = $2', [req.params.outboxId, req.params.id])).rows[0];
+    if (row?.then_refer) {
+      if (row.to_party && !row.party_id) throw new HttpError(409, 'That organisation has been taken off the complaint: discard this referral.');
+      const { t } = await referralTrack(req.params.id, row.party_id || null);
+      const refusal = referralRefusal(t);
+      if (refusal) throw new HttpError(409, `${refusal} Discard this one rather than sending it again.`);
+    }
     const r = await query(
       `UPDATE complaint_outbox SET status = 'pending', error = NULL WHERE id = $1 AND complaint_id = $2 AND status = 'failed' RETURNING id`,
       [req.params.outboxId, req.params.id],
@@ -649,7 +662,15 @@ function internalOnly(em) {
   const ours = String(config.complaintEmail.domain || '').toLowerCase();
   if (!ours) return false;
   const addrs = [em.sender_email, ...(em.to_addresses || [])].filter(Boolean).map((a) => String(a).toLowerCase());
-  return addrs.length > 0 && addrs.every((a) => a.endsWith(`@${ours}`));
+  if (!addrs.length || !addrs.every((a) => a.endsWith(`@${ours}`))) return false;
+  // A colleague FORWARDING in their email, or our own email sent from
+  // Outlook, also travels only between our addresses, and is the evidence:
+  // read as written by the organisation, or naming an outside address in
+  // what it carries, it is not internal.
+  if (em.analysis?.author_org || (em.analysis?.kind && em.analysis.kind !== 'our_email')) return false;
+  const text = `${em.body_text || em.body_preview || ''}`.toLowerCase();
+  const outside = (text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || []).some((a) => !a.endsWith(`@${ours}`));
+  return !outside;
 }
 
 // `outward`: the version that goes TO the ombudsman (an emailed referral):
@@ -657,8 +678,16 @@ function internalOnly(em) {
 // of steps and the correspondence log, without our own working (the
 // readiness lines, the evidence checklist with its "how to fix", internal
 // notes on the timeline).
-async function packText(ctx, grounds, { outward = false } = {}) {
-  const c = ctx.complaint;
+async function packText(ctx, grounds, { outward = false, track = null } = {}) {
+  // Referring a further organisation: ITS part leads (its name, reference and
+  // dates), and the main organisation's part follows as the other one.
+  const whole = ctx.complaint;
+  const c = track && track.complaint_id
+    ? { ...whole, ...track, rule: track.rule, label: track.label, subject: whole.subject, property: whole.property,
+      account_numbers: whole.account_numbers, outcome_wanted: whole.outcome_wanted, losses: whole.losses,
+      ref_code: whole.ref_code, id: whole.id,
+      parties: [{ ...whole, relationship: null }, ...(whole.parties || []).filter((p) => p.id !== track.id)] }
+    : whole;
   const stageWords = (st) => ({ stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'with the ombudsman', resolved: 'resolved', closed: 'closed' })[st] || st;
   const lines = [];
   lines.push(outward ? `COMPLAINT SUMMARY: ${c.ref_code} (Greenco's reference)` : `OMBUDSMAN / ADR REFERRAL: ${c.ref_code}`);
@@ -714,9 +743,11 @@ async function packText(ctx, grounds, { outward = false } = {}) {
       for (const i of t.items) lines.push(`${ev.tracks.length > 1 ? '  ' : ''}${itemLine(i)}`);
     }
   }
-  if (attachments.length) {
+  // Outward, the documents are the ones attached to the covering email, and
+  // that email lists them: this list would name ones not sent.
+  if (attachments.length && !outward) {
     lines.push('');
-    lines.push(outward ? 'Documents enclosed:' : 'Documents on file:');
+    lines.push('Documents on file:');
     for (const a of [...attachments].reverse()) lines.push(`  ${readable(londonDateOf(new Date(a.uploaded_at)))}  ${a.filename}`);
   }
   lines.push('');
@@ -732,7 +763,7 @@ async function packText(ctx, grounds, { outward = false } = {}) {
   // Outward: the steps of the complaint only, never our own notes (which
   // include working notes and what the system did).
   for (const e of [...ctx.events].reverse()) {
-    if (outward && (e.type === 'note' || /^Automatic|^Import/.test(e.created_by || ''))) continue;
+    if (outward && (e.type === 'note' || e.removed_org || /^Automatic|^Import/.test(e.created_by || ''))) continue;
     lines.push(`${readable(e.event_date)}  [${e.type}]${e.party_name ? ` (${e.party_name})` : ''}  ${e.note || ''}`.trim());
   }
   lines.push('');
@@ -776,10 +807,10 @@ router.get(
 // organisation taken off the complaint: its emails and what came with them
 // are left out (its history, not this case). Shared by the .zip download and
 // the referral sent by email, so the two carry exactly the same evidence.
-async function evidenceFiles(ctx, { grounds = null, outward = false } = {}) {
+async function evidenceFiles(ctx, { grounds = null, outward = false, track = null } = {}) {
   const c = ctx.complaint;
   const when = (d) => new Date(d).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }).replace('Sept', 'Sep');
-  const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, grounds, { outward }) }];
+  const files = [{ name: '00 Summary for the ombudsman.txt', data: await packText(ctx, grounds, { outward, track }) }];
   // Each email dated the day it was SENT (a forward's own date is only when
   // it was forwarded), oldest first; ours by the same test as everywhere
   // (sent from here, read as ours, or from our address with no reading).
@@ -790,7 +821,9 @@ async function evidenceFiles(ctx, { grounds = null, outward = false } = {}) {
     : e.received_at ? londonDateOf(new Date(e.received_at)) : '');
   // An organisation taken off the complaint: its emails (and what came with
   // them) are its history, left out of what goes to the ombudsman.
-  const offIds = new Set(ctx.emails.filter((e) => e.removed_org).map((e) => e.id));
+  // Outward, an email only between our own people is ours, and what came
+  // with it (an internal spreadsheet) stays with it.
+  const offIds = new Set(ctx.emails.filter((e) => e.removed_org || (outward && internalOnly(e))).map((e) => e.id));
   const emails = ctx.emails.filter((e) => !e.removed_org && !(outward && internalOnly(e)))
     .sort((a, b) => sentDay(a).localeCompare(sentDay(b)) || new Date(a.received_at) - new Date(b.received_at));
   emails.forEach((e, i) => {
@@ -828,7 +861,7 @@ async function evidenceFiles(ctx, { grounds = null, outward = false } = {}) {
       unreadable.push(d.filename);
     }
   }
-  if (unreadable.length) {
+  if (unreadable.length && !outward) {
     files.push({ name: 'Documents/Could not be included.txt', data: `These files are on the complaint but couldn't be read from storage:\r\n${unreadable.join('\r\n')}` });
   }
   return files;
@@ -887,8 +920,12 @@ export function referralEmailDraft(c, t, grounds = null) {
   if (t.stage === 'stage_2' && t.stage_started_on) steps.push(`We asked for it to be escalated to Stage 2 on ${ukDate(t.stage_started_on)}.`);
   if (t.final_response_on) steps.push(`Their final response is dated ${ukDate(t.final_response_on)}, and it did not resolve matters.`);
   else if (t.responded_on && t.stage === 'stage_2') steps.push(`Their Stage 2 response is dated ${ukDate(t.responded_on)}, and it did not resolve matters.`);
-  else if (t.response_due && t.response_due < todayISO()) steps.push(`Their response was due by ${ukDate(t.response_due)} and we have not received a final response.`);
-  else if (t.ombudsman_from) steps.push(`It is now more than ${t.rule.ombudsmanAfterWeeks || 8} weeks since we complained, and it remains unresolved.`);
+  else if (t.responded_on) steps.push(`Their Stage 1 response is dated ${ukDate(t.responded_on)}, and it did not resolve matters.`);
+  else if (t.response_due && t.response_due < todayISO()) steps.push(`Their response was due by ${ukDate(t.response_due)} and we have not received it.`);
+  // Only the scheme's own wait, never a figure assumed for it.
+  if (!t.final_response_on && t.rule.ombudsmanAfterWeeks && t.ombudsman_from && t.ombudsman_from <= todayISO()) {
+    steps.push(`It is now more than ${t.rule.ombudsmanAfterWeeks} weeks since we complained, and it remains unresolved.`);
+  }
   lines.push(steps.join(' '));
   lines.push('');
   lines.push(grounds && String(grounds).trim()
@@ -910,17 +947,22 @@ export function referralEmailDraft(c, t, grounds = null) {
   return { to: sc.refer_email, subject: subject.slice(0, 250), body: lines.join('\n'), note: sc.refer_email_note || null };
 }
 
-router.get(
+// A POST, so the pack's grounds (thousands of characters) travel in the body
+// rather than a URL a proxy would refuse. Saves nothing.
+router.post(
   '/:id/referral/draft',
   asyncHandler(async (req, res) => {
-    const partyId = z.string().uuid().safeParse(req.query.party_id).success ? req.query.party_id : null;
-    const { c, t } = await referralTrack(req.params.id, partyId);
+    const d = parse(z.object({ party_id: z.string().uuid().optional().nullable(), grounds: z.string().max(20000).optional().nullable() }), req.body || {});
+    const { c, t } = await referralTrack(req.params.id, d.party_id || null);
     const refusal = referralRefusal(t);
     if (refusal) throw new HttpError(409, refusal);
-    const grounds = typeof req.query.grounds === 'string' ? req.query.grounds.slice(0, 8000) : null;
-    res.json(referralEmailDraft(c, t, grounds));
+    res.json(referralEmailDraft(c, t, d.grounds || null));
   }),
 );
+
+// A gap left to fill in: anything in [square brackets] of a few words (the
+// draft's own, or one the AI's grounds left). An ombudsman must never get one.
+const GAP_RE = /\[[^\]\n]{3,}\]/;
 
 const referralSendInput = z.object({
   party_id: z.string().uuid().optional().nullable(),
@@ -938,7 +980,8 @@ router.post(
     const refusal = referralRefusal(t);
     if (refusal) throw new HttpError(409, refusal);
     // A draft's gaps must be filled in before it goes to an ombudsman.
-    if (/\[(Please|What we are asking)/.test(d.body)) {
+    // Checked once signed ([Name] / [Job title] are the sender's to fill).
+    if (GAP_RE.test(signEmail(d.body, req.user))) {
       throw new HttpError(400, 'The email still has a gap in square brackets to fill in (what went wrong, or what you are asking for).');
     }
     const to = parseRecipients(d.to);
@@ -963,12 +1006,15 @@ router.post(
 // document as received, up to what an email can carry. What doesn't fit is
 // named in the email, to send once they have given the case a reference.
 const REFERRAL_ATTACH_BYTES = 14 * 1024 * 1024; // ~19 MB once encoded for email
-async function referralAttachments(complaintId) {
+async function referralAttachments(complaintId, partyId = null) {
   const ctx = await gatherContext(complaintId, undefined, { files: 0 });
-  const files = await evidenceFiles(ctx, { outward: true });
+  const track = partyId ? (ctx.complaint.parties || []).find((p) => p.id === partyId) || null : null;
+  const files = await evidenceFiles(ctx, { outward: true, track });
   const summary = files.find((f) => f.name.startsWith('00 '));
   const emails = files.filter((f) => f.name.startsWith('Emails/'));
-  const docs = files.filter((f) => f.name.startsWith('Documents/'));
+  // Newest first when not everything fits: the form their procedure asks
+  // for is filled in and added just before sending, and must go.
+  const docs = files.filter((f) => f.name.startsWith('Documents/')).sort((a, b) => (b.date || 0) - (a.date || 0));
   const out = [];
   if (summary) out.push({ filename: `${ctx.complaint.ref_code} summary and timeline.txt`, content: Buffer.from(summary.data, 'utf8') });
   if (emails.length) {

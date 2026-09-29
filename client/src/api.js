@@ -398,9 +398,8 @@ export const api = {
     // from the facts on file (and the pack's grounds when built); sent in the
     // background with the evidence attached, and the part moves to the
     // ombudsman once it has gone.
-    referralDraft: (id, partyId, grounds) => request(`/complaints/${id}/referral/draft?${new URLSearchParams(
-      Object.fromEntries(Object.entries({ party_id: partyId || '', grounds: grounds || '' }).filter(([, v]) => v)),
-    )}`),
+    referralDraft: (id, partyId, grounds) =>
+      request(`/complaints/${id}/referral/draft`, { method: 'POST', body: JSON.stringify({ party_id: partyId || null, grounds: grounds || null }) }),
     sendReferral: (id, data) =>
       request(`/complaints/${id}/referral/send`, { method: 'POST', body: JSON.stringify(data) }),
     // Fill the log form from the complaint itself: pasted text, an uploaded
