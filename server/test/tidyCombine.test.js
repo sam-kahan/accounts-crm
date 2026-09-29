@@ -43,3 +43,11 @@ test('combining the same organisation twice keeps the earlier date and never los
   r = combineTracks({ raised_on: '2026-01-01', stage: 'resolved', state: 'resolved' }, { raised_on: '2026-02-01', stage: 'stage_1', state: 'open' });
   assert.equal(r.fill.stage, undefined);
 });
+
+test('two references for the same part: the kept one stays, the other is kept too', () => {
+  const r = combineTracks({ reference: 'REF-222', stage: 'stage_1' }, { reference: 'REF-111', stage: 'stage_1' });
+  assert.equal(r.fill.reference, undefined);
+  assert.deepEqual(r.otherRefs, ['REF-222']);
+  assert.deepEqual(combineTracks({ reference: 'ref-111 ' }, { reference: 'REF-111' }).otherRefs, []);
+  assert.equal(combineTracks({ reference: 'REF-9' }, {}).fill.reference, 'REF-9');
+});

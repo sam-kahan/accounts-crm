@@ -65,6 +65,8 @@ export function buildNumberIndex(complaints) {
     add(c.reference, 'reference');
     for (const r of c.party_refs || []) add(r, 'reference');
     add(c.ref_code, 'our code');
+    // The codes of complaints merged into this one (Tidy up) still find it.
+    for (const r of c.merged_refs || []) add(r, 'our code');
   }
   return out;
 }

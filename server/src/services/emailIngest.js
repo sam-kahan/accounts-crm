@@ -44,8 +44,13 @@ export function matchEmailToComplaint(email, index, inboxAddress = null) {
 }
 
 async function buildIndex() {
-  const { rows } = await query(`SELECT id, ref_code FROM complaints`);
-  return rows.map((c) => ({ ...c, email_address: complaintEmailAddress(c.ref_code) }));
+  const { rows } = await query(`SELECT id, ref_code, merged_refs FROM complaints`);
+  // A complaint's own code first; then the codes of complaints merged into
+  // it (Tidy up), whose addresses and codes still reach it.
+  return [
+    ...rows.map((c) => ({ id: c.id, ref_code: c.ref_code, email_address: complaintEmailAddress(c.ref_code) })),
+    ...rows.flatMap((c) => (c.merged_refs || []).map((r) => ({ id: c.id, ref_code: r, email_address: complaintEmailAddress(r) }))),
+  ];
 }
 
 // Store the emails that belong to complaints (or came to the general inbox).

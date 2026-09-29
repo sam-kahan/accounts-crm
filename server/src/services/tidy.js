@@ -140,14 +140,23 @@ export function combineTracks(source, target) {
     if (want !== now) fill[col] = want;
     if (kept && alt && kept !== alt) notes.push(`${DATE_WORD[col]} ${ukDate(kept)} kept (the other record says ${ukDate(alt)})`);
   }
+  // Two references for the same organisation's part: the kept one stays its
+  // reference, and the other is kept too (other_references), so an email
+  // quoting it still finds the complaint.
+  const otherRefs = [];
   if (source.reference && !target.reference) fill.reference = source.reference;
+  else if (source.reference && target.reference
+    && String(source.reference).trim().toLowerCase() !== String(target.reference).trim().toLowerCase()) {
+    otherRefs.push(String(source.reference).trim());
+    notes.push(`their other reference ${String(source.reference).trim()} kept as well`);
+  }
   if (source.outcome && !target.outcome) fill.outcome = source.outcome;
   if (Object.keys(fill).some((k) => ['raised_on', 'stage', 'stage_started_on'].includes(k))) fill.response_due_manual = false;
-  return { fill, notes };
+  return { fill, notes, otherRefs };
 }
 async function foldTrack(client, { fromComplaintId, fromPartyId, source, target, targetTable, targetPartyId }) {
   // Nothing of either is lost or moved backwards (combineTracks).
-  const { fill, notes } = combineTracks(source, target);
+  const { fill, notes, otherRefs } = combineTracks(source, target);
   const cols = Object.keys(fill);
   if (cols.length) {
     await client.query(
@@ -164,6 +173,30 @@ async function foldTrack(client, { fromComplaintId, fromPartyId, source, target,
                            ELSE jsonb_set(applied, '{party_id}', to_jsonb($2::text)) END
       WHERE complaint_id = $1 AND applied IS NOT NULL AND (applied->>'party_id') IS NOT DISTINCT FROM $3::text`,
     [fromComplaintId, targetPartyId, fromPartyId],
+  );
+  // The complaint the kept part belongs to (its other references are kept
+  // there), and what pointed at the part being folded now points at the kept
+  // one: emails waiting to go or sent (so a Stage 2 request sent from here
+  // still moves the right part, and a second press is still recognised),
+  // and a "Looks resolved" prompt (so resolving that part clears it).
+  const ownerId = targetTable === 'complaints' ? target.id : target.complaint_id;
+  if (otherRefs.length && ownerId) {
+    await client.query(
+      `UPDATE complaints SET other_references = ARRAY(SELECT DISTINCT x FROM unnest(other_references || $2::text[]) x) WHERE id = $1`,
+      [ownerId, otherRefs],
+    );
+  }
+  await client.query(
+    `UPDATE complaint_outbox SET complaint_id = $2, party_id = $3::uuid, to_party = ($3::uuid IS NOT NULL)
+      WHERE complaint_id = $1 AND then_supplier IS NULL AND ${fromPartyId ? 'party_id = $4::uuid' : 'party_id IS NULL AND NOT to_party AND $4::uuid IS NULL'}`,
+    [fromComplaintId, ownerId || fromComplaintId, targetPartyId, fromPartyId],
+  );
+  await client.query(
+    `UPDATE complaints
+        SET resolution_suggested = CASE WHEN $3::text IS NULL THEN resolution_suggested - 'party_id'
+                                        ELSE jsonb_set(resolution_suggested, '{party_id}', to_jsonb($3::text)) END
+      WHERE id = $1 AND resolution_suggested IS NOT NULL AND (resolution_suggested->>'party_id') IS NOT DISTINCT FROM $2::text`,
+    [fromComplaintId, fromPartyId, targetPartyId],
   );
   if (fromPartyId) await client.query('DELETE FROM complaint_parties WHERE id = $1', [fromPartyId]);
   const stageNote = notes.length ? ` (${notes.join('; ')})` : '';
@@ -187,6 +220,8 @@ async function orgName(client, id) {
 const MERGE_LABEL = {
   outcome_wanted: 'the outcome we want', losses: 'money lost or extra costs', removed_orgs: 'organisations taken off',
   account_numbers: 'account number', our_reference: 'our reference', organisation_id: 'the saved organisation',
+  needs_check: '"To check" (the other was not checked yet)', complaint_doubt: 'the open question about the complaint',
+  resolution_suggested: 'the "Looks resolved" prompt',
 };
 
 export async function mergeComplaints(keepId, mergeId, by) {
@@ -301,6 +336,11 @@ export async function mergeComplaints(keepId, mergeId, by) {
     for (const t of ['complaint_emails', 'complaint_attachments', 'complaint_events']) {
       moved[t] = (await client.query(`UPDATE ${t} SET complaint_id = $1 WHERE complaint_id = $2`, [keepId, mergeId])).rowCount;
     }
+    // Bounces and the emails sent from it come too: its sent emails are what
+    // tells a second press of Send from a new email, and a bounce not looked
+    // into must still show.
+    await client.query('UPDATE email_bounces SET complaint_id = $1 WHERE complaint_id = $2', [keepId, mergeId]);
+    await client.query('UPDATE complaint_outbox SET complaint_id = $1 WHERE complaint_id = $2', [keepId, mergeId]);
     await client.query('UPDATE complaint_import_candidates SET complaint_id = $1 WHERE complaint_id = $2', [keepId, mergeId]);
     // Fill what the kept one is missing; never overwrite what it has. Their
     // reference, organisation and acknowledgement belong to the organisation:
@@ -315,10 +355,26 @@ export async function mergeComplaints(keepId, mergeId, by) {
     // The same organisation on both: its complaint's date, stage and dates
     // are combined by the same rule as a further organisation's part (the
     // earlier date, the further stage, no date lost), said on the timeline.
+    const extraRefs = [...(gone.other_references || [])];
     if (!secondOrg) {
       const t = combineTracks(gone, keep);
       Object.assign(fill, t.fill);
-      if (t.notes.length) partyNotes.push(`the complaint is ${t.notes.join('; ')}`);
+      extraRefs.push(...t.otherRefs);
+      const said = t.notes.filter((n) => !n.startsWith('their other reference'));
+      if (said.length) partyNotes.push(`the complaint is ${said.join('; ')}`);
+      partyNotes.push(...t.notes.filter((n) => n.startsWith('their other reference')));
+    }
+    // Still to be checked if either was (an import nobody has checked), and
+    // an open question or a "Looks resolved" prompt on the merged one is
+    // kept when the kept one has none: dropping them would open a referral
+    // the question held back, or lose the prompt.
+    if (gone.needs_check && !keep.needs_check) fill.needs_check = true;
+    if (gone.complaint_doubt && !gone.complaint_doubt.answered && !keep.complaint_doubt) {
+      fill.complaint_doubt = JSON.stringify(gone.complaint_doubt);
+    }
+    const goneNow = (await client.query('SELECT resolution_suggested FROM complaints WHERE id = $1', [mergeId])).rows[0];
+    if (goneNow?.resolution_suggested && !keep.resolution_suggested) {
+      fill.resolution_suggested = JSON.stringify(goneNow.resolution_suggested);
     }
     // The account numbers are the issue's, whichever organisation quoted them.
     const accounts = dropDigitSlips([...new Set([...(keep.account_numbers || []), ...(gone.account_numbers || [])])]).kept;
@@ -347,6 +403,16 @@ export async function mergeComplaints(keepId, mergeId, by) {
         [keepId, ...cols.map((c) => fill[c])],
       );
     }
+    // What the merged one was known by still finds this one: its GC-C code
+    // (its own address, and the code in an email) and their other
+    // references.
+    await client.query(
+      `UPDATE complaints
+          SET merged_refs = ARRAY(SELECT DISTINCT x FROM unnest(merged_refs || $2::text[]) x),
+              other_references = ARRAY(SELECT DISTINCT x FROM unnest(other_references || $3::text[]) x WHERE x <> '')
+        WHERE id = $1`,
+      [keepId, [gone.ref_code, ...(gone.merged_refs || [])], extraRefs.filter((r) => r && r !== keep.reference)],
+    );
     await client.query('DELETE FROM complaints WHERE id = $1', [mergeId]);
     await client.query(
       `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
@@ -399,6 +465,20 @@ export async function mergeOrganisations(keepId, mergeId, by) {
     const gone = (await client.query('SELECT * FROM organisations WHERE id = $1 FOR UPDATE', [mergeId])).rows[0];
     if (!keep || !gone) throw Object.assign(new Error('One of those organisations no longer exists.'), { status: 404 });
     names = { kept: keep.name, merged: gone.name };
+    // An email waiting to go on a complaint either organisation is on is
+    // dealt with first: folding a part away, or a supplier still to be added
+    // under the organisation being removed, would leave it pointing at
+    // something that no longer exists.
+    const waiting = (await client.query(
+      `SELECT count(*)::int AS n FROM complaint_outbox o JOIN complaints c ON c.id = o.complaint_id
+        WHERE o.status <> 'sent' AND (c.organisation_id = ANY($1::uuid[])
+           OR EXISTS (SELECT 1 FROM complaint_parties p WHERE p.complaint_id = c.id AND p.organisation_id = ANY($1::uuid[]))
+           OR (o.then_supplier->>'organisation_id') = ANY($1::text[]))`,
+      [[keepId, mergeId]],
+    )).rows[0].n;
+    if (waiting) {
+      throw Object.assign(new Error('An email on a complaint with one of these organisations is still being sent, or failed and is waiting. Deal with it first (Try again or Discard on the complaint), then merge them.'), { status: 409 });
+    }
     // A complaint that has BOTH organisations on it (one as its main, one as
     // a further organisation) would end up with the same one twice: the two
     // parts are folded into one first, and its timeline says so.
@@ -454,6 +534,34 @@ export async function mergeOrganisations(keepId, mergeId, by) {
     for (const col of ['complaints_email', 'complaints_url', 'phone', 'location']) {
       if (!keep[col] && gone[col]) fill[col] = gone[col];
     }
+    // Their procedure and ombudsman scheme: what the kept one doesn't state is
+    // taken from the merged one, with where it came from, so nothing
+    // researched (and paid for) is lost and no scheme drops away. A figure
+    // that sets a date filled in this way needs checking again.
+    const PROC = ['ack_days', 'stage1_response_days', 'stage2_response_days', 'stage1_clock', 'ombudsman_name', 'ombudsman_url',
+      'ombudsman_referral_months', 'referral_from', 'ombudsman_after_weeks', 'legal_basis', 'procedure_ref', 'ombudsman_id', 'procedure_summary'];
+    const own = (o, col) => o[col] !== null && o[col] !== undefined && o[col] !== '' && o.procedure_sources?.[col] !== 'standard';
+    const sources = { ...(keep.procedure_sources || {}) };
+    const evidence = { ...(keep.procedure_evidence || {}) };
+    let procFilled = false;
+    for (const col of PROC) {
+      if (!own(keep, col) && own(gone, col)) {
+        fill[col] = gone[col];
+        if (gone.procedure_sources?.[col]) sources[col] = gone.procedure_sources[col];
+        if (gone.procedure_evidence?.[col]) evidence[col] = gone.procedure_evidence[col];
+        procFilled = true;
+      }
+    }
+    if (procFilled) {
+      fill.procedure_sources = JSON.stringify(sources);
+      fill.procedure_evidence = JSON.stringify(evidence);
+      fill.verified_at = null;
+      fill.verified_by = null;
+    }
+    // Research done on either counts (never paid for twice).
+    if (!keep.researched_at && gone.researched_at) fill.researched_at = gone.researched_at;
+    const RANK = { none: 0, failed: 0, manual: 1, researched: 2, document: 3 };
+    if ((RANK[gone.research_status] || 0) > (RANK[keep.research_status] || 0)) fill.research_status = gone.research_status;
     const note = `${keep.notes ? `${keep.notes}\n` : ''}Merged in "${gone.name}" on ${todayISO()} by ${by || 'someone'}.`;
     const cols = Object.keys(fill);
     await client.query(

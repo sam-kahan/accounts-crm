@@ -35,7 +35,7 @@ router.get(
           WHERE c.subject ILIKE $1 OR c.property ILIKE $1 OR c.org_name ILIKE $1
              OR ($2::text IS NOT NULL AND (
                   ${norm('c.ref_code')} LIKE $2 OR ${norm('c.reference')} LIKE $2 OR ${norm('c.our_reference')} LIKE $2
-                  OR EXISTS (SELECT 1 FROM unnest(c.account_numbers) a WHERE ${norm('a')} LIKE $2)))
+                  OR EXISTS (SELECT 1 FROM unnest(c.account_numbers || c.other_references || c.merged_refs) a WHERE ${norm('a')} LIKE $2)))
              OR EXISTS (SELECT 1 FROM complaint_parties p WHERE p.complaint_id = c.id
                          AND (p.org_name ILIKE $1 OR ($2::text IS NOT NULL AND ${norm('p.reference')} LIKE $2)))
           ORDER BY (c.state = 'open') DESC, c.raised_on DESC

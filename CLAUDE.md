@@ -746,6 +746,28 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of Tidy up merges
+- **A merged-away complaint still gets its email** (migration `051`,
+  `complaints.merged_refs`, backfilled from the "Merged in GC-C-…" timeline
+  notes): its own address and its GC-C code file mail on the kept complaint
+  (`emailIngest.js#buildIndex`, the number index, the watcher's markers,
+  the reference search and the search box). Before, a reply to the old
+  address was dropped unsaved.
+- **Their other reference is kept** (`complaints.other_references`): two
+  different references for the same organisation's part used to lose one;
+  `combineTracks` returns `otherRefs`, and they are matched and searched
+  like the reference (`PARTY_COLS`' `party_refs` includes them).
+- A merge moves the merged complaint's **bounces** and its **sent emails**
+  too, and carries **To check**, an unanswered question and a **Looks
+  resolved** prompt when the kept one has none. `foldTrack` re-points
+  emails waiting to go (and sent) and a Looks-resolved prompt at the kept
+  part.
+- **An organisation merge keeps the procedure and ombudsman scheme** the
+  kept one doesn't state (with their sources and evidence; the kept one's
+  "checked" is cleared when a date-setting figure is filled), its research
+  date and status (never researched twice), and is refused while an email
+  waits on a complaint either is on.
+
 ### 2026-09-29 — fixes from a review of commission costing and reading
 - **A markup is always on the net** (`commission.js#dealFor`, and
   `client/src/commission.js#onGross`): a markup deal set to "gross" took the

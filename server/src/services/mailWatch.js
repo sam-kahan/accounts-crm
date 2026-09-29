@@ -106,12 +106,12 @@ async function watchContext() {
   // What identifies an open complaint in an email that doesn't use the word:
   // our reference, theirs, and the property postcode.
   const open = (await query(
-    `SELECT c.ref_code, c.reference, c.our_reference, c.property, c.account_numbers,
+    `SELECT c.ref_code, c.reference, c.our_reference, c.property, c.account_numbers, c.merged_refs,
             (SELECT coalesce(array_agg(p.reference) FILTER (WHERE p.reference IS NOT NULL), '{}')
-               FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_refs
+               FROM complaint_parties p WHERE p.complaint_id = c.id) || c.other_references AS party_refs
        FROM complaints c WHERE c.state = 'open'`,
   )).rows;
-  const markers = [...new Set(open.flatMap((c) => [c.ref_code, c.reference, c.our_reference, ...(c.party_refs || []), postcodeOf(c.property), ...(c.account_numbers || [])])
+  const markers = [...new Set(open.flatMap((c) => [c.ref_code, ...(c.merged_refs || []), c.reference, c.our_reference, ...(c.party_refs || []), postcodeOf(c.property), ...(c.account_numbers || [])])
     .filter((m) => m && String(m).trim().length >= 5)
     .map((m) => String(m).trim().toLowerCase()))];
   const numbers = buildNumberIndex((await query(

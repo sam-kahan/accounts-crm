@@ -335,6 +335,8 @@ export function searchTermsFor(c, partyRefs = []) {
   for (const r of partyRefs) add(r.reference, `${r.org_name}'s reference`);
   add(c.our_reference, 'our reference');
   add(c.ref_code, 'our complaint code');
+  for (const r of c.other_references || []) add(r, 'their other reference');
+  for (const r of c.merged_refs || []) add(r, 'our complaint code');
   return out;
 }
 

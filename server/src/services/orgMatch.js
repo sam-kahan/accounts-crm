@@ -15,7 +15,8 @@ import { query } from '../db/pool.js';
 export const PARTY_COLS =
   `(SELECT coalesce(array_agg(p.org_name ORDER BY p.created_at), '{}') FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_names,
    (SELECT coalesce(array_agg(p.reference ORDER BY p.created_at) FILTER (WHERE p.reference IS NOT NULL), '{}')
-      FROM complaint_parties p WHERE p.complaint_id = c.id) AS party_refs`;
+      FROM complaint_parties p WHERE p.complaint_id = c.id) || c.other_references AS party_refs,
+   c.merged_refs AS merged_refs`;
 
 export function orgKey(name) {
   return String(name || '').toLowerCase()
