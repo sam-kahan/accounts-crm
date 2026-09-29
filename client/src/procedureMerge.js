@@ -49,6 +49,17 @@ export function fillStandard(f, defaults) {
   return out;
 }
 
+// The gaps worth paying for research after reading their document: their
+// own timescales. The ombudsman figures are the scheme's (the register
+// replaces them), and a clock the document doesn't mention is the usual one;
+// neither is a reason to spend credits. A standard counted in weeks (a debt
+// collector's 8) has no working-days figure to find.
+export function researchGaps(f, defaults) {
+  return ['ack_days', 'stage1_response_days', 'stage2_response_days']
+    .filter((k) => !(k === 'stage1_response_days' && defaults?.stage1Weeks))
+    .filter((k) => blank(f[k]) || f.procedure_sources?.[k] === 'standard');
+}
+
 // Merge a researched or read profile into the form, figure by figure:
 //   - their procedure DOCUMENT wins wherever it states a figure;
 //   - anything it doesn't state keeps the figure already there (researched
@@ -75,9 +86,14 @@ export function mergeProfile(f, p, source) {
     took.push(k);
   }
   if (source === 'research') out.researched_now = true;
-  if (source === 'document' && p.procedure_ref) out.procedure_ref = p.procedure_ref;
-  else if (blank(f.procedure_ref) && p.procedure_ref) out.procedure_ref = p.procedure_ref;
-  if (p.evidence?.procedure_ref) evidence.procedure_ref = p.evidence.procedure_ref;
+  // The name's quote travels with the name: research's quote never sits
+  // beside the document's name.
+  const tookRef = p.procedure_ref && (source === 'document' || blank(f.procedure_ref));
+  if (tookRef) {
+    out.procedure_ref = p.procedure_ref;
+    if (p.evidence?.procedure_ref) evidence.procedure_ref = p.evidence.procedure_ref;
+    else delete evidence.procedure_ref;
+  }
   out.complaints_email = f.complaints_email || p.complaints_email || '';
   out.complaints_url = f.complaints_url || p.complaints_url || '';
   out.phone = f.phone || p.phone || '';

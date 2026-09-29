@@ -24,6 +24,9 @@ import { researchOrganisation } from './orgResearch.js';
 // AI was unavailable; it simply waits as "New" for a person.
 // ---------------------------------------------------------------------------
 
+const RESEARCH_FIGURES = ['ack_days', 'stage1_response_days', 'stage2_response_days', 'stage1_clock', 'ombudsman_name',
+  'ombudsman_url', 'ombudsman_referral_months', 'referral_from', 'ombudsman_after_weeks'];
+
 export const AUTO_BY = 'Automatic (from email)';
 
 const KIND_LABEL = {
@@ -664,20 +667,29 @@ async function createFromEmail(em, analysis) {
   if (!org) {
     const type = p.org_type || 'other';
     let prof = {};
+    let researched = false;
     try {
       prof = await researchOrganisation({ name: p.org_name, type });
+      researched = true;
     } catch {
       /* set up without research; the complaint page says so */
     }
+    // Each figure found is marked as researched (described as their published
+    // information, never "their procedure"), and the research is dated once it
+    // has been done, so it is never paid for again by itself.
+    const found = Object.fromEntries(RESEARCH_FIGURES
+      .filter((k) => prof[k] !== null && prof[k] !== undefined && prof[k] !== '').map((k) => [k, 'research']));
+    const gotSome = Object.keys(found).length > 0 || Boolean(prof.procedure_summary);
     org = (
       await query(
         `INSERT INTO organisations
           (name, type, complaints_email, complaints_url, phone, ombudsman_name, ombudsman_url,
            ombudsman_referral_months, stage1_response_days, stage2_response_days, ack_days,
            procedure_ref, stage1_clock, ombudsman_after_weeks, referral_from, procedure_summary,
-           legal_basis, sources, unconfirmed, procedure_evidence, research_status, researched_at, notes)
+           legal_basis, sources, unconfirmed, procedure_evidence, research_status, researched_at, notes,
+           procedure_sources)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-                 ${prof.procedure_summary ? 'now()' : 'NULL'}, $22)
+                 ${researched ? 'now()' : 'NULL'}, $22, $23)
          RETURNING *`,
         [
           p.org_name, type, prof.complaints_email || null, prof.complaints_url || null, prof.phone || null,
@@ -687,8 +699,9 @@ async function createFromEmail(em, analysis) {
           prof.referral_from || null, prof.procedure_summary || null, prof.legal_basis || null,
           prof.sources ? JSON.stringify(prof.sources) : null, prof.unconfirmed?.length ? prof.unconfirmed : null,
           prof.evidence && Object.keys(prof.evidence).length ? JSON.stringify(prof.evidence) : null,
-          prof.procedure_summary ? 'researched' : 'none',
+          gotSome ? 'researched' : 'none',
           'Set up automatically from a complaint email. Check its complaints procedure.',
+          Object.keys(found).length ? JSON.stringify(found) : null,
         ],
       )
     ).rows[0];

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, formatDate, ORG_TYPE_LABEL, plural } from '../api';
 import Modal from '../components/Modal.jsx';
-import { FIGURES, blank, mergeProfile, fillStandard } from '../procedureMerge.js';
+import { FIGURES, blank, mergeProfile, fillStandard, researchGaps } from '../procedureMerge.js';
 
 const EMPTY = {
   name: '', type: 'council', location: '', complaints_email: '', complaints_url: '',
@@ -108,9 +108,10 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       // Research only if it has never been done: research already done is
       // kept (and paid for once), never repeated.
       const researchedBefore = Boolean(form.researched_at) || Object.values(form.procedure_sources || {}).includes('research');
-      if (!researchedBefore && next.unconfirmed.length && researchEnabled && next.name.trim()) {
+      const gaps = researchGaps(next, defaults);
+      if (!researchedBefore && gaps.length && researchEnabled && next.name.trim()) {
         setForm(next);
-        setInfo(`Read from “${file.name}”. Researching the ${next.unconfirmed.length} figure${next.unconfirmed.length === 1 ? '' : 's'} it doesn't give…`);
+        setInfo(`Read from “${file.name}”. Researching the ${gaps.length} timescale${gaps.length === 1 ? '' : 's'} it doesn't give…`);
         try {
           const r = await api.organisations.research({ name: next.name, type: next.type, location: next.location });
           ({ form: next, took: researched } = mergeProfile(next, r, 'research'));

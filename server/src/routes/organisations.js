@@ -7,6 +7,7 @@ import { ruleFor, ombudsmanUrlFor } from '../services/complaintRules.js';
 import { researchOrganisation, readProcedureDocument } from '../services/orgResearch.js';
 import { recomputeForOrganisation } from '../services/complaintDeadlines.js';
 import { procedureChanged, statesOwnProcedure } from '../services/orgProcedure.js';
+import { findOrgByName } from '../services/orgMatch.js';
 import {
   orgDocumentUpload,
   procedureMemoryUpload,
@@ -164,12 +165,12 @@ router.post(
     const location = req.body?.location || null;
     if (!name) throw new HttpError(400, 'name is required');
 
-    const existing = await query(
-      `SELECT ${COLS} FROM organisations WHERE lower(name) = lower($1) LIMIT 1`,
-      [name],
-    );
-    if (existing.rows[0]) {
-      return res.status(200).json({ ...existing.rows[0], existed: true });
+    // The same rule imports use ("OVO" is "OVO Energy"), so a name written
+    // differently never pays for research and a second organisation.
+    const match = await findOrgByName(name);
+    if (match) {
+      const { rows: [row] } = await query(`SELECT ${COLS} FROM organisations WHERE id = $1`, [match.id]);
+      return res.status(200).json({ ...row, existed: true });
     }
 
     const p = await researchOrganisation({ name, type, location });

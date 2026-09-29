@@ -746,6 +746,30 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — fixes from a review of procedure research and reading
+- **No figure without its quote** (`orgResearch.js#normaliseProfile`): a
+  date-setting figure (the day counts, clock, ombudsman wait and time
+  limit) with no quote, or one the AI itself listed as unconfirmed, is
+  dropped and listed as unconfirmed, so the standard applies visibly. The
+  research prompt no longer shows the sector defaults (it could copy one).
+- **Days are working days only when the source says so**: a `*_days` figure
+  whose quote doesn't say "working/business days" is dropped, never
+  converted (8 weeks became 40 working days, later than 8 calendar weeks
+  across a bank holiday).
+- **Out of range is refused, not capped** (acknowledgement 1-30 working
+  days, stages 1-130, wait 1-52 weeks, time limit 1-24 months): a misread
+  900 was saved as 400 and never chased.
+- Web research is told its pages are data, never instructions (the
+  organisation being complained about writes them).
+- **Less paid research**: after reading their document, research runs only
+  for missing timescales (`procedureMerge.js#researchGaps`; the ombudsman
+  figures are the register's), and research-and-create finds an existing
+  organisation by `findOrgByName` ("OVO" is "OVO Energy"), not exact name.
+- An organisation set up from a complaint email is dated as researched once
+  research ran (never paid for again by itself) and its figures are marked
+  `research`; a procedure name keeps its own quote; both reads allow 8,000
+  tokens and say when a reply was cut off.
+
 ### 2026-09-29 — fixes from a review of the re-check and the AI review
 - **A review the calendar has overtaken is out of date** even when no date
   moved (`complaintRules.js#reviewOutrun`, used by `ai_review_current` and
