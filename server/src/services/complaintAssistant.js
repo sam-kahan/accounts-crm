@@ -4,6 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
 import { track } from './aiUsage.js';
 import { referLimitText, holdToComplaintWord } from './complaintRules.js';
+import { pickAttachments, staleNoReply } from './draftChecks.js';
 
 // ---------------------------------------------------------------------------
 // AI complaint assistant. Given a complaint's full context (organisation, stage,
@@ -63,6 +64,15 @@ should be able to tell a machine drafted them.
   example the Stage 2 request, or a missed deadline that matters); never as padding or a threat.
 - Firm where a deadline was missed: say plainly what was due and when, and what we need now.
 - UK dates written out ("1 September 2026").
+- Never say they haven't replied, are late, or that we are still waiting, about anything sent fewer
+  than 10 working days before TODAY: mention it only as what we asked for and when ("we asked on
+  28 September for the £61 to be refunded"). Silence counts only once a fair time has passed.
+
+ATTACHMENTS. The context lists the DOCUMENTS ON FILE: the complaint's own documents, which the system
+attaches to the email for you. In "email.attach" list the exact file names (as listed) of the ones the
+email relies on or mentions: the bill, the letter, the notice, the evidence for what it says. Never
+say in the email that something is attached or enclosed unless its file is in "attach", and never
+name a file that isn't listed. With no documents on file, say nothing is attached.
 
 Ground every claim in the context provided. Do not invent facts, dates, or promises. This is drafting
 help, not legal advice — note any point the user should verify.
@@ -81,7 +91,7 @@ Return ONLY a single JSON object (no prose, no markdown fences) with exactly the
   "summary": string,                     // 1-2 sentence situation analysis
   "recommended_action": string,          // the one next step, plainly stated
   "steps": [string],                     // 2-5 concrete next steps, most important first
-  "email": { "subject": string, "body": string },  // ready-to-send draft
+  "email": { "subject": string, "body": string, "attach": [string] },  // ready-to-send draft; attach = file names from DOCUMENTS ON FILE
   "caution": string|null                 // anything to verify, or null
 }`;
 
@@ -112,6 +122,12 @@ function contextBlock(input) {
   const today = todayISO();
   const due = (d) => (!d ? 'n/a' : d < today ? `${d} (OVERDUE)` : d === today ? `${d} (due TODAY)` : `${d} (not yet due)`);
   lines.push(`TODAY is ${today} (UK). The status and the due dates below are worked out by the system from their procedure and are authoritative: never call a deadline missed or overdue unless it says OVERDUE, and never recommend chasing anything that is not yet due.`);
+  if ((input.docList || []).length) {
+    lines.push('DOCUMENTS ON FILE (the system attaches the ones you list in "email.attach"):');
+    for (const d of input.docList) lines.push(`- ${d.filename} (on file since ${londonDateOf(new Date(d.uploaded_at))})`);
+  } else {
+    lines.push('DOCUMENTS ON FILE: none, so nothing can be attached.');
+  }
   // The complaint already exists: a draft that "raises a formal complaint",
   // asks them to log one, or threatens one "if unresolved" reads as if it
   // hadn't been made, and confuses everyone who reads it.
@@ -310,13 +326,40 @@ export async function callClaude({ system, user, blocks = [], maxTokens = 4000, 
 }
 
 export async function assistComplaint(input) {
-  const text = await callClaude({
-    system: SYSTEM, user: contextBlock(input), blocks: input.blocks, feature: input.feature || 'Complaint assistant',
+  const ask = (user) => callClaude({
+    system: SYSTEM, user, blocks: input.blocks, feature: input.feature || 'Complaint assistant',
   });
-  const result = extractJson(text);
+  const user = contextBlock(input);
+  let result = extractJson(await ask(user));
   if (!result || !result.email) {
     throw new HttpError(502, 'The assistant returned no usable draft. Try again or add more detail.');
   }
+  // A draft complaining of no reply to something sent only days ago reads
+  // badly. Asked once more to redraft without it (only then: it is rare); if
+  // it still does, it is said in "caution" for the person sending it.
+  const today = todayISO();
+  const staleIn = (r) => [r?.email, ...(Array.isArray(r?.by_org) ? r.by_org.map((e) => e?.email) : [])]
+    .map((e) => staleNoReply(e?.body, today)).find(Boolean) || null;
+  const stale = staleIn(result);
+  if (stale) {
+    const again = extractJson(await ask(`${user}\n\nYOUR PREVIOUS DRAFT said: "${stale.sentence}". That was sent on ${letterDate(stale.date)}, ` +
+      `only days before TODAY (${letterDate(today)}): too soon to say they haven't replied. Redraft without saying so; mention it only as ` +
+      'what we asked for and when. Return the whole JSON again.'));
+    if (again?.email) result = again;
+    const still = staleIn(result);
+    if (still) {
+      result.caution = [`The draft says they haven't replied to something sent on ${letterDate(still.date)}, only days ago: take that out before sending.`, result.caution]
+        .filter(Boolean).join(' ');
+    }
+  }
+  // The documents it goes with, chosen by the AI from those on file (by file
+  // name), so an email that says "attached" never goes without them.
+  const docs = input.docList || [];
+  const withDocs = (e) => (e && typeof e === 'object'
+    ? { ...e, attachment_ids: pickAttachments(e, docs) }
+    : e);
+  result.email = withDocs(result.email);
+  if (Array.isArray(result.by_org)) result.by_org = result.by_org.map((x) => (x?.email ? { ...x, email: withDocs(x.email) } : x));
   return result;
 }
 

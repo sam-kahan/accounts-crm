@@ -87,13 +87,13 @@ function AttachPicker({ docs = [], value = [], onChange }) {
 
 // The message says something is attached, but nothing is chosen.
 function saysAttached(body) {
-  return /\battach(?:ed|ing|ment|ments)\b|\benclosed?\b|\bplease find\b/i.test(String(body || '').replace(/\n*Attached: [^\n]*/g, ''));
+  return /\b(?:attached|enclosed|attach(?:ing)?|enclose|enclosing)\b/i.test(String(body || '').replace(/\n*Attached: [^\n]*/g, ''));
 }
 function NothingAttachedWarning({ body, ids, docs }) {
-  if (!docs?.length || (ids || []).length || !saysAttached(body)) return null;
+  if ((ids || []).length || !saysAttached(body)) return null;
   return (
     <div className="login-error" style={{ marginBottom: 10, fontSize: 13 }}>
-      The message mentions something attached, but no documents are chosen below.
+      The message says something is attached, but no documents are chosen below: it can’t be sent like this.
     </div>
   );
 }
@@ -515,6 +515,8 @@ export default function ComplaintDetail() {
       cc: '',
       subject: signEmail(draft?.subject, me) || `Re: ${c.subject} [${c.ref_code}]`,
       body: signEmail(draft?.body || '', me),
+      // The documents the AI chose for it (from those on file).
+      attachment_ids: (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x)),
       then,
     });
   }
@@ -2738,6 +2740,9 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
     try {
       const d = await api.complaints.formalDraft(c.id);
       setDraft({ ...d, body: signEmail(d.body, me), to: d.to || c.org_email || '' });
+      // The documents the AI chose; the first email of a complaint takes them
+      // all if it chose none.
+      setAttachIds(d.attachment_ids?.length ? d.attachment_ids : first ? (c.attachments || []).map((x) => x.id) : []);
     } catch (e) { setError(e.message); } finally { setBusy(null); }
   }
   async function sendNow() {
@@ -2836,6 +2841,7 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
   const [name, setName] = useState(suggestedName || '');
   const [type, setType] = useState('energy');
   const [draft, setDraft] = useState(null); // { to, subject, body, caution }
+  const [attachIds, setAttachIds] = useState([]);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const [sentOn, setSentOn] = useState(todayISO());
@@ -2860,12 +2866,13 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
     try {
       const d = await api.complaints.supplierDraft(c.id, { organisation_id: orgId || null, org_name: name.trim() });
       setDraft({ ...d, body: signEmail(d.body, me), to: d.to || '' });
+      setAttachIds(d.attachment_ids || []);
     } catch (e) { setError(e.message); } finally { setBusy(null); }
   }
   async function sendNow() {
     setBusy('send'); setError(null);
     try {
-      await api.complaints.supplierRaise(c.id, { ...who, send: { to: draft.to, subject: draft.subject, body: draft.body } });
+      await api.complaints.supplierRaise(c.id, { ...who, send: { to: draft.to, subject: draft.subject, body: draft.body, attachment_ids: attachIds } });
       await onDone(`Sending to ${name} now. They join this complaint as soon as it has gone; you can carry on.`);
     } catch (e) { setError(e.message); setBusy(null); }
   }
@@ -2930,6 +2937,8 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
             <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
           {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          <NothingAttachedWarning body={draft.body} ids={attachIds} docs={c.attachments} />
+          <AttachPicker docs={c.attachments || []} value={attachIds} onChange={setAttachIds} />
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
             Copied in automatically: {c.email_address}{c.external_cc?.length ? `, ${c.external_cc.join(', ')}` : ''}.
           </div>

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
+import { saysAttached } from '../services/draftChecks.js';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
@@ -385,7 +386,7 @@ router.post(
     }
     for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
 
-    const attachmentIds = await checkAttachmentIds(complaint.id, d.attachment_ids);
+    const attachmentIds = await checkAttachmentIds(complaint.id, d.attachment_ids, d.body);
     // Signed by whoever is sending (a draft's "[Name]" never goes out).
     const subject = signEmail(d.subject, req.user);
     const body = signEmail(d.body, req.user);
@@ -410,8 +411,12 @@ router.post(
 // queued (they are this complaint's, and fit in one email), so a person hears
 // at once rather than from a failed send; read from disk when it goes.
 const EMAIL_ATTACH_BYTES = 14 * 1024 * 1024; // ~19 MB once encoded for email
-async function checkAttachmentIds(complaintId, ids) {
+async function checkAttachmentIds(complaintId, ids, body = '') {
   const want = [...new Set(ids || [])];
+  // An email that says something is attached never goes without it.
+  if (!want.length && saysAttached(body)) {
+    throw new HttpError(400, 'The message says something is attached, but no documents are chosen: tick them under “Attach documents” (or upload them to the complaint first), or take that line out.');
+  }
   if (!want.length) return [];
   const rows = (await query(
     'SELECT id, filename, size_bytes FROM complaint_attachments WHERE complaint_id = $1 AND id = ANY($2::uuid[])',
@@ -2451,6 +2456,8 @@ router.post(
       // Always the standard sign-off, so the sender's own name goes on it.
       body: ensureSignOff(r.email?.body || ''),
       caution: r.caution || null,
+      // The documents the draft goes with, chosen by the AI from those on file.
+      attachment_ids: r.email?.attachment_ids || [],
     });
   }),
 );
@@ -2545,6 +2552,8 @@ router.post(
       subject: r.email?.subject || '',
       body: ensureSignOff(r.email?.body || ''),
       caution: r.caution || null,
+      // The documents the draft goes with, chosen by the AI from those on file.
+      attachment_ids: r.email?.attachment_ids || [],
     });
   }),
 );
@@ -2592,7 +2601,7 @@ router.post(
       if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
-      const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids);
+      const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids, d.send.body);
       const out = await queueOutbox(c.id, formalGuard,
         `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal, attachment_ids)
          VALUES ($1,$2,$3,$4,$5,$6,true,$7) RETURNING id`,
@@ -2617,6 +2626,7 @@ const supplierRaiseInput = z.object({
     cc: z.string().optional().nullable(),
     subject: z.string().min(1),
     body: z.string().min(1),
+    attachment_ids: attachmentIdsInput,
   }).optional().nullable(),
   // …or it was sent from Outlook on this date.
   sent_on: isoDate.optional().nullable(),
@@ -2654,10 +2664,11 @@ router.post(
       // In the background like every send from a complaint: the supplier
       // joins once it has gone (dated that day), and nothing is added if it
       // fails — it waits on the complaint with Try again / Discard.
+      const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids, d.send.body);
       const out = await queueOutbox(c.id, supplierGuard,
-        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier]);
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier, attachment_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier, attachmentIds]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
     if (!(await joinSupplierOnce(c.id, supplier, { sentOn: d.sent_on, by: who(req) }))) {

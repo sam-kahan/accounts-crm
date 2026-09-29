@@ -746,6 +746,26 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — the AI chooses what to attach; no "no response" to yesterday's email
+- **Every AI draft chooses its own attachments.** The prompt lists the
+  complaint's DOCUMENTS ON FILE (`gatherContext` → `docList`) and the AI
+  names in `email.attach` the ones the email relies on; `assistComplaint`
+  maps them to ids (`draftChecks.js#pickAttachments`, pure, tested) as
+  `email.attachment_ids`, for every caller (the review, the formal / first
+  complaint, the supplier complaint, the assistant). The send windows tick
+  them. A draft that says "attached" but names nothing on file gets every
+  document rather than none. **The server refuses any send whose message says
+  "attached"/"enclosed" with no document chosen** (`checkAttachmentIds`).
+  The Liverpool complaint's first email said the summons was attached and
+  went with nothing.
+- **Never "no response" to something sent days ago.** The style guide says
+  so (10 working days, `REPLY_GAP_WORKING_DAYS`), and `staleNoReply()` (pure,
+  tested: a no-reply phrase and a date under 10 working days old in the same
+  sentence) checks every draft: caught, the AI is asked once to redraft
+  without it (a second call only then), and if it still does, "caution" says
+  to take it out. The Liverpool draft said a refund asked for the day before
+  had had no response.
+
 ### 2026-09-29 — documents go with emails sent from a complaint
 - The Send window and the "Send the complaint / Raise it as a formal
   complaint" window list the complaint's documents to tick (`AttachPicker`);

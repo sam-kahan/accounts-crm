@@ -20,7 +20,7 @@ import { listComplaintEmails } from './emailIngest.js';
 import { loadSchemes, schemeFor } from './ombudsmen.js';
 import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
-import { attachmentTexts, attachmentBlocks } from './attachments.js';
+import { attachmentTexts, attachmentBlocks, listAttachments } from './attachments.js';
 
 // ---------------------------------------------------------------------------
 // A complaint with everything worked out about it (status, procedure
@@ -273,6 +273,9 @@ export async function gatherContext(id, extraContext, { files } = {}) {
   // PDFs and photos can't be turned into text here, so they go to the model
   // as documents in their own right — letters and statements are mostly PDFs.
   const blocks = await attachmentBlocks(id, files === undefined ? {} : { maxFiles: files, newest: true });
-  return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks };
+  // The complaint's documents by name, so a drafted email can say which go
+  // with it (they are attached by the system, not only read by the AI).
+  const docList = (await listAttachments(id)).map((d) => ({ id: d.id, filename: d.filename, uploaded_at: d.uploaded_at }));
+  return { complaint, rule: complaint.rule, events, emails, extraContext: merged, blocks, docList };
 }
 
