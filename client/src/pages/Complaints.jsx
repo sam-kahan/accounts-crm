@@ -791,12 +791,14 @@ export default function Complaints() {
             // The email the complaint was started from is filed on it.
             const emailId = newFromEmail;
             setNewFromEmail(null);
+            let msg = null;
             try {
               await api.complaints.fileEmail(emailId, c.id);
-            } catch {
-              /* it stays in "Emails to file" and can be filed from there */
+            } catch (e) {
+              // It stays in "Emails to file" and can be filed from there.
+              msg = `Complaint created, but the email couldn't be filed on it (${e.message}). It is still under Emails to file on the Complaints page.`;
             }
-            navigate(`/complaints/${c.id}`);
+            navigate(`/complaints/${c.id}`, msg ? { state: { msg } } : undefined);
           }}
         />
       )}

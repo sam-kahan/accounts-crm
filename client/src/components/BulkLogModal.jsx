@@ -444,11 +444,13 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
           ...done.map((d) => String(d.id)),
           ...rows.filter((r) => r.state === 'saved' && r.saved).map((r) => String(r.saved.id)),
         ]);
-        const sameBatch = again?.similar?.find((m) => justLogged.has(String(m.invoice.id)))?.invoice;
+        // Held back once already and pressed again: it has been looked at.
+        const sameBatch = row.heldBack ? null : again?.similar?.find((m) => justLogged.has(String(m.invoice.id)))?.invoice;
         if (again?.exact || sameBatch) {
           // Pressing Log again takes it: by then it has been looked at.
           patch(row.id, {
             state: 'error',
+            heldBack: !again.exact,
             duplicates: again,
             error: again.exact
               ? `Already logged as ${again.exact.ref || again.exact.invoice_number}.`

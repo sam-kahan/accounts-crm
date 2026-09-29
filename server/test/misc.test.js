@@ -74,6 +74,13 @@ test('a recurring date rolls to the right day, never drifting past a month end',
   assert.equal(nextOccurrence('2026-01-15', 'monthly', '2026-09-29'), '2026-10-15');
   assert.equal(nextOccurrence('2026-09-29', 'monthly', '2026-09-29'), '2026-10-29');
   assert.equal(nextOccurrence('2026-01-15', 'none', '2026-09-29'), null);
+  // Only the current date is stored, so a month end must stay a month end
+  // from whatever month it is in now.
+  assert.equal(nextOccurrence('2026-09-30', 'quarterly', '2026-09-30'), '2026-12-31');
+  assert.equal(nextOccurrence('2026-09-30', 'monthly', '2026-09-30'), '2026-10-31');
+  assert.equal(nextOccurrence('2027-02-28', 'monthly', '2027-02-28'), '2027-03-31');
+  assert.equal(nextOccurrence('2026-10-30', 'monthly', '2026-10-30'), '2026-11-30'); // the 30th, not a month end
+  assert.equal(nextOccurrence('2026-11-30', 'monthly', '2026-11-30'), '2026-12-31');
 });
 
 import { signEmail } from '../src/lib/signature.js';

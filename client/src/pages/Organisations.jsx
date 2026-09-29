@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, formatDate, ORG_TYPE_LABEL } from '../api';
 import Modal from '../components/Modal.jsx';
@@ -32,6 +32,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
   const [defaults, setDefaults] = useState(null);
   const [docs, setDocs] = useState([]);
   const [pendingDoc, setPendingDoc] = useState(null); // file read, stored on save
+  const createdId = useRef(null); // set once a new organisation has been saved
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
   const [reading, setReading] = useState(false);
@@ -184,11 +185,23 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
       verified: Boolean(form.verified),
       notes: form.notes || null,
     };
+    // Once created, later saves update it: if the document upload after the
+    // create fails, pressing Save again must not make a second organisation.
+    const id = initial?.id || createdId.current;
     try {
-      const saved = initial?.id
-        ? await api.organisations.update(initial.id, payload)
+      const saved = id
+        ? await api.organisations.update(id, payload)
         : await api.organisations.create(payload);
-      if (pendingDoc) await api.organisations.uploadDocuments(saved.id, [pendingDoc]);
+      createdId.current = saved.id;
+      if (pendingDoc) {
+        try {
+          await api.organisations.uploadDocuments(saved.id, [pendingDoc]);
+        } catch (err) {
+          setError(`Saved, but their procedure document couldn’t be uploaded (${err.message}). Press Save to try the upload again.`);
+          setBusy(false);
+          return;
+        }
+      }
       onSaved(saved);
     } catch (err) {
       setError(err.message);

@@ -100,12 +100,16 @@ export default function EmailAutomation({ onChanged }) {
       else if (how === 'link') await api.complaints.linkPast(c.id, c.existing.id);
       else await api.complaints.skipPast(c.id);
     } catch (e) {
+      // Quiet (Import all) hides only "already taken by its group": any other
+      // failure is counted and said.
       if (!quiet) setErr(e.message);
+      else if (e.status !== 409) return { failed: e.message };
     } finally {
       setBusyId(null);
+      await loadCands();
+      onChanged?.();
     }
-    await loadCands();
-    onChanged?.();
+    return null;
   }
   // Import all leaves out any that are already in the system: those are
   // linked one at a time, so nothing is duplicated.
@@ -124,9 +128,15 @@ export default function EmailAutomation({ onChanged }) {
       (cands.length > fresh.length ? ` (${cands.length - fresh.length} already in the system are left for you to link.)` : ''))) return;
     // Each import takes in the threads grouped with it, so a later one may
     // already be taken; that refusal is expected and not shown.
+    setErr(null);
+    const failed = [];
     for (const c of fresh) {
       // eslint-disable-next-line no-await-in-loop
-      await decide(c, 'import', { quiet: true });
+      const r = await decide(c, 'import', { quiet: true });
+      if (r?.failed) failed.push(r.failed);
+    }
+    if (failed.length) {
+      setErr(`${failed.length === 1 ? '1 couldn’t' : `${failed.length} couldn’t`} be imported: ${[...new Set(failed)].join('; ')}. They are still on the list.`);
     }
   }
 

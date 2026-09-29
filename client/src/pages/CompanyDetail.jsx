@@ -104,6 +104,9 @@ export default function CompanyDetail() {
   const [showAddDate, setShowAddDate] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState(null);
+  // The key date being marked done: its button waits, so a double-click can't
+  // roll a recurring date on twice.
+  const [completing, setCompleting] = useState(null);
   const [loadError, setLoadError] = useState(null);
 
   const load = () => {
@@ -131,13 +134,17 @@ export default function CompanyDetail() {
     }
   }
 
-  async function completeDate(kdId) {
+  async function completeDate(k) {
+    if (completing) return;
     setMsg(null);
+    setCompleting(k.id);
     try {
-      await api.keyDates.complete(kdId);
+      await api.keyDates.complete(k.id, k.due_date);
       await load();
     } catch (e) {
       setMsg(e.message);
+    } finally {
+      setCompleting(null);
     }
   }
   async function removeDate(kdId) {
@@ -268,8 +275,8 @@ export default function CompanyDetail() {
                     </span>
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button className="btn-ghost btn-sm" onClick={() => completeDate(k.id)}>
-                      {k.recurrence === 'none' ? 'Done' : 'Done ↻'}
+                    <button className="btn-ghost btn-sm" disabled={Boolean(completing)} onClick={() => completeDate(k)}>
+                      {completing === k.id ? '…' : k.recurrence === 'none' ? 'Done' : 'Done ↻'}
                     </button>
                     <button className="btn-danger btn-sm" onClick={() => removeDate(k.id)}>Delete</button>
                   </td>

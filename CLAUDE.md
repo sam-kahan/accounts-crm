@@ -714,6 +714,27 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-29 — nothing done twice by a double-click; month ends stay month ends
+- **Recurring key dates on a month end stay on the month end**
+  (`lib/dates.js#nextOccurrence`): only the current due date is stored, so the
+  old clamp let 31 Aug monthly become 30 Sep and then 30 Oct for good, and a
+  30 Sep VAT quarter end roll to 30 Dec. A date on the last day of its month
+  now always rolls to the last day; any other day is kept.
+- **Marking a key date done can't roll it twice**: the page sends the date it
+  is marking (`POST /key-dates/:id/complete` `{due_date}`, 409 if it has
+  moved), the update only moves it from the date it read, and the button
+  waits while it works (company page and dashboard).
+- **Other double-press and silent-failure fixes** (from a review of every
+  write button): an organisation isn't created twice when its document
+  upload fails after the save; Resend invite waits (each press is a new link
+  and email); saving an AI draft to the timeline waits; "Sent from Outlook"
+  with a failed escalation says to use the escalate-only button instead of
+  recording the email twice; send errors show inside the Send window;
+  dashboard Dismiss failures are shown; Import all reports real failures
+  (only "taken by its group" is quiet); a complaint started from an email
+  says if the email couldn't be filed on it; the batch screen's "press Log
+  again" override now works.
+
 ### 2026-09-29 — the morning email reads on a phone
 - **`buildDigest`** lists **Overdue** first, then **Coming up**, each item one
   block (UK date "Tue 15 Sep 2026", what, whose, next step, link) instead of
@@ -834,8 +855,8 @@ the page says how far each date can be trusted.
   `CURRENT_DATE` is the database's clock), and a **dissolved company** no
   longer raises key-date reminders for ever.
 - **Recurring key dates don't drift** (`lib/dates.js#nextOccurrence`, tested):
-  counted from the original date and clamped to month end — 31 Aug monthly
-  is 30 Sep then 31 Oct, not 1 Oct forever after.
+  a month-end date stays a month end — 31 Aug monthly is 30 Sep then 31 Oct,
+  not 1 Oct (or 30 Oct) forever after.
 - **Staff accounts** (migration `036`): an account is removable only if it
   was **created by invitation** and the person never set a password or signed
   in (`created_by_invite`, `password_set_at`; `removable` on each user, the

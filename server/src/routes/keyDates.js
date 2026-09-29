@@ -91,17 +91,27 @@ router.post(
     ]);
     const kd = rows[0];
     if (!kd) throw new HttpError(404, 'Key date not found');
+    // The page says which date it was marking done. A second press (a
+    // double-click, or a page not refreshed) would otherwise roll a recurring
+    // date on twice and skip a period's reminder without anyone noticing.
+    const expected = typeof req.body?.due_date === 'string' ? req.body.due_date : null;
+    if ((expected && expected !== kd.due_date) || (expected && kd.status === 'done')) {
+      throw new HttpError(409, 'This date has already been marked done. Refresh to see where it stands.');
+    }
 
     const next =
       kd.source === 'companies_house'
         ? null
         : nextOccurrence(kd.due_date, kd.recurrence);
     if (next) {
+      // Only from the date read above: two presses at once both read the same
+      // date, and only the first moves it.
       const updated = await query(
         `UPDATE key_dates SET due_date = $2, status = 'pending', completed_at = NULL
-           WHERE id = $1 RETURNING *`,
-        [req.params.id, next],
+           WHERE id = $1 AND due_date = $3 RETURNING *`,
+        [req.params.id, next, kd.due_date],
       );
+      if (!updated.rows[0]) throw new HttpError(409, 'This date has already been marked done. Refresh to see where it stands.');
       return res.json({ ...updated.rows[0], rolled_forward_to: next });
     }
     const updated = await query(

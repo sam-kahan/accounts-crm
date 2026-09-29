@@ -245,7 +245,11 @@ export default function Users() {
     api.users.options().then(setOptions).catch(() => setOptions(null));
   }, []);
 
+  const [resending, setResending] = useState(null);
   async function resend(u) {
+    // Each press issues a new link and sends an email: one at a time.
+    if (resending) return;
+    setResending(u.id);
     setMsg(null);
     try {
       const res = await api.users.invite(u.id);
@@ -256,6 +260,8 @@ export default function Users() {
       );
     } catch (e) {
       setMsg(e.message);
+    } finally {
+      setResending(null);
     }
   }
 
@@ -374,7 +380,9 @@ export default function Users() {
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(u)}>Edit</button>
                     {u.active && !u.last_login_at && u.invited_at && (
-                      <button className="btn-ghost btn-sm" onClick={() => resend(u)}>Resend invite</button>
+                      <button className="btn-ghost btn-sm" disabled={Boolean(resending)} onClick={() => resend(u)}>
+                        {resending === u.id ? 'Sending…' : 'Resend invite'}
+                      </button>
                     )}
                     {u.removable && u.id !== me?.id && (
                       <button className="btn-danger btn-sm" onClick={() => remove(u)}>Remove</button>

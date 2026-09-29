@@ -96,7 +96,9 @@ export const api = {
       request(`/key-dates${companyId ? `?company_id=${companyId}` : ''}`),
     create: (data) =>
       request('/key-dates', { method: 'POST', body: JSON.stringify(data) }),
-    complete: (id) => request(`/key-dates/${id}/complete`, { method: 'POST' }),
+    // The date being marked done, so a second press can't roll it on twice.
+    complete: (id, dueDate) =>
+      request(`/key-dates/${id}/complete`, { method: 'POST', body: JSON.stringify({ due_date: dueDate || null }) }),
     remove: (id) => request(`/key-dates/${id}`, { method: 'DELETE' }),
   },
 

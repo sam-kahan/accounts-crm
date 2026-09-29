@@ -22,7 +22,7 @@ function DueBadge({ date }) {
   return <span className="badge grey">in {n}d</span>;
 }
 
-function ItemRow({ item, onDismiss }) {
+function ItemRow({ item, onDismiss, onError }) {
   // Dismiss only for someone who may change it (the server would refuse it).
   const { canEdit } = useAuth();
   const mayDismiss = canEdit(item.type === 'task' ? 'tasks' : 'companies');
@@ -68,8 +68,9 @@ function ItemRow({ item, onDismiss }) {
             setBusy(true);
             try {
               await onDismiss(item);
-            } catch {
+            } catch (e) {
               setBusy(false);
+              onError?.(e.message);
             }
           }}
         >
@@ -103,10 +104,12 @@ export default function Dashboard() {
   // to next year; one-off key dates are marked done; tasks are marked done.
   async function dismiss(item) {
     if (item.type === 'key_date') {
-      await api.keyDates.complete(item.id);
+      await api.keyDates.complete(item.id, item.due_date);
     } else {
       await api.tasks.update(item.id, { status: 'done' });
     }
+    // It was dismissed; a reload that fails says so rather than looking like
+    // the dismiss did.
     await load();
   }
 
@@ -279,7 +282,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {overdue.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} />
+                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} onError={setMsg} />
               ))}
             </tbody>
           </table>
@@ -297,7 +300,7 @@ export default function Dashboard() {
           <table>
             <tbody>
               {upcoming.map((i) => (
-                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} />
+                <ItemRow key={`${i.type}-${i.id}`} item={i} onDismiss={dismiss} onError={setMsg} />
               ))}
             </tbody>
           </table>

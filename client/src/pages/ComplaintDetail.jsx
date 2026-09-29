@@ -317,7 +317,18 @@ export default function ComplaintDetail() {
         event_date: on, type: 'chased', party_id: partyIdOf(t),
         note: `Sent the email "${em.subject || 'the drafted email'}" from Outlook${t && multi ? ` to ${t.org_name}` : ''}.`,
       });
-      if (escalate) await api.complaints.escalate(id, on, partyIdOf(t));
+      if (escalate) {
+        // The send is recorded now; pressing this again would record it
+        // twice. So a failed escalation says so and points to the button
+        // that does only that.
+        try {
+          await api.complaints.escalate(id, on, partyIdOf(t));
+        } catch (e) {
+          await load();
+          setMsg(`Recorded as sent, but moving it to Stage 2 failed (${e.message}). Use “Already asked for it? Record it…” to move it on; don't record the email again.`);
+          return;
+        }
+      }
       setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
       setMsg('Recorded as sent. The next step has been worked out again.');
     } catch (e) {
@@ -327,8 +338,10 @@ export default function ComplaintDetail() {
       setMarkingSent(false);
     }
   }
+  const [savingDraft, setSavingDraft] = useState(false);
   async function saveDraftToTimeline() {
-    if (!ai?.email) return;
+    if (!ai?.email || savingDraft) return;
+    setSavingDraft(true);
     try {
       await api.complaints.addEvent(id, {
         event_date: today,
@@ -339,6 +352,8 @@ export default function ComplaintDetail() {
       setMsg('Draft saved to the timeline.');
     } catch (e) {
       setMsg(e.message);
+    } finally {
+      setSavingDraft(false);
     }
   }
 
@@ -371,7 +386,9 @@ export default function ComplaintDetail() {
         ? 'Sending now. The complaint moves to Stage 2 as soon as it has gone; you can carry on.'
         : 'Sending now; you can carry on.');
     } catch (e) {
-      setMsg(e.message);
+      // Said in the window, not behind it: the page's message is hidden while
+      // the email is open.
+      setSend((cur) => (cur ? { ...cur, error: e.message } : cur));
     } finally {
       setSending(false);
     }
@@ -1603,7 +1620,7 @@ export default function ComplaintDetail() {
                           >
                             Copy
                           </button>
-                          <button className="btn btn-sm" onClick={saveDraftToTimeline}>
+                          <button className="btn btn-sm" disabled={savingDraft} onClick={saveDraftToTimeline}>
                             Save to timeline
                           </button>
                           <button className="btn-primary btn-sm" onClick={() => openSend(ai.email)}>
@@ -1732,6 +1749,7 @@ export default function ComplaintDetail() {
             </div>
           }
         >
+          {send.error && <div className="login-error" style={{ marginBottom: 12 }}>Not sent: {send.error}</div>}
           <label className="field">
             <span className="lbl">To *</span>
             <input value={send.to} onChange={(e) => setSend({ ...send, to: e.target.value })}
