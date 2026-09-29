@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { tracksOf } from './complaintParties.js';
+import { sameOrgName } from './orgMatch.js';
 
 // ---------------------------------------------------------------------------
 // With more than one organisation on a complaint, "when did we last write to
@@ -119,25 +120,41 @@ const PUBLIC_MAIL = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icl
 // remaining organisations' "last wrote / last heard" says is unchanged by
 // the removal: an email or chaser that counts for a remaining organisation
 // stays theirs; one that counts only for the removed organisation (or, the
-// main one being taken off, for no one) is tagged. Pure and tested.
+// main one being taken off, for no one) is tagged — unless it is certainly a
+// remaining organisation's (the AI read it as written by one, or it went
+// only to their addresses). An address that is a remaining organisation's is
+// never remembered as the removed one's, and only an email to or from the
+// removed organisation ALONE teaches its address (never a copied-in one).
+// Emails carry `author_org` (their reading) for this. Pure and tested.
 export function removalTags(input, removeKey) {
-  const { emails, events, domainsOf } = attribute(input);
+  const { emails, events } = attribute(input);
   const stays = (keys) => keys.some((k) => k !== removeKey);
-  const emailIds = emails.filter((e) => e.keys.length && !stays(e.keys)).map((e) => e.row.id);
+  const tracks = tracksOf(input.complaint, input.parties || [], input.orgs || []);
+  const gone = tracks.find((t) => trackKey(t.party) === removeKey);
+  const remaining = tracks.filter((t) => trackKey(t.party) !== removeKey);
+  const writtenByRemaining = (e) => Boolean(e.row.author_org) &&
+    remaining.some((t) => t.names.some((n) => sameOrgName(n, e.row.author_org)));
+  // Certainly a remaining organisation's addresses.
+  const keptSure = new Set(remaining.map((t) => t.domain).filter(Boolean));
+  for (const e of emails) {
+    const forRemaining = e.row.party_id && e.row.party_id !== removeKey && remaining.some((t) => t.party?.id === e.row.party_id);
+    if (writtenByRemaining(e) || forRemaining) for (const d of e.outside) keptSure.add(d);
+  }
+  // Also any address on an email that counts for a remaining organisation.
+  const kept = new Set(keptSure);
+  for (const e of emails) if (stays(e.keys)) for (const d of e.outside) kept.add(d);
+
+  const tagged = emails.filter((e) => e.keys.length && !stays(e.keys) && !writtenByRemaining(e) &&
+    !(e.outside.length && e.outside.every((d) => keptSure.has(d))));
   const eventIds = events
     .filter((ev) => (removeKey === 'main' ? !stays(ev.keys) : ev.keys.length && !stays(ev.keys)))
     .map((ev) => ev.row.id);
-  const domains = new Set(domainsOf(removeKey));
-  // The addresses of emails counted only for them: the ones they wrote from
-  // and the ones we wrote to them at (never ours, never a free mail service
-  // a tenant uses).
-  for (const e of emails) {
-    if (e.keys.length && !stays(e.keys)) for (const d of e.outside) domains.add(d);
-  }
+  const domains = new Set(gone?.domain ? [gone.domain] : []);
+  for (const e of tagged) if (e.outside.length === 1) domains.add(e.outside[0]);
   return {
-    emailIds,
+    emailIds: tagged.map((e) => e.row.id),
     eventIds,
-    domains: [...domains].filter((d) => d && !PUBLIC_MAIL.test(d)),
+    domains: [...domains].filter((d) => d && !kept.has(d) && !PUBLIC_MAIL.test(d)),
   };
 }
 
@@ -205,4 +222,11 @@ export async function contactForOne(complaintId, ourDomain) {
     ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [ids])).rows
     : [];
   return (await contactFor([c], () => parties, orgs, ourDomain)).get(c.id) || new Map();
+}
+
+// Whose each email is (the same rule as "last wrote / last heard"): for the
+// evidence checklist. Map(emailId -> { keys, ours, on }).
+export function emailTracks(input) {
+  const { emails } = attribute(input);
+  return new Map(emails.map((e) => [e.row.id, { keys: e.keys, ours: e.field === 'lastSentOn', on: e.on }]));
 }

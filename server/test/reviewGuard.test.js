@@ -315,7 +315,9 @@ test('missedStage2Requests: a request we sent that left the complaint at Stage 1
   const [both] = missedStage2Requests([main], [{ ...ask, sent_on: '2026-09-20' }, { ...vague, sent_on: '2026-09-25' }]);
   assert.equal(both.email_id, 'e1');
   // Undone by a person afterwards: not offered again.
-  assert.deepEqual(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'Automatic record from the email "x" undone (stage back to stage_1).' }]), []);
+  assert.deepEqual(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'Automatic record from the email "x" undone (back to Stage 1; stage start date back to Wed 1 Jul 2026).' }]), []);
+  // An Undo of something else, whose subject happens to mention Stage 2, doesn't count.
+  assert.equal(missedStage2Requests([main], [ask], [{ type: 'note', party_id: null, event_date: '2026-09-30', note: 'What Sam recorded from the email "Re: Stage 2 complaint" undone (date acknowledged back to blank).' }]).length, 1);
   // A chaser that doesn't mention Stage 2: nothing.
   assert.deepEqual(missedStage2Requests([main], [{ ...ask, subject: 'Chasing', body: 'Please reply by Friday.' }]), []);
   // Two organisations and not sent from here with none named: a person says whose.

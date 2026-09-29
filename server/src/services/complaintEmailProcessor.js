@@ -512,7 +512,7 @@ export async function undoEmail(em, by) {
   const cols = Object.keys(applied.before || {});
   // Recorded on a further organisation's track (migration 029), or the main one.
   if (applied.removed_org && Object.keys(applied.before || {}).length) {
-    throw new HttpError(409, `Can’t undo: it was recorded on ${applied.removed_org}’s part, and they have been taken off this complaint since.`);
+    throw new HttpError(409, `Can’t undo: it was recorded for ${applied.removed_org}, which has been taken off this complaint since.`);
   }
   const partyId = applied.party_id || null;
   const table = partyId ? 'complaint_parties' : 'complaints';

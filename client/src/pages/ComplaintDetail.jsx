@@ -570,6 +570,8 @@ export default function ComplaintDetail() {
         const pick = multi ? (emailParties[em.id] ?? guessTrack(a)) : 'main';
         const tr = pick === 'main' ? c : parties.find((p) => p.id === pick) || null;
         let as = 'correspondence';
+        // An organisation taken off the complaint: filed as correspondence only.
+        if (em.removed_org) { await api.complaints.reviewEmail(id, em.id, 'correspondence', date, null); done += 1; continue; }
         if (a.kind === 'acknowledgement' && tr && tr.stage === 'stage_1' && !tr.acknowledged_on && trackOpen(tr)) as = 'acknowledgement';
         if ((a.kind === 'stage1_response' || a.kind === 'final_response') && tr && ['stage_1', 'stage_2'].includes(tr.stage) && trackOpen(tr)) as = 'response';
         if (as !== 'correspondence' && !tr) { left += 1; continue; }
@@ -1539,6 +1541,7 @@ export default function ComplaintDetail() {
                   <strong>{em.subject || '(no subject)'}</strong>
                   <div className="muted" style={{ fontSize: 12 }}>
                     {em.sender_name || em.sender_email} · arrived {formatDate(arrived)}
+                    {em.removed_org && <> · <span className="badge">{em.removed_org} (taken off this complaint)</span></>}
                   </div>
                   {a ? (
                     <div className="inline-note" style={{ marginTop: 6 }}>

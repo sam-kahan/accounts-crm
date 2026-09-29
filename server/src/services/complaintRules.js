@@ -712,7 +712,7 @@ const FIELD_LABEL = {
   subject: 'subject', category: 'category', description: 'details', channel: 'channel',
   raised_on: 'date raised', stage_started_on: 'stage started', acknowledged_on: 'acknowledged',
   responded_on: 'responded', final_response_on: 'final response', response_due: 'response due',
-  ombudsman_deadline: 'refer-by date',
+  ombudsman_deadline: 'refer-by date', outcome_wanted: 'the outcome we want', losses: 'money lost or extra costs',
 };
 export function describeChanges(before, after) {
   const out = [];
@@ -888,7 +888,10 @@ export function missedStage2Requests(tracks, emails, events = []) {
     // A person put it back to Stage 1 (or recorded an escalation) after it
     // was sent: their decision stands.
     const later = events.some((ev) => (ev.party_id || null) === (t.party_id || null) && ev.event_date >= e.sent_on &&
-      (ev.type === 'escalated' || /^(?:Details corrected:|Automatic record from the email|What .+ recorded from the email).*\bstage\b/i.test(ev.note || '')));
+      (ev.type === 'escalated' || /^Details corrected:.*\bstage\b/i.test(ev.note || '') ||
+        // An Undo that put the stage back (its note says "back to Stage 1"),
+        // never one that merely quotes a subject mentioning Stage 2.
+        /^(?:Automatic record|What .+ recorded) from the email.*\bback to (?:Stage [12]|the ombudsman)\b/i.test(ev.note || '')));
     if (later) continue;
     // The latest per organisation, but a certain request is never replaced
     // by a later email that only mentions Stage 2.

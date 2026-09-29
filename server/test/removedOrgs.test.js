@@ -139,3 +139,43 @@ test('the re-check leaves out a removed organisation\'s emails', () => {
   assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: ['c@lcs.example', 'c@bg.example'] }, rm, 'greenco.co.uk'), false);
   assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: [] }, rm, 'greenco.co.uk'), false);
 });
+
+// Review scenario 1: British Gas added with no complaints address, its emails
+// never tied to it (party_id empty), so they counted as LCS's.
+test('taking LCS (main) off never tags or remembers British Gas\'s own emails', () => {
+  const c = { id: 'c1', org_name: 'LCS', organisation_id: 'o-lcs' };
+  const bgp = { id: 'p-bg', org_name: 'British Gas', organisation_id: null, raised_on: '2026-08-01' };
+  const orgs = [{ id: 'o-lcs', name: 'LCS', complaints_email: 'complaints@lcs.co.uk' }];
+  const mails = [
+    { id: 'a', direction: 'inbound', sender_email: 'c@lcs.co.uk', received_on: '2026-07-02', kind: 'acknowledgement', author_org: 'LCS', party_id: null },
+    { id: 'b', direction: 'inbound', sender_email: 'complaints@britishgas.co.uk', received_on: '2026-08-10', kind: 'acknowledgement', author_org: 'British Gas', party_id: null },
+    { id: 'c', direction: 'outbound', sender_email: 'accounts@greenco.co.uk', to_addresses: ['complaints@britishgas.co.uk'], received_on: '2026-08-01', party_id: null },
+  ];
+  const t = removalTags({ complaint: c, parties: [bgp], orgs, emails: mails, events: [], ourDomain: 'greenco.co.uk' }, 'main');
+  assert.deepEqual(t.emailIds, ['a']);
+  assert.deepEqual(t.domains, ['lcs.co.uk']);
+  // So a later British Gas response is read as theirs, not LCS history.
+  const removedList = [{ name: 'LCS', organisation_id: 'o-lcs', domains: t.domains }];
+  const after = tracksOf({ org_name: 'British Gas', organisation_id: null }, [], orgs);
+  assert.equal(removedOrgFor({ removed: removedList, tracks: after, analysis: { kind: 'stage1_response', author_org: 'British Gas' }, email: { sender_email: 'complaints@britishgas.co.uk' }, ourDomain: 'greenco.co.uk' }), null);
+});
+
+// Review scenario 2: a Send to LCS (a further organisation) copied British Gas (main).
+test('taking a further organisation off never remembers an address it was only copied with', () => {
+  const c = { id: 'c1', org_name: 'British Gas', organisation_id: null };
+  const lcsp = { id: 'p-lcs', org_name: 'LCS', organisation_id: null, raised_on: '2026-08-01' };
+  const mails = [
+    { id: 'a', direction: 'outbound', sender_email: 'accounts@greenco.co.uk', to_addresses: ['complaints@lcs.co.uk', 'complaints@britishgas.co.uk'], received_on: '2026-08-01', party_id: 'p-lcs' },
+    { id: 'b', direction: 'inbound', sender_email: 'complaints@lcs.co.uk', received_on: '2026-08-05', author_org: 'LCS', party_id: 'p-lcs' },
+  ];
+  const t = removalTags({ complaint: c, parties: [lcsp], orgs: [], emails: mails, events: [], ourDomain: 'greenco.co.uk' }, 'p-lcs');
+  assert.deepEqual(t.emailIds.sort(), ['a', 'b']);
+  assert.deepEqual(t.domains, ['lcs.co.uk']);
+});
+
+test('the re-check never leaves out a remaining organisation\'s email', () => {
+  const rm = [{ name: 'LCS', domains: ['lcs.co.uk', 'britishgas.co.uk'] }];
+  assert.equal(offEmail({ sender_email: 'x@britishgas.co.uk' }, rm, 'greenco.co.uk', ['britishgas.co.uk']), false);
+  assert.equal(offEmail({ sender_email: 'a@greenco.co.uk', to_addresses: ['c@britishgas.co.uk'] }, rm, 'greenco.co.uk', ['britishgas.co.uk']), false);
+  assert.equal(offEmail({ sender_email: 'x@lcs.co.uk' }, rm, 'greenco.co.uk', ['britishgas.co.uk']), true);
+});

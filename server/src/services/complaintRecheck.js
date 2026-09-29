@@ -172,9 +172,11 @@ async function emailSignature(id) {
 // An organisation taken off the complaint (complaints.removed_orgs): its
 // emails are history, never read as the remaining organisation's steps —
 // those tagged as its, and any from (or, ours, only to) its addresses.
-export function offEmail(e, removed = [], ourDomain = '') {
+// `kept`: the addresses of the organisations still on it, never "theirs".
+export function offEmail(e, removed = [], ourDomain = '', kept = []) {
   if (e.removed_org) return true;
-  const domains = new Set(removed.flatMap((r) => r?.domains || []));
+  const keep = new Set(kept);
+  const domains = new Set(removed.flatMap((r) => r?.domains || []).filter((d) => !keep.has(d)));
   if (!domains.size) return false;
   const ours = String(ourDomain || '').toLowerCase();
   const dom = (a) => (String(a || '').toLowerCase().match(/@([a-z0-9.-]+)/) || [])[1] || null;
@@ -184,12 +186,27 @@ export function offEmail(e, removed = [], ourDomain = '') {
   return outside.length > 0 && outside.every((d) => domains.has(d));
 }
 
+// The complaints addresses' domains of the organisations on each complaint.
+export async function keptDomainsFor(ids) {
+  const rows = (await query(
+    `SELECT t.complaint_id, lower(substring(o.complaints_email from '@([^>\\s]+)')) AS d
+       FROM (SELECT id AS complaint_id, organisation_id FROM complaints WHERE id = ANY($1::uuid[])
+             UNION ALL SELECT complaint_id, organisation_id FROM complaint_parties WHERE complaint_id = ANY($1::uuid[])) t
+       JOIN organisations o ON o.id = t.organisation_id WHERE o.complaints_email IS NOT NULL`,
+    [ids],
+  )).rows;
+  const out = new Map(ids.map((i) => [i, []]));
+  for (const r of rows) if (r.d) out.get(r.complaint_id)?.push(r.d);
+  return out;
+}
+
 async function emailsOf(id) {
   const c = (await query('SELECT removed_orgs FROM complaints WHERE id = $1', [id])).rows[0];
+  const kept = (await keptDomainsFor([id])).get(id) || [];
   return (await query(
     `SELECT id, message_id, graph_id, subject, sender_name, sender_email, to_addresses, body_text, body_preview, received_at, removed_org
        FROM complaint_emails WHERE complaint_id = $1 ORDER BY received_at`, [id],
-  )).rows.filter((e) => !offEmail(e, c?.removed_orgs || [], config.complaintEmail.domain)).map((e) => ({
+  )).rows.filter((e) => !offEmail(e, c?.removed_orgs || [], config.complaintEmail.domain, kept)).map((e) => ({
     id: e.id, messageId: e.message_id, graphId: e.graph_id, subject: e.subject, senderName: e.sender_name,
     senderEmail: e.sender_email, toAddresses: e.to_addresses || [], bodyText: e.body_text,
     bodyPreview: e.body_preview, receivedAt: e.received_at,

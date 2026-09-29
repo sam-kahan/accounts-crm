@@ -10,7 +10,7 @@ import { requireAuth, requirePermission, sessionOrCronKey } from '../middleware/
 import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, procedureOnFile, missedStage2Requests, ukDate, referralOpen, computeOmbudsmanFrom } from '../services/complaintRules.js';
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
-import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail } from '../services/complaintRecheck.js';
+import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
 import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
@@ -146,6 +146,9 @@ const input = z.object({
   responded_on: isoDate.optional().nullable(),
   final_response_on: isoDate.optional().nullable(),
   imported: z.boolean().optional(),
+  // For the ombudsman: what we want them to do, and what it has cost.
+  outcome_wanted: z.string().trim().max(2000).optional().nullable(),
+  losses: z.string().trim().max(2000).optional().nullable(),
 });
 
 // --- Email fetch (cron-accessible: session OR cron key) --------------------
@@ -1135,6 +1138,12 @@ router.post(
       ])
     ).rows[0];
     if (!em) throw new HttpError(404, 'Email not found on this complaint');
+    // An email of an organisation taken off the complaint never sets another's
+    // dates (a person who knows better records the step with its own button).
+    if (em.removed_org && d.as !== 'correspondence') {
+      throw new HttpError(409, `This email is from ${em.removed_org}, which was taken off this complaint, so it can’t set anyone else’s dates. ` +
+        'Mark it as correspondence. If a date really needs recording, use the step buttons (Record acknowledgement…, Record their response…).');
+    }
     const track = await loadTrack(req.params.id, d.as === 'correspondence' ? null : d.party_id);
     const complaint = track.row; // the organisation's track the step is recorded on
     const partyId = track.party?.id || null;
@@ -1146,19 +1155,6 @@ router.post(
     // What it changes, kept on the email (`applied`, as an automatic record
     // is) so Undo puts back exactly what was there. One transaction: the
     // email is never left marked with its dates unrecorded.
-    const changes = d.as === 'acknowledgement'
-      ? { acknowledged_on: on }
-      : d.as === 'response'
-        ? { responded_on: on, ...(complaint.stage === 'stage_2' ? { final_response_on: on } : {}) }
-        : {};
-    const before = Object.fromEntries(Object.keys(changes).map((k) => [k, complaint[k] ?? null]));
-    // Replacing a date already recorded is allowed, but never silently.
-    const replacing =
-      d.as === 'acknowledgement' && complaint.acknowledged_on && complaint.acknowledged_on !== on
-        ? `acknowledged: ${readable(complaint.acknowledged_on)} → ${readable(on)}`
-        : d.as === 'response' && complaint.responded_on && complaint.responded_on !== on
-          ? `responded: ${readable(complaint.responded_on)} → ${readable(on)}`
-          : null;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1169,6 +1165,22 @@ router.post(
         [em.id, d.as, who(req), partyId],
       );
       if (!marked.rowCount) throw new HttpError(409, 'This email has already been dealt with.');
+      // The organisation's dates as they are NOW (locked), so what Undo puts
+      // back is what was really there, whatever was recorded a moment ago.
+      const row = (await client.query(`SELECT * FROM ${track.table} WHERE id = $1 FOR UPDATE`, [complaint.id])).rows[0];
+      const changes = d.as === 'acknowledgement'
+        ? { acknowledged_on: on }
+        : d.as === 'response'
+          ? { responded_on: on, ...(row.stage === 'stage_2' ? { final_response_on: on } : {}) }
+          : {};
+      const before = Object.fromEntries(Object.keys(changes).map((k) => [k, row[k] ?? null]));
+      // Replacing a date already recorded is allowed, but never silently.
+      const replacing =
+        d.as === 'acknowledgement' && row.acknowledged_on && row.acknowledged_on !== on
+          ? `acknowledged: ${readable(row.acknowledged_on)} → ${readable(on)}`
+          : d.as === 'response' && row.responded_on && row.responded_on !== on
+            ? `responded: ${readable(row.responded_on)} → ${readable(on)}`
+            : null;
       if (replacing) {
         await client.query(
           `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
@@ -1185,7 +1197,7 @@ router.post(
         );
         const note = d.as === 'acknowledgement'
           ? `Acknowledged by email: ${subject}`
-          : `${complaint.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`;
+          : `${row.stage === 'stage_2' ? 'Final (Stage 2)' : 'Stage 1'} response by email: ${subject}`;
         eventId = (await client.query(
           `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
            VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -1463,16 +1475,18 @@ async function stage2MissedFor(ids) {
   )).rows;
   const events = (await query(
     `SELECT complaint_id, type, party_id, to_char(event_date, 'YYYY-MM-DD') AS event_date, note FROM complaint_events
-      WHERE complaint_id = ANY($1::uuid[]) AND (type = 'escalated' OR note LIKE 'Details corrected:%' OR note LIKE 'Automatic record from the email%' OR note ~ '^What .+ recorded from the email')`,
+      WHERE complaint_id = ANY($1::uuid[]) AND removed_org IS NULL
+        AND (type = 'escalated' OR note LIKE 'Details corrected:%' OR note LIKE 'Automatic record from the email%' OR note ~ '^What .+ recorded from the email')`,
     [ids],
   )).rows;
   const out = new Map();
+  const kept = await keptDomainsFor(ids);
   for (const c of complaints) {
     const tracks = [
       { party_id: null, org_name: c.org_name, stage: c.stage, state: c.state, raised_on: c.raised_on },
       ...parties.filter((p) => p.complaint_id === c.id).map((p) => ({ party_id: p.id, org_name: p.org_name, stage: p.stage, state: p.state, raised_on: p.raised_on })),
     ];
-    const own = emails.filter((e) => e.complaint_id === c.id && !offEmail(e, c.removed_orgs || [], config.complaintEmail.domain));
+    const own = emails.filter((e) => e.complaint_id === c.id && !offEmail(e, c.removed_orgs || [], config.complaintEmail.domain, kept.get(c.id) || []));
     out.set(c.id, missedStage2Requests(tracks, own, events.filter((e) => e.complaint_id === c.id)));
   }
   return out;
@@ -1657,6 +1671,8 @@ router.put(
       final_response_on: d.final_response_on,
       response_due: d.response_due,
       response_due_manual: manual,
+      outcome_wanted: d.outcome_wanted === undefined ? undefined : d.outcome_wanted || null,
+      losses: d.losses === undefined ? undefined : d.losses || null,
     });
     if (!clause) throw new HttpError(400, 'No fields to update');
     await query(`UPDATE complaints SET ${clause} WHERE id = $1`, [req.params.id, ...values]);
@@ -2109,7 +2125,7 @@ async function recordRemoval(db, c, parties, removed) {
   const emails = (await db.query(
     `SELECT id, direction, sender_email, to_addresses, party_id,
             (received_at AT TIME ZONE 'Europe/London')::date::text AS received_on,
-            analysis->>'kind' AS kind, analysis->>'sent_on' AS sent_on
+            analysis->>'kind' AS kind, analysis->>'sent_on' AS sent_on, analysis->>'author_org' AS author_org
        FROM complaint_emails WHERE complaint_id = $1 AND removed_org IS NULL`,
     [c.id],
   )).rows;
@@ -2121,6 +2137,16 @@ async function recordRemoval(db, c, parties, removed) {
   const tags = removalTags({ complaint: c, parties, orgs, emails, events, ourDomain: config.complaintEmail.domain }, key);
   await db.query('UPDATE complaint_emails SET removed_org = $2 WHERE id = ANY($1::uuid[])', [tags.emailIds, removed.org_name]);
   await db.query('UPDATE complaint_events SET removed_org = $2 WHERE id = ANY($1::uuid[])', [tags.eventIds, removed.org_name]);
+  // Its steps (raised, acknowledged, response, escalated, resolved) are its
+  // history too: never read as the remaining organisation's (a timeline
+  // entry of theirs would otherwise pass for the new main organisation's).
+  await db.query(
+    `UPDATE complaint_events SET removed_org = $3
+      WHERE complaint_id = $1 AND removed_org IS NULL
+        AND type IN ('raised', 'acknowledged', 'response_received', 'escalated', 'resolved')
+        AND party_id IS NOT DISTINCT FROM $2::uuid`,
+    [c.id, key === 'main' ? null : key, removed.org_name],
+  );
   await db.query(
     `UPDATE complaint_emails SET applied = applied || jsonb_build_object('removed_org', $2::text)
       WHERE complaint_id = $1 AND applied IS NOT NULL
