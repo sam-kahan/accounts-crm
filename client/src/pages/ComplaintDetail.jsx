@@ -1042,9 +1042,10 @@ export default function ComplaintDetail() {
               date (checked against that organisation's own dates and emails),
               otherwise the one its dates give. */}
           {multi && (
-            // Not coloured as a whole: each organisation's badge says whether
-            // its part is overdue, so a "wait" line never reads as a warning.
-            <div className="inline-note" style={{ marginBottom: 14 }}>
+            // Amber when any organisation needs something done now (as the
+            // single-organisation box is), with each one that does labelled:
+            // green read as "nothing required" while LCS was weeks overdue.
+            <div className={`inline-note ${c.any_chase_now || tracks.some((t) => trackOpen(t) && t.chase_now) ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 16, marginBottom: 6 }}><strong>Next steps</strong> (one for each organisation)</div>
               {tracks.map((t, i) => {
                 if (!trackOpen(t)) {
@@ -1067,6 +1068,7 @@ export default function ComplaintDetail() {
                       <strong>{t.org_name}</strong>
                       <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
                       <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
+                      {t.chase_now && <span className="badge amber"><strong>Action needed</strong></span>}
                     </div>
                     <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
                     {draft && (
