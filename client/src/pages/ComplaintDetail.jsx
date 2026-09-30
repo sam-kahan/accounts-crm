@@ -598,7 +598,7 @@ export default function ComplaintDetail() {
       // What the figure check put right or wants checked, said in the window.
       caution: draft?.figure_check?.note || null,
       // What they asked for that isn't on file yet, said in the window.
-      missing: ((t || c).asked_for || []).filter((x) => !x.attachment_id).map((x) => x.item),
+      missing: ((t || c).asked_for || []).filter((x) => !x.attachment_id && !x.given && !x.not_ours).map((x) => x.item),
       then,
     });
   }
@@ -722,18 +722,23 @@ export default function ComplaintDetail() {
   function askedForList(t) {
     const list = t?.asked_for || [];
     if (!list.length) return null;
-    const missing = list.filter((x) => !x.attachment_id);
+    const missing = list.filter((x) => !x.attachment_id && !x.given && !x.not_ours);
     return (
       <div style={{ marginTop: 8, fontSize: 14 }}>
         <div><strong>{multi ? `${t.org_name} asked for:` : 'They asked for:'}</strong></div>
         {list.map((x) => (
           <div key={x.item} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0' }}>
-            {x.attachment_id
-              ? <span className="badge ok">✓ On file</span>
-              : <span className="badge amber"><strong>Not on file</strong></span>}
+            {x.attachment_id ? <span className="badge ok">✓ On file</span>
+              : x.given ? <span className="badge ok">✓ Already given</span>
+                : x.not_ours ? <span className="badge grey">Not ours to give</span>
+                  : <span className="badge amber"><strong>Not on file</strong></span>}
             <span>{x.item}</span>
             {x.attachment_id ? (
               <span className="muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{x.filename}: goes with the email</span>
+            ) : x.given ? (
+              <span className="muted" style={{ fontSize: 12 }}>in {x.given.replace(/^in\s+/i, '')}: the email says so again</span>
+            ) : x.not_ours ? (
+              <span className="muted" style={{ fontSize: 12 }}>{x.not_ours}</span>
             ) : (
               <label className="btn btn-sm" style={{ cursor: askUpload ? 'default' : 'pointer', margin: 0 }}>
                 {askUpload === x.item ? 'Uploading and redrafting…' : 'Upload it…'}

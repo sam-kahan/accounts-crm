@@ -66,16 +66,22 @@ const REVIEW_INSTRUCTION =
   // What they have asked US for: matched to the documents on file, so the
   // email goes with them, and the page asks a person for anything missing.
   'ALSO add a key "requested": when the organisation\'s latest email asks Greenco for documents or ' +
-  'information (proof of ownership, a tenancy agreement, meter readings, a letter of authority, a bill, ' +
-  'an account number…) that Greenco has not sent them since, list EACH thing asked for as {"item": what ' +
-  'they asked for, in a few words, "file": the exact file name from DOCUMENTS ON FILE that provides it, ' +
-  'judged by its description, or null when nothing on file does}; otherwise null. Name a file only when ' +
-  'it really is that thing (a council tax bill is not a tenancy agreement); when unsure, null. Sending ' +
-  'what they asked for is a step to take NOW ("next_action" "send_email", "email_now": true): the email ' +
-  'puts every file named in "requested" in "email.attach" and says briefly which is which; for anything ' +
-  'with no file it never says it is attached, it says it will follow. When something asked for is not ' +
-  'on file, the "headline" says so first, e.g. "Upload the tenancy agreement, then email EDF the ' +
-  'documents they asked for today."';
+  'information (proof of ownership, a tenancy agreement, meter readings, a letter of authority, the ' +
+  'landlord\'s details, an account number…), list EACH thing asked for as {"item": what they asked for, ' +
+  'in a few words, "file": the exact file name from DOCUMENTS ON FILE that provides it, judged by its ' +
+  'description, or null; "given": where Greenco has ALREADY given it, e.g. "our email of 23 September ' +
+  '2026" (information counts as given when it is written in one of Greenco\'s emails, before or after ' +
+  'their request: read Greenco\'s emails for it), or null; "not_ours": when it is not Greenco\'s to ' +
+  'give, one short reason (e.g. "Greenco no longer manages the property and holds no tenant details"), ' +
+  'or null}; otherwise null. Name a file only when it really is that thing (a council tax bill is not a ' +
+  'tenancy agreement); when unsure, null. An item already given, or not Greenco\'s to give, is never ' +
+  'asked for again: the email repeats what was given (quoting it), says when it was first given, and says ' +
+  'plainly what Greenco does not hold. Sending the reply is a step to take NOW ("next_action" ' +
+  '"send_email", "email_now": true) unless Greenco has already answered it: the email puts every file ' +
+  'named in "requested" in "email.attach"; for anything with no file it never says it is attached. ' +
+  'Only when something is genuinely missing (no file, not given, and Greenco\'s to give) does the ' +
+  '"headline" say so first, e.g. "Upload the tenancy agreement, then email EDF the documents they asked ' +
+  'for today."';
 
 // A complaint against more than one organisation (a debt collector and the
 // council or supplier whose account it is): separate complaints, each with

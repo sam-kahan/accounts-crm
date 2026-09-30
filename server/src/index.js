@@ -448,6 +448,21 @@ app.listen(config.port, () => {
       if (due.length) console.log(`  Drafts to have their figures checked: ${due.length}`);
     })
     .catch((err) => console.error('  Figure check of existing drafts:', err.message));
+  // Reviews that listed something asked for as "not on file" before the
+  // review knew what Greenco had already given (in its emails) or doesn't
+  // hold: written again once, so nobody is asked for what went weeks ago.
+  getSetting('requested_given_0930')
+    .then(async (done) => {
+      if (done) return;
+      const { scheduleReview } = await import('./services/complaintReview.js');
+      const open = (await query(`SELECT id, ai_review FROM complaints WHERE state = 'open' AND ai_review IS NOT NULL`)).rows;
+      const old = (r) => (Array.isArray(r?.requested) ? r.requested : []).some((x) => !x.attachment_id && !('given' in x));
+      const due = open.filter((c) => old(c.ai_review) || (c.ai_review.by_org || []).some((e) => old(e)));
+      due.forEach((c, i) => scheduleReview(c.id, 420000 + i * 15000));
+      await setSetting('requested_given_0930', { at: new Date().toISOString(), scheduled: due.length }, 'start-up');
+      if (due.length) console.log(`  Reviews to re-read what was asked for: ${due.length}`);
+    })
+    .catch((err) => console.error('  Reviews (what was already given):', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

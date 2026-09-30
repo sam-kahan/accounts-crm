@@ -57,9 +57,9 @@ test('what they asked for is matched to the documents on file by name, and a mis
     { item: '   ' },
   ], docs);
   assert.deepEqual(r, [
-    { item: 'Proof of ownership', attachment_id: 'd1', filename: 'Land Registry title.pdf' },
-    { item: 'Tenancy agreement', attachment_id: null, filename: null },
-    { item: 'Meter readings', attachment_id: null, filename: null },
+    { item: 'Proof of ownership', attachment_id: 'd1', filename: 'Land Registry title.pdf', given: null, not_ours: null },
+    { item: 'Tenancy agreement', attachment_id: null, filename: null, given: null, not_ours: null },
+    { item: 'Meter readings', attachment_id: null, filename: null, given: null, not_ours: null },
   ]);
   assert.equal(normaliseRequested(null, docs), null);
   assert.equal(normaliseRequested([], docs), null);
@@ -77,4 +77,17 @@ test('the documents they asked for go with the email, whatever else the AI chose
   assert.deepEqual(plain.email.attachment_ids, ['d9']);
   assert.equal(plain.requested, null);
   assert.equal(withRequestedDocs(null, docs), null);
+});
+
+import { stillMissing } from '../src/services/draftChecks.js';
+
+test('E.ON asking again for details Greenco already gave, or doesn\'t hold, is never "missing"', () => {
+  const r = normaliseRequested([
+    { item: "Landlord's details", file: null, given: 'our email of 23 September 2026' },
+    { item: 'Current tenant details', file: null, not_ours: 'Greenco no longer manages the property and holds no tenant details' },
+    { item: 'Meter readings', file: null },
+  ], []);
+  assert.deepEqual(r.map(stillMissing), [false, false, true]);
+  assert.equal(r[0].given, 'our email of 23 September 2026');
+  assert.match(r[1].not_ours, /no tenant details/);
 });

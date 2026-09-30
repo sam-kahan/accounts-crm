@@ -827,6 +827,18 @@ the page says how far each date can be trusted.
   agent acting for a freeholder; **Not needed** (`POST /:id/supplier/decline`,
   migration `058` `complaints.supplier_declined`) stops one being suggested
   again, with a timeline note.
+- **What they asked for knows what Greenco already gave, and what isn't
+  Greenco's**: each `requested` item also carries `given` (where Greenco
+  already gave it: information written in one of its emails counts) and
+  `not_ours` (why it isn't Greenco's to give, e.g. a tenant's details for a
+  property it no longer manages); only an item with none of file / given /
+  not_ours is missing (`draftChecks.js#stillMissing`, the page, the Send
+  window and the dashboard). The assistant's system prompt says who Greenco
+  is: a managing agent acting for landlords, never the owner or occupier, so
+  it never asks Greenco for what it gave already or doesn't hold. E.ON's
+  "full landlord or current tenant details" (given many times, most recently
+  23 Sep) showed as "Not on file: Upload it". Start-up re-wrote, once, the
+  reviews listing an item under the old rule (`app_settings.requested_given_0930`).
 - **Timeline notes are what the AI knows**: the card and the note option say
   the AI reads them, and the review is told to use a person's notes (a call,
   what another company said) where they bear on the email, saying whose they

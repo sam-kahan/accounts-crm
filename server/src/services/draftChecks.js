@@ -25,8 +25,9 @@ export function pickAttachments(email, docs = []) {
 // to the document on file that provides it by the exact file name the AI
 // gave, or null when nothing on file does: the page then asks a person for
 // it. A name that isn't on file is never taken on trust. At most 10 items.
-// `docs`: [{ id, filename }]. Returns [{ item, attachment_id, filename }],
-// or null when they asked for nothing.
+// `docs`: [{ id, filename }]. Returns [{ item, attachment_id, filename,
+// given, not_ours }], or null when they asked for nothing. Missing (to ask a
+// person for) is only an item with none of the three: `stillMissing`.
 export function normaliseRequested(list, docs = []) {
   if (!Array.isArray(list)) return null;
   const out = [];
@@ -38,11 +39,19 @@ export function normaliseRequested(list, docs = []) {
     seen.add(norm(item));
     const want = typeof x === 'object' && x ? norm(x.file) : '';
     const d = want ? docs.find((doc) => norm(doc.filename) === want) : null;
-    out.push({ item, attachment_id: d?.id || null, filename: d?.filename || null });
+    const note = (v) => (typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim().slice(0, 200) : null);
+    // Already given in one of Greenco's emails, or not Greenco's to give:
+    // never shown as missing, never asked for again.
+    out.push({
+      item, attachment_id: d?.id || null, filename: d?.filename || null,
+      given: d ? null : note(x?.given), not_ours: d ? null : note(x?.not_ours),
+    });
     if (out.length >= 10) break;
   }
   return out.length ? out : null;
 }
+
+export const stillMissing = (x) => !x.attachment_id && !x.given && !x.not_ours;
 
 // A step with what they asked for: the documents found on file go with its
 // email, whatever else the AI chose, so nothing asked for and on file is
