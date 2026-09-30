@@ -157,32 +157,41 @@ export async function refreshReview(id) {
   }
 }
 
-// Fire-and-forget refresh after a change. Every change within a couple of
-// minutes (an import, the emails found for it, their attachments) collapses
-// into ONE review, rather than one per change.
-const pending = new Map();
+// Fire-and-forget refresh after a change. Every change within 10 minutes of
+// the last (an email, its attachments, the step recorded from it, a reply
+// sent, the emails an import brings in) collapses into ONE review rather
+// than one each: every review is a full paid read of the complaint. A
+// steady run of changes can't hold it off for ever: it is written at the
+// latest 30 minutes after the first change it is waiting for. A person who
+// needs it now presses for it (POST /:id/review), which cancels the wait.
+export const REVIEW_WAIT_MS = 10 * 60 * 1000;
+export const REVIEW_MAX_WAIT_MS = 30 * 60 * 1000;
+const pending = new Map(); // id -> { timer, since }
 
 // A review is being written now, so one already queued for this complaint
 // would only repeat it (and be paid for twice).
 export function cancelScheduledReview(id) {
-  clearTimeout(pending.get(id));
+  clearTimeout(pending.get(id)?.timer);
   pending.delete(id);
 }
 
-export function scheduleReview(id, delayMs = 120000) {
+export function scheduleReview(id, delayMs = REVIEW_WAIT_MS) {
   if (!config.anthropic.enabled || !id) return;
   // Kept on the complaint as well as in the timer: a restart (every deploy)
-  // within the two minutes would otherwise lose it, and a change that moves
-  // no date leaves nothing for the nightly check to notice.
+  // within the wait would otherwise lose it, and a change that moves no
+  // date leaves nothing for the nightly check to notice.
   query('UPDATE complaints SET review_wanted_at = now() WHERE id = $1', [id]).catch(() => {});
-  clearTimeout(pending.get(id));
-  pending.set(
-    id,
-    setTimeout(() => {
+  const was = pending.get(id);
+  clearTimeout(was?.timer);
+  const since = was?.since || Date.now();
+  const wait = Math.max(0, Math.min(delayMs, since + REVIEW_MAX_WAIT_MS - Date.now()));
+  pending.set(id, {
+    since,
+    timer: setTimeout(() => {
       pending.delete(id);
       refreshReview(id).catch((err) => console.error(`[complaints] review ${id} failed:`, err.message));
-    }, delayMs),
-  );
+    }, wait),
+  });
 }
 
 // At start-up: the reviews asked for but not written before the server

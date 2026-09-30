@@ -215,7 +215,9 @@ export async function saveAttachment(complaintId, file) {
 // Save a file that arrived attached to an email (it never went through
 // multer), noting which email it came from. Same folder, naming and text
 // extraction as an upload.
-export async function saveAttachmentBuffer(complaintId, { filename, mimetype, buffer }, sourceEmailId) {
+// `description`: its one-line label when the email reading already gave one
+// (emailAnalysis.js `documents`), so it is never read again to label it.
+export async function saveAttachmentBuffer(complaintId, { filename, mimetype, buffer }, sourceEmailId, { description = null } = {}) {
   const dir = path.join(UPLOAD_ROOT, complaintId);
   const rel = path.relative(UPLOAD_ROOT, dir);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid upload path');
@@ -230,12 +232,13 @@ export async function saveAttachmentBuffer(complaintId, { filename, mimetype, bu
   const text = await extractText(filePath, mimetype);
   const { rows } = await query(
     `INSERT INTO complaint_attachments
-       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, source_email_id, sha256)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       (complaint_id, filename, mimetype, size_bytes, storage_path, extracted_text, source_email_id, sha256,
+        description, described_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $9::text IS NULL THEN NULL ELSE now() END)
      RETURNING id, filename`,
-    [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null, hash],
+    [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null, hash, description],
   );
-  labelSoon(complaintId);
+  if (!description) labelSoon(complaintId);
   return rows[0];
 }
 

@@ -71,6 +71,11 @@ Work out, from the evidence only:
 - account_numbers: every customer or account number the email gives for that property or customer
   (energy/water account, council tax account, service-charge or ground-rent account), exactly as
   written. Not phone, invoice or bill numbers, amounts or case references. Empty list if none.
+- documents: one entry per attached document you were given, {"file": its name exactly as labelled,
+  "description": one line saying what it is, who it is from or to, its date and any key figure or
+  reference, under 160 characters (e.g. "Council tax summons from Liverpool City Council, 15 Sep 2026:
+  £623.24 plus £61 costs, account 58946039")}, so a colleague can tell what each is without opening
+  it. Empty list with no attachments.
 - our_step: ONLY for Greenco's own email (kind "our_email"): "stage2_request" if it is Greenco asking the
   organisation to escalate this complaint to its next stage (a Stage 2 / complaints manager / senior
   review, a review of their Stage 1 answer), "ombudsman_referral" if it is Greenco referring the complaint
@@ -105,7 +110,8 @@ Return ONLY a JSON object with exactly these keys:
  "action_needed": string|null, "evidence": string|null, "confidence": "high"|"medium"|"low",
  "complaint_id": string|null, "new_complaint": boolean, "org_name": string|null, "author_org": string|null,
  "resolved": boolean, "outcome": string|null, "our_step": "stage2_request"|"ombudsman_referral"|null,
- "property": string|null, "account_numbers": [string]}`;
+ "property": string|null, "account_numbers": [string],
+ "documents": [{"file": string, "description": string}]}`;
 
 function extractJson(text) {
   const start = text.indexOf('{');
@@ -160,6 +166,12 @@ export function normaliseAnalysis(r, { candidateIds = [], today } = {}) {
     property: str(r?.property, 300),
     account_numbers: Array.isArray(r?.account_numbers)
       ? [...new Set(r.account_numbers.map((a) => str(a, 40)).filter(Boolean))].slice(0, 6)
+      : [],
+    // Each attachment's one-line label, read while the reading had it open,
+    // so it is never read again just to be labelled (docChoice.js).
+    documents: Array.isArray(r?.documents)
+      ? r.documents.map((d) => ({ file: str(d?.file, 300), description: str(d?.description, 200) }))
+        .filter((d) => d.file && d.description).slice(0, 10)
       : [],
   };
 }

@@ -803,6 +803,24 @@ the page says how far each date can be trusted.
   is told the same. The Send window lists both; Edit details names whose
   reference it edits.
 
+### 2026-09-30 — AI spend: attachments read once; reviews wait 10 minutes
+- **An email's attachments are labelled by the email reading itself**
+  (`emailAnalysis.js` `documents`: one line per attached document it was
+  given, clamped in `normaliseAnalysis`), stored as the document's
+  `description` when it is saved (`saveAttachmentBuffer(..., { description })`),
+  so a PDF that came on an email is no longer read a second time just to
+  label it. One the reading didn't label (over its 5 files) is labelled as
+  before (`describeSoon`).
+- **The standing review waits 10 minutes after the last change**
+  (`REVIEW_WAIT_MS`, was 2) and is written at the latest 30 minutes after the
+  first change it waits for (`REVIEW_MAX_WAIT_MS`), so an email, its
+  attachments, the step recorded from it and a reply make one paid review,
+  not several. Pressing Re-check & update next steps still writes it at once.
+- Checked and left: found threads' account numbers are not read twice (the
+  first reading stamps `accounts_read_at`); the re-check's second read happens
+  only when a new account number found more emails, and reads them together
+  on purpose.
+
 ### 2026-09-30 — prompt caching on every AI call
 - Anthropic wrote that the cache hit rate was low: no call used prompt
   caching, so the same instructions (1,000-1,500 tokens for the email

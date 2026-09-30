@@ -223,3 +223,13 @@ test('our own Stage 2 request still moves the complaint on', () => {
   const plan = planFromAnalysis(complaint({ acknowledged_on: '2026-09-29', responded_on: '2026-10-01' }), a, { today: TODAY, ownEmail: true });
   assert.equal(plan.changes?.stage, 'stage_2');
 });
+
+test('the email reading labels each attachment once, clamped; nothing half-given is kept', async () => {
+  const { normaliseAnalysis: n } = await import('../src/services/emailAnalysis.js');
+  const r = n({ kind: 'other', documents: [
+    { file: 'Title.pdf', description: 'HM Land Registry title: Greenco Ltd, 4 Oak Road' },
+    { file: 'x.pdf' }, { description: 'no name' }, 'junk',
+  ] });
+  assert.deepEqual(r.documents, [{ file: 'Title.pdf', description: 'HM Land Registry title: Greenco Ltd, 4 Oak Road' }]);
+  assert.deepEqual(n({ kind: 'other' }).documents, []);
+});

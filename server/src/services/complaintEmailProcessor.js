@@ -228,9 +228,11 @@ async function processClaimedEmail(claimed) {
       .map((r) => r.filename),
   );
   {
+    // The label the email reading gave each one while it had it open.
+    const labelOf = new Map((analysis?.documents || []).map((d) => [d.file.trim().toLowerCase(), d.description]));
     for (const a of detail.attachments.filter((x) => !saved.has(x.filename))) {
       try {
-        await saveAttachmentBuffer(em.complaint_id, a, em.id);
+        await saveAttachmentBuffer(em.complaint_id, a, em.id, { description: labelOf.get(String(a.filename || '').trim().toLowerCase()) || null });
       } catch (err) {
         console.error(`[complaints] attachment ${a.filename} not saved:`, err.message);
       }

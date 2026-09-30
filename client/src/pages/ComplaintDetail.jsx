@@ -1303,7 +1303,7 @@ export default function ComplaintDetail() {
               try {
                 await api.complaints.confirmStage2Email(id, m.email_id);
                 await load();
-                setMsg(`Moved to Stage 2 from ${formatDate(m.sent_on)}. If that was wrong, press Undo on that email below. The next steps will update in a couple of minutes.`);
+                setMsg(`Moved to Stage 2 from ${formatDate(m.sent_on)}. If that was wrong, press Undo on that email below. The next steps will update within about 10 minutes (or press Re-check & update next steps).`);
               } catch (e) { setMsg(e.message); } finally { setCatchingUp(null); }
             }}>
             {catchingUp === (m.party_id || 'main') ? 'Moving…' : `Move to Stage 2 from ${formatDate(m.sent_on)}`}
