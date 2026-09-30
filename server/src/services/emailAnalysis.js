@@ -4,7 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
 import { trackOpen, awaitingFirstEmail } from './complaintRules.js';
-import { track } from './aiUsage.js';
+import { cachedSystem, track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Reads an email that arrived for a complaint — usually one a colleague has
@@ -444,7 +444,7 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
     max_tokens: 2000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium' },
-    system: SYSTEM,
+    system: cachedSystem(SYSTEM),
     messages: [{ role: 'user', content: [...blocks, { type: 'text', text: lines.join('\n') }] }],
   }));
   if (res.stop_reason === 'refusal') throw new HttpError(502, 'The email could not be analysed.');

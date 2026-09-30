@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { track } from './aiUsage.js';
+import { cachedSystem, track } from './aiUsage.js';
 import { referLimitText, holdToComplaintWord } from './complaintRules.js';
 import { pickAttachments, staleNoReply, saysAttached } from './draftChecks.js';
 import { query } from '../db/pool.js';
@@ -314,7 +314,7 @@ export async function callClaude({ system, user, blocks = [], maxTokens = 4000, 
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort },
-    system,
+    system: cachedSystem(system),
     messages: [{ role: 'user', content }],
   }));
   if (res.stop_reason === 'refusal') {

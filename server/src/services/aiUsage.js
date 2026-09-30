@@ -63,6 +63,19 @@ export async function recordUsage(feature, res) {
   }
 }
 
+// A system prompt marked for prompt caching: `system: cachedSystem(SYSTEM)`.
+// Every call of one kind sends the same instructions (1,000-1,500 tokens for
+// the big ones), so a call within 5 minutes of another of its kind reads them
+// back at a tenth of the price instead of paying for them again; a lone call
+// pays a quarter more on those tokens only. Caching never changes what the
+// model sees or answers. A prompt under the model's minimum (512 tokens on
+// Sonnet 5.5) is simply not cached: no error, no extra charge. Keep system
+// prompts FIXED text (no dates, names or ids in them): one changed character
+// and nothing is ever read back.
+export function cachedSystem(text) {
+  return [{ type: 'text', text, cache_control: { type: 'ephemeral' } }];
+}
+
 // `await track('Invoice reading', client.messages.create({...}))`: the
 // response, recorded on the way through.
 export async function track(feature, pending) {

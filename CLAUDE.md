@@ -746,6 +746,24 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-30 — prompt caching on every AI call
+- Anthropic wrote that the cache hit rate was low: no call used prompt
+  caching, so the same instructions (1,000-1,500 tokens for the email
+  reader, the complaint assistant, the import reader and the invoice reader)
+  were paid for in full on every call. Every `messages.create` now sends its
+  system prompt through `aiUsage.js#cachedSystem()`, which marks it
+  `cache_control: ephemeral` (5 minutes). A call within 5 minutes of another
+  of its kind (a mailbox check reading several emails, a past-complaints
+  search, an import, a batch of invoices) reads the instructions at a tenth
+  of the input price; a lone call pays a quarter more on them only. Answers
+  are unchanged: caching changes the price, not what the model reads.
+- System prompts must stay fixed text: a date, name or id in one means it is
+  never read back. The per-call facts (today, the complaint) already go in
+  the user message. Documents and emails are NOT marked: they differ per
+  call, so marking them would pay the write premium with nothing read back.
+- `ai_usage` already recorded `cache_read_tokens` / `cache_write_tokens` and
+  `costOf()` prices them, so Admin → AI usage shows the saving as it comes.
+
 ### 2026-09-29 — fixes from a review of the day's complaint changes
 - **A document is described once, whatever happens** (`docChoice.js`): one
   the call failed on, or the reply left out, is marked tried (`described_at`)
@@ -1760,6 +1778,8 @@ the page says how far each date can be trusted.
   price change never leaves wrong figures. An unknown model is flagged, never
   shown as free. **A new AI call must go through `track()` with a plain-English
   feature name.**
+  It also sends its system prompt as `cachedSystem(SYSTEM)` (prompt caching,
+  see Recent changes), and the system prompt stays fixed text.
 - **Admin → AI usage** (`/ai-usage`, `GET /api/ai-usage?month=`, admin only):
   the month's estimated spend and where it is heading, spend by feature
   (dearest first, with its share), day by day, and month by month. Estimates;

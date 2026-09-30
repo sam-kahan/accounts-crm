@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { ruleFor } from './complaintRules.js';
 import { contentFor } from './invoiceExtract.js';
-import { track } from './aiUsage.js';
+import { cachedSystem, track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Research a specific organisation's complaints procedure using Claude with web
@@ -211,7 +211,7 @@ sentence quoted, and leave anything you can't confirm null and listed in "unconf
       max_tokens: 8000,
       thinking: { type: 'adaptive' },
       output_config: { effort: 'medium' },
-      system: SYSTEM,
+      system: cachedSystem(SYSTEM),
       tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
       messages,
     }));
@@ -248,7 +248,7 @@ export async function readProcedureDocument(file, { name, type } = {}) {
     max_tokens: 8000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium' },
-    system: DOC_SYSTEM,
+    system: cachedSystem(DOC_SYSTEM),
     messages: [
       {
         role: 'user',

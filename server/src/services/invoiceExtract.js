@@ -4,7 +4,7 @@ import { HttpError } from '../lib/http.js';
 import { todayISO } from '../lib/dates.js';
 import { docxToText, isDocx, isLegacyDoc, DocxError } from '../lib/docx.js';
 import { toPence, fromPence } from '../lib/money.js';
-import { track } from './aiUsage.js';
+import { cachedSystem, track } from './aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Read a contractor's invoice (PDF, Word document, photo or plain text) and
@@ -343,7 +343,7 @@ export async function extractInvoice(file) {
     max_tokens: 2000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'low' },
-    system: SYSTEM,
+    system: cachedSystem(SYSTEM),
     messages: [
       {
         role: 'user',

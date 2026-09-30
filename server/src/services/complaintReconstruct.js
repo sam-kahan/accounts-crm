@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
-import { track } from './aiUsage.js';
+import { cachedSystem, track } from './aiUsage.js';
 import { usesComplaintWord } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ async function ask({ system, user, maxTokens, effort, feature }) {
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort },
-    system,
+    system: cachedSystem(system),
     messages: [{ role: 'user', content: user }],
   }));
   if (res.stop_reason === 'refusal') throw new HttpError(502, 'The emails could not be read.');

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { costOf, priceFor, summarise } from '../src/services/aiUsage.js';
+import { cachedSystem, costOf, priceFor, summarise } from '../src/services/aiUsage.js';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -32,4 +32,11 @@ test('a month adds up by feature, by day and in total', () => {
   assert.equal(s.by_feature[0].key, 'Standing AI review (automatic)'); // dearest first
   near(s.by_feature[0].dollars, (400_000 * 2 + 40_000 * 10) / 1e6);
   assert.deepEqual(s.by_day.map((d) => d.key), ['2026-09-29', '2026-09-30']);
+});
+
+test('a cached system prompt is the same words, marked for caching', () => {
+  const s = cachedSystem('You read invoices.');
+  assert.deepEqual(s, [{ type: 'text', text: 'You read invoices.', cache_control: { type: 'ephemeral' } }]);
+  // The same text twice gives byte-identical blocks, so the second call reads the cache.
+  assert.equal(JSON.stringify(cachedSystem('x')), JSON.stringify(cachedSystem('x')));
 });
