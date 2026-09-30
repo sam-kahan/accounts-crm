@@ -162,13 +162,14 @@ export async function collectComplaintDueItems(days = 30) {
       // is overdue from them while they wait on us. What they asked for and
       // isn't on file is named, so the person knows to find it. (An overdue
       // part keeps its own OVERDUE line below, with this step as its detail.)
-      if (t.action_now && aiOwn && !t.needs_chasing) {
+      if (t.action_now && (aiOwn || t.action_why) && !t.needs_chasing) {
+        const what = t.action_why || aiOwn;
         const missing = (t.asked_for || []).filter((x) => !x.attachment_id && !x.given && !x.not_ours).map((x) => x.item);
         items.push({
           type: 'complaint', id: c.id,
           label: `Complaint ACTION NEEDED: ${c.subject}`,
           due_date: todayISO(), company_name: t.org_name, overdue: true,
-          detail: missing.length ? `${aiOwn} Not on file yet: ${missing.join(', ')}.` : aiOwn,
+          detail: missing.length ? `${what} Not on file yet: ${missing.join(', ')}.` : what,
           link,
         });
         continue;

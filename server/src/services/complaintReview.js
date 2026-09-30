@@ -63,6 +63,15 @@ const REVIEW_INSTRUCTION =
   'Once a complaint (or an organisation\'s part of it) is at Stage 2 or with the ombudsman, Stage 2 has ' +
   'already been asked for: never draft the Stage 2 request again; any follow-up asks for their Stage 2 ' +
   'response by its due date. ' +
+  // Answering what they asked for doesn't settle the complaint: E.ON's
+  // "response" asked for the landlord's details again, Greenco sent them,
+  // and the review said to wait with no date while the bills kept coming.
+  'Once their response (at any stage) has come and the complaint is not put right, the complaint ' +
+  'moves on: the next step is the next stage of their procedure (ask for Stage 2, or refer it when a ' +
+  'referral is open), sent now. Greenco having answered a question of theirs, or sent what they asked ' +
+  'for, is not the end of it and never a reason to wait with no date: wait only when Greenco has just ' +
+  'given them something they need in order to put it right, and then only until a date (at most 5 ' +
+  'working days after Greenco\'s email) in next_action "by". ' +
   // What they have asked US for: matched to the documents on file, so the
   // email goes with them, and the page asks a person for anything missing.
   'ALSO add a key "requested": when the organisation\'s latest email asks Greenco for documents or ' +
@@ -77,7 +86,8 @@ const REVIEW_INSTRUCTION =
   'tenancy agreement); when unsure, null. An item already given, or not Greenco\'s to give, is never ' +
   'asked for again: the email repeats what was given (quoting it), says when it was first given, and says ' +
   'plainly what Greenco does not hold. Sending the reply is a step to take NOW ("next_action" ' +
-  '"send_email", "email_now": true) unless Greenco has already answered it: the email puts every file ' +
+  '"send_email", "email_now": true) unless Greenco has already answered it (then the step is the next ' +
+  'stage, as above): the email puts every file ' +
   'named in "requested" in "email.attach"; for anything with no file it never says it is attached. ' +
   'Only when something is genuinely missing (no file, not given, and Greenco\'s to give) does the ' +
   '"headline" say so first, e.g. "Upload the tenancy agreement, then email EDF the documents they asked ' +

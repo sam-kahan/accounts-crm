@@ -18,7 +18,7 @@ import {
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { loadSchemes, schemeFor } from './ombudsmen.js';
-import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral, actsNow } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral, actsNow, responseNeedsDecision } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks, listAttachments } from './attachments.js';
 
@@ -190,11 +190,17 @@ export async function decorateMany(rows) {
     // for, each with the document on file that provides it, or none.
     const doubt = c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered;
     const live = c.ai_review_current && c.state === 'open' && !doubt;
+    const today = todayISO();
     [c, ...c.parties].forEach((t, i) => {
       const step = live && trackOpen(t) && t.status !== 'not_sent'
         ? (c.parties.length ? c.ai_review?.by_org?.[i] : c.ai_review) : null;
-      t.action_now = actsNow(step);
-      const asked = t.action_now && Array.isArray(step.requested) && step.requested.length ? step.requested : null;
+      // Their response is in and the complaint is still open: someone must
+      // decide the next step, whatever the review's wording (an undated
+      // "wait" after they answered is not a step). Said with the dates' step.
+      const decide = c.state === 'open' && !doubt && trackOpen(t) && responseNeedsDecision(t, step, today);
+      t.action_why = !actsNow(step) && decide ? t.nextAction || 'Their response is in: decide the next step.' : null;
+      t.action_now = actsNow(step) || decide;
+      const asked = t.action_now && Array.isArray(step?.requested) && step.requested.length ? step.requested : null;
       // Greenco has written to them since their last email: whatever they
       // asked for has had its answer, so nothing is shown as missing (the AI
       // can misjudge what an email already gave; the dates can't).

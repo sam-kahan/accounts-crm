@@ -444,3 +444,17 @@ test('each organisation keeps the documents chosen for its email, and what it as
   assert.deepEqual(out[1].email.attachment_ids, ['d1']);
   assert.equal(out[1].requested[0].item, 'Proof of ownership');
 });
+
+import { responseNeedsDecision } from '../src/services/reviewGuard.js';
+
+test('responseNeedsDecision: a response on an open part needs deciding unless a dated wait still runs', () => {
+  const t = { status: 'responded' };
+  // E.ON: their response asked for details, Greenco sent them, review says wait with no date.
+  assert.equal(responseNeedsDecision(t, { next_action: { type: 'wait', by: null } }, TODAY), true);
+  assert.equal(responseNeedsDecision(t, null, TODAY), true);
+  assert.equal(responseNeedsDecision(t, { next_action: { type: 'wait', by: '2026-09-25' } }, TODAY), true);
+  assert.equal(responseNeedsDecision(t, { next_action: { type: 'wait', by: '2026-10-02' } }, TODAY), false);
+  assert.equal(responseNeedsDecision(t, { next_action: { type: 'wait', by: TODAY } }, TODAY), false);
+  assert.equal(responseNeedsDecision({ status: 'awaiting_response' }, null, TODAY), false);
+  assert.equal(responseNeedsDecision({ status: 'with_ombudsman' }, null, TODAY), false);
+});

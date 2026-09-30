@@ -77,6 +77,20 @@ export function actsNow(r) {
   return ACT_TYPES.includes(r.next_action?.type) || (Boolean(r.email?.body) && r.email_now === true);
 }
 
+// Their response came and the complaint is still open: a person has to
+// decide what happens next (ask for the next stage, refer it, or mark it
+// resolved if it was put right), so it needs attention whatever the
+// review's wording, unless its step is to wait until a date still to come
+// (Greenco has just sent them something to act on). An undated "wait" after
+// a response isn't a step: answering what they asked for (E.ON asking for
+// the landlord's details again) doesn't settle the complaint. Pure.
+export function responseNeedsDecision(track, step, today) {
+  if (track?.status !== 'responded') return false;
+  const na = step?.next_action;
+  if (na?.type === 'wait' && na.by && na.by >= (today || todayISO())) return false;
+  return true;
+}
+
 // Until when chasing is held because Greenco has written to them: the same
 // rule guardReview holds the advice by (sent in the last
 // CHASE_GAP_WORKING_DAYS, or Greenco wrote last and they still have time),

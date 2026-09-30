@@ -1461,6 +1461,7 @@ export default function ComplaintDetail() {
                       {(t.chase_now || t.action_now) && <span className="badge amber"><strong>Action needed</strong></span>}
                     </div>
                     <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
+                    {t.action_why && t.action_why !== text && <div style={{ marginTop: 4 }}><strong>Still to decide:</strong> {t.action_why}</div>}
                     {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                     {askedForList(t)}
                     {draft && (
@@ -1525,6 +1526,7 @@ export default function ComplaintDetail() {
                   {c.action_now && <span className="badge amber" style={{ marginRight: 6 }}><strong>Action needed</strong></span>}
                   <strong>Next step:</strong> {text}
                 </div>
+                {c.action_why && c.action_why !== text && <div style={{ marginTop: 4 }}><strong>Still to decide:</strong> {c.action_why}</div>}
                 {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                 {askedForList(c)}
                 {(draft || btn) && (

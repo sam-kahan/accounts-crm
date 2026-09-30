@@ -746,6 +746,25 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-30 — a response in on an open complaint always needs deciding
+- **E.ON (87 Spekeland Road) lost "Action needed"** after the "already
+  given" change: their Stage 1 "response" only asked for the landlord's
+  details again, Greenco had sent them (23 Sep), and the review, told not to
+  ask for what was already given, said to wait, with no date. Answering
+  their question doesn't settle the complaint.
+- **In code**: `reviewGuard.js#responseNeedsDecision` (pure, tested): a part
+  whose response is in (`status: 'responded'`) on an open complaint needs a
+  person to decide (the next stage, a referral, or mark it resolved), unless
+  the step is to wait until a date still to come. `decorateMany` sets
+  `action_now` from it too, with `action_why` (the dates' step), shown on the
+  page as "Still to decide: …" when the AI's step says otherwise, and used as
+  the dashboard / morning email line.
+- **The review is told** the complaint moves on to the next stage once their
+  response has come and it isn't put right; a wait is only ever until a
+  date (at most 5 working days after Greenco's email). Start-up re-wrote,
+  once, reviews waiting with no date after a response
+  (`app_settings.responded_wait_0930`).
+
 ### 2026-09-30 — "Action needed" when they ask us for something; what they asked for, matched to the documents
 - **A step to take now counts as needing attention, not only an overdue
   date.** EDF asked for proof of ownership, a tenancy agreement and meter

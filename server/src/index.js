@@ -463,6 +463,25 @@ app.listen(config.port, () => {
       if (due.length) console.log(`  Reviews to re-read what was asked for: ${due.length}`);
     })
     .catch((err) => console.error('  Reviews (what was already given):', err.message));
+  // Reviews that said to wait, with no date, after their response had come
+  // (Greenco had answered what they asked for): written again once under the
+  // rule that the complaint then moves on to the next stage.
+  getSetting('responded_wait_0930')
+    .then(async (done) => {
+      if (done) return;
+      const { scheduleReview } = await import('./services/complaintReview.js');
+      const open = (await query(
+        `SELECT c.id, c.ai_review FROM complaints c
+          WHERE c.state = 'open' AND c.ai_review IS NOT NULL
+            AND (c.responded_on IS NOT NULL
+                 OR EXISTS (SELECT 1 FROM complaint_parties p WHERE p.complaint_id = c.id AND p.responded_on IS NOT NULL))`)).rows;
+      const undated = (r) => r?.next_action?.type === 'wait' && !r.next_action.by;
+      const due = open.filter((c) => undated(c.ai_review) || (c.ai_review.by_org || []).some((e) => undated(e)));
+      due.forEach((c, i) => scheduleReview(c.id, 480000 + i * 15000));
+      await setSetting('responded_wait_0930', { at: new Date().toISOString(), scheduled: due.length }, 'start-up');
+      if (due.length) console.log(`  Reviews waiting with no date after a response: ${due.length}`);
+    })
+    .catch((err) => console.error('  Reviews (waiting after a response):', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));
