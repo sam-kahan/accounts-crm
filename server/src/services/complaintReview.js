@@ -3,7 +3,9 @@ import { config } from '../config.js';
 import { ensureSignOff } from '../lib/signature.js';
 import { gatherContext, lastTheirsByComplaint, stage2Asked, tracksForReview, anyReferral } from './complaintContext.js';
 import { contactForOne } from './trackContact.js';
-import { assistComplaint } from './complaintAssistant.js';
+import { assistComplaint, prepareAssist, finishAssist, anthropicClient } from './complaintAssistant.js';
+import { getSetting, setSetting } from './settings.js';
+import { recordUsage } from './aiUsage.js';
 import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintRules.js';
 import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
@@ -83,74 +85,95 @@ const BY_ORG_INSTRUCTION =
   '"headline" then says in a few words what to do with each (e.g. "CDER: ask for Stage 2 now. Council: ' +
   'wait for their acknowledgement, due 2 Oct.").';
 
+// A review in three parts, so the overnight batch (below) and a direct
+// refresh do exactly the same thing: prepare the request, ask, apply.
+async function prepareReview(id, feature) {
+  const startedAt = new Date();
+  // Only files that arrived since the last review (the two newest of them):
+  // one on file before it is known by its label from then on, rather than
+  // paid for again on every refresh (attachments.js#attachmentBlocks).
+  const last = (await query('SELECT ai_reviewed_at FROM complaints WHERE id = $1', [id])).rows[0]?.ai_reviewed_at || null;
+  const ctx = await gatherContext(id, undefined, { files: 2, since: last });
+  const multi = (ctx.complaint.parties || []).length > 0;
+  const input = { ...ctx, feature, instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') };
+  return { id, ctx, input, startedAt, signature: reviewSignature(ctx.complaint) };
+}
+
+// The model's reading made into the stored review: sign-off, documents,
+// references, and every guard against the system's own dates. Returns the
+// review, or null when a later one was already saved.
+async function applyReview({ id, ctx, startedAt, signature }, raw) {
+  const multi = (ctx.complaint.parties || []).length > 0;
+  // Every drafted email ends with the sign-off the sender's details go into.
+  if (raw?.email?.body) raw.email = { ...raw.email, body: ensureSignOff(raw.email.body) };
+  if (Array.isArray(raw?.by_org)) raw.by_org = raw.by_org.map((e) => (e?.email?.body ? { ...e, email: { ...e.email, body: ensureSignOff(e.email.body) } } : e));
+  // What they asked for, matched to the documents on file; those found go
+  // with the email (draftChecks.js#withRequestedDocs).
+  Object.assign(raw, withRequestedDocs(raw, ctx.docList || []));
+  if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, ctx.docList || []));
+  const headline = typeof raw.headline === 'string' && raw.headline.trim()
+    ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
+    : null;
+  // Checked against the system's own dates: never "chase" what isn't due,
+  // or chase again straight after writing to them (reviewGuard.js).
+  const c = ctx.complaint;
+  const londonDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const sent = [
+    ...(ctx.events || []).filter((e) => e.type === 'chased' && !e.removed_org).map((e) => e.event_date),
+    ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at && !e.removed_org).map((e) => londonDay(e.received_at)),
+  ].filter(Boolean).sort();
+  // The company a debt collector is acting for, to raise it with too.
+  const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()
+    ? { name: raw.supplier.name.trim().slice(0, 200), why: typeof raw.supplier.why === 'string' ? raw.supplier.why.trim().slice(0, 400) : null }
+    : null;
+  let review = guardReview(
+    { ...raw, headline, supplier, next_action: normaliseNextAction(raw.next_action) },
+    {
+      referral: (c.parties || []).length ? anyReferral([c, ...c.parties]) : c.referral,
+      anyOverdue: Boolean(c.any_needs_chasing),
+      nextDue: nextDueFromThem([c, ...(c.parties || [])]),
+      lastSentOn: sent[sent.length - 1] || null,
+      lastTheirsOn: (await lastTheirsByComplaint([id])).get(id) || null,
+      stage2Asked: stage2Asked([c, ...(c.parties || [])]),
+    },
+  );
+  // Each organisation's own step, checked against its own dates and emails.
+  if (multi) {
+    const tracks = tracksForReview(c);
+    const contact = await contactForOne(id, config.complaintEmail.domain);
+    review.by_org = guardByOrg(normaliseByOrg(raw.by_org, tracks), tracks, (k) => contact.get(k) || {});
+    // Each email quotes its organisation's reference as "Your reference"
+    // and every other one by name (lib/references.js), whatever the AI wrote.
+    review.by_org = review.by_org.map((e) => (e?.email?.body
+      ? { ...e, email: { ...e.email, body: withReferences(e.email.body, referenceLines(tracks, e.key)) } } : e));
+    review = composeByOrg(review, tracks);
+  } else if (review.email?.body) {
+    review.email = { ...review.email, body: withReferences(review.email.body, referenceLines(tracksForReview(c), 'main')) };
+  }
+  // Whether each organisation's part could go to the ombudsman when this
+  // was written: when that changes the review is out of date
+  // (complaintRules.js#reviewOutrun).
+  review.referral_open = [c, ...(c.parties || [])].map((t) => Boolean(t.referral?.open));
+  // Dated when its reading was TAKEN (a document that arrived while it was
+  // being written is new to the next one), and never over a review taken
+  // later than it (a batch answer arriving after a direct review).
+  const saved = await query(
+    `UPDATE complaints SET ai_review = $2, ai_reviewed_at = $4, ai_review_status = $3,
+            ai_review_error = NULL,
+            -- A change asked for a review while this one was being written: kept, so it follows.
+            review_wanted_at = CASE WHEN review_wanted_at <= $4 THEN NULL ELSE review_wanted_at END
+      WHERE id = $1 AND (ai_reviewed_at IS NULL OR ai_reviewed_at <= $4)`,
+    [id, JSON.stringify(review), signature, startedAt],
+  );
+  if (!saved.rowCount) return null;
+  return review;
+}
+
 export async function refreshReview(id) {
   if (!config.anthropic.enabled) return null;
-  const startedAt = new Date();
-  // The two newest files only: the rest were read by earlier reviews, and
-  // re-sending every PDF on every refresh is where the AI cost went.
-  const ctx = await gatherContext(id, undefined, { files: 2 });
+  const prep = await prepareReview(id, 'Standing AI review (automatic)');
   try {
-    const multi = (ctx.complaint.parties || []).length > 0;
-    const raw = await assistComplaint({ ...ctx, feature: 'Standing AI review (automatic)', instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') });
-    // Every drafted email ends with the sign-off the sender's details go into.
-    if (raw?.email?.body) raw.email = { ...raw.email, body: ensureSignOff(raw.email.body) };
-    if (Array.isArray(raw?.by_org)) raw.by_org = raw.by_org.map((e) => (e?.email?.body ? { ...e, email: { ...e.email, body: ensureSignOff(e.email.body) } } : e));
-    // What they asked for, matched to the documents on file; those found go
-    // with the email (draftChecks.js#withRequestedDocs).
-    Object.assign(raw, withRequestedDocs(raw, ctx.docList || []));
-    if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, ctx.docList || []));
-    const headline = typeof raw.headline === 'string' && raw.headline.trim()
-      ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
-      : null;
-    // Checked against the system's own dates: never "chase" what isn't due,
-    // or chase again straight after writing to them (reviewGuard.js).
-    const c = ctx.complaint;
-    const londonDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
-    const sent = [
-      ...(ctx.events || []).filter((e) => e.type === 'chased' && !e.removed_org).map((e) => e.event_date),
-      ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at && !e.removed_org).map((e) => londonDay(e.received_at)),
-    ].filter(Boolean).sort();
-    // The company a debt collector is acting for, to raise it with too.
-    const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()
-      ? { name: raw.supplier.name.trim().slice(0, 200), why: typeof raw.supplier.why === 'string' ? raw.supplier.why.trim().slice(0, 400) : null }
-      : null;
-    let review = guardReview(
-      { ...raw, headline, supplier, next_action: normaliseNextAction(raw.next_action) },
-      {
-        referral: (c.parties || []).length ? anyReferral([c, ...c.parties]) : c.referral,
-        anyOverdue: Boolean(c.any_needs_chasing),
-        nextDue: nextDueFromThem([c, ...(c.parties || [])]),
-        lastSentOn: sent[sent.length - 1] || null,
-        lastTheirsOn: (await lastTheirsByComplaint([id])).get(id) || null,
-        stage2Asked: stage2Asked([c, ...(c.parties || [])]),
-      },
-    );
-    // Each organisation's own step, checked against its own dates and emails.
-    if (multi) {
-      const tracks = tracksForReview(c);
-      const contact = await contactForOne(id, config.complaintEmail.domain);
-      review.by_org = guardByOrg(normaliseByOrg(raw.by_org, tracks), tracks, (k) => contact.get(k) || {});
-      // Each email quotes its organisation's reference as "Your reference"
-      // and every other one by name (lib/references.js), whatever the AI wrote.
-      review.by_org = review.by_org.map((e) => (e?.email?.body
-        ? { ...e, email: { ...e.email, body: withReferences(e.email.body, referenceLines(tracks, e.key)) } } : e));
-      review = composeByOrg(review, tracks);
-    } else if (review.email?.body) {
-      review.email = { ...review.email, body: withReferences(review.email.body, referenceLines(tracksForReview(c), 'main')) };
-    }
-    // Whether each organisation's part could go to the ombudsman when this
-    // was written: when that changes the review is out of date
-    // (complaintRules.js#reviewOutrun).
-    review.referral_open = [c, ...(c.parties || [])].map((t) => Boolean(t.referral?.open));
-    await query(
-      `UPDATE complaints SET ai_review = $2, ai_reviewed_at = now(), ai_review_status = $3,
-              ai_review_error = NULL,
-              -- A change asked for a review while this one was being written: kept, so it follows.
-              review_wanted_at = CASE WHEN review_wanted_at <= $4 THEN NULL ELSE review_wanted_at END
-        WHERE id = $1`,
-      [id, JSON.stringify(review), reviewSignature(ctx.complaint), startedAt],
-    );
-    return review;
+    return await applyReview(prep, await assistComplaint(prep.input));
   } catch (err) {
     await query('UPDATE complaints SET ai_review_error = $2 WHERE id = $1', [id, String(err.message).slice(0, 500)]);
     throw err;
@@ -206,28 +229,114 @@ export async function resumeWantedReviews() {
   return rows.length;
 }
 
-// Nightly: refresh every open complaint whose review the calendar has
-// overtaken, or that has never had one. Capped, and best-effort — the digest
-// must go out regardless.
-export async function refreshStaleReviews({ limit = 25 } = {}) {
-  if (!config.anthropic.enabled) return { skipped: 'AI not configured' };
+// Every morning (the reminder run): the open complaints whose review the
+// calendar has overtaken, or that never had one. Capped.
+async function staleReviewIds(limit) {
   const { decorate } = await import('./complaintContext.js');
   const { rows } = await query(`SELECT * FROM complaints WHERE state = 'open' ORDER BY raised_on`);
-  let refreshed = 0;
-  let failed = 0;
+  const ids = [];
   for (const row of rows) {
-    if (refreshed + failed >= limit) break;
+    if (ids.length >= limit) break;
     const c = await decorate(row);
     // Current, and (with more than one organisation) giving each its own step.
     if (row.ai_review && row.ai_review_status === reviewSignature(c) &&
       (!(c.parties || []).length || Array.isArray(row.ai_review.by_org)) &&
       !reviewOutrun(row.ai_review, [c, ...(c.parties || [])], todayISO())) continue;
+    ids.push(row.id);
+  }
+  return ids;
+}
+
+// ---------------------------------------------------------------------------
+// The morning's stale reviews go as ONE batch (Anthropic's Message Batches:
+// half the price of the same requests sent one by one, answered usually
+// within the hour). Nobody is waiting on them: they are the ones the calendar
+// moved on overnight. Each request is exactly what a direct refresh sends
+// (prepareReview + prepareAssist), and each answer is applied exactly as a
+// direct one (finishAssist + applyReview). The batch is kept in
+// app_settings.review_batch, so a restart picks it up again, and each
+// 5-minute mailbox check collects it once it has ended. Nothing is lost: an
+// answer that failed or expired falls back to a direct review, and one taken
+// before a later direct review of the same complaint is not applied.
+// ---------------------------------------------------------------------------
+export const BATCH_FEATURE = 'Standing AI review (morning batch, half price)';
+
+export async function refreshStaleReviews({ limit = 25 } = {}) {
+  if (!config.anthropic.enabled) return { skipped: 'AI not configured' };
+  const running = await getSetting('review_batch');
+  if (running?.id && !running.done_at) return { skipped: 'the last batch is still being answered', batch: running.id };
+  const ids = await staleReviewIds(limit);
+  if (!ids.length) return { batched: 0 };
+  const requests = [];
+  const items = {};
+  for (const id of ids) {
     try {
-      await refreshReview(row.id);
-      refreshed += 1;
-    } catch {
-      failed += 1;
+      const prep = await prepareReview(id, BATCH_FEATURE);
+      const { params } = await prepareAssist(prep.input);
+      requests.push({ custom_id: id, params });
+      items[id] = { startedAt: prep.startedAt.toISOString(), signature: prep.signature };
+    } catch (err) {
+      console.error(`[complaints] review ${id} not batched:`, err.message);
     }
   }
-  return { refreshed, failed };
+  if (!requests.length) return { batched: 0 };
+  try {
+    const batch = await anthropicClient().messages.batches.create({ requests });
+    await setSetting('review_batch', { id: batch.id, submitted_at: new Date().toISOString(), items }, 'morning reviews');
+    return { batched: requests.length, batch: batch.id };
+  } catch (err) {
+    // The batch couldn't be sent: the reviews are written one by one as
+    // before (full price), so the morning's steps are never left stale.
+    console.error('[complaints] review batch not sent, reviewing directly:', err.message);
+    let refreshed = 0;
+    let failed = 0;
+    for (const id of Object.keys(items)) {
+      try { await refreshReview(id); refreshed += 1; } catch { failed += 1; }
+    }
+    return { refreshed, failed };
+  }
+}
+
+let collecting = false;
+export async function collectReviewBatch() {
+  if (collecting || !config.anthropic.enabled) return null;
+  collecting = true;
+  try {
+    const b = await getSetting('review_batch');
+    if (!b?.id || b.done_at) return null;
+    const client = anthropicClient();
+    const status = await client.messages.batches.retrieve(b.id);
+    if (status.processing_status !== 'ended') return { waiting: b.id };
+    let applied = 0;
+    let superseded = 0;
+    const retry = [];
+    for await (const r of await client.messages.batches.results(b.id)) {
+      const item = b.items?.[r.custom_id];
+      if (!item) continue;
+      if (r.result?.type !== 'succeeded') { retry.push(r.custom_id); continue; }
+      const message = r.result.message;
+      // Recorded at the batch price (aiUsage.js#costOf halves a "(batch)" model).
+      await recordUsage(BATCH_FEATURE, { ...message, model: `${message.model} (batch)` });
+      try {
+        if (message.stop_reason === 'refusal') throw new Error('The assistant declined this request.');
+        const text = message.content.filter((x) => x.type === 'text').map((x) => x.text).join('\n');
+        // The complaint as it is now, for the guards; the signature and the
+        // time are the ones the request was taken at, so a change since
+        // leaves it out of date and it is reviewed again.
+        const prep = await prepareReview(r.custom_id, BATCH_FEATURE);
+        const raw = await finishAssist(prep.input, text);
+        const saved = await applyReview({ ...prep, startedAt: new Date(item.startedAt), signature: item.signature }, raw);
+        if (saved) applied += 1; else superseded += 1;
+      } catch (err) {
+        console.error(`[complaints] batch review ${r.custom_id} not applied:`, err.message);
+        retry.push(r.custom_id);
+      }
+    }
+    // Failed, expired or unusable: a direct review instead, spaced out.
+    retry.forEach((id, i) => scheduleReview(id, 60000 + i * 20000));
+    await setSetting('review_batch', { ...b, done_at: new Date().toISOString(), applied, superseded, retried: retry.length }, 'morning reviews');
+    return { applied, superseded, retried: retry.length };
+  } finally {
+    collecting = false;
+  }
 }

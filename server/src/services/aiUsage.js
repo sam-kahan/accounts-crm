@@ -31,6 +31,9 @@ export function priceFor(model) {
 }
 
 // Estimated dollars for one row (or a sum of rows of one model).
+// A request answered through the Message Batches API is recorded with its
+// model marked "(batch)" (complaintReview.js) and costs half.
+export const BATCH_DISCOUNT = 0.5;
 export function costOf(r) {
   const p = priceFor(r.model);
   const search = (Number(r.web_searches) || 0) * WEB_SEARCH_DOLLARS;
@@ -40,7 +43,8 @@ export function costOf(r) {
     (Number(r.output_tokens) || 0) * p.output +
     (Number(r.cache_read_tokens) || 0) * p.cacheRead +
     (Number(r.cache_write_tokens) || 0) * p.cacheWrite;
-  return { dollars: tokens / 1e6 + search, priced: true };
+  const batch = /\(batch\)\s*$/i.test(String(r.model || '')) ? BATCH_DISCOUNT : 1;
+  return { dollars: (tokens / 1e6) * batch + search, priced: true };
 }
 
 // Record what a Messages API response used. Best-effort: a failure to record

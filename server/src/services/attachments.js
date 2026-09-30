@@ -122,16 +122,32 @@ const MAX_BLOCK_BYTES = 20 * 1024 * 1024;
 // maxFiles / newest: the automatic review sends only the latest couple of
 // files (every PDF page costs AI credits on every review); the assistant
 // asked for by a person sends them all, oldest first.
-export async function attachmentBlocks(complaintId, { maxFiles = MAX_BLOCK_FILES, newest = false } = {}) {
+// `since` (the automatic review): only the files that arrived after the last
+// review are sent in full. One on file before it is known by its one-line
+// label (in DOCUMENTS ON FILE, written once when it arrived), and the AI is
+// told so, rather than paying to read it again on every review. A file with no label is
+// always sent, so nothing is known by its file name alone.
+export async function attachmentBlocks(complaintId, { maxFiles = MAX_BLOCK_FILES, newest = false, since = null } = {}) {
   const { rows } = await query(
-    `SELECT filename, mimetype, size_bytes, storage_path, sha256 FROM complaint_attachments
+    `SELECT filename, mimetype, size_bytes, storage_path, sha256, uploaded_at, description FROM complaint_attachments
       WHERE complaint_id = $1 AND extracted_text IS NULL ORDER BY uploaded_at ${newest ? 'DESC' : 'ASC'}`,
     [complaintId],
   );
   // Each document once: the same scan on ten emails is one document, and
   // sending it ten times would only cost ten times as much.
-  const unique = onePerDocument(rows);
+  const all = onePerDocument(rows);
+  const readBefore = since
+    ? all.filter((r) => r.description && new Date(r.uploaded_at) <= new Date(since) && (isPdf(r) || isImage(r)))
+    : [];
+  const unique = all.filter((r) => !readBefore.includes(r));
   const blocks = [];
+  if (readBefore.length) {
+    blocks.push({
+      type: 'text',
+      text: `On file before the last review, so not sent in full again: ${readBefore.map((r) => r.filename).join(', ')}. ` +
+        'Use their one-line descriptions under DOCUMENTS ON FILE; if a point turns on a detail those don\'t give, say to check the document.',
+    });
+  }
   const skipped = [];
   let bytes = 0;
   let files = 0;

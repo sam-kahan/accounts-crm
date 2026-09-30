@@ -17,6 +17,9 @@ import { query } from '../db/pool.js';
 // ---------------------------------------------------------------------------
 
 let client = null;
+export function anthropicClient() {
+  return getClient();
+}
 function getClient() {
   if (!config.anthropic.enabled) {
     throw new HttpError(
@@ -309,17 +312,23 @@ function contextBlock(input) {
 
 // Shared Claude call returning the concatenated text output.
 // `feature` names what the call is for on Admin → AI usage.
-export async function callClaude({ system, user, blocks = [], maxTokens = 4000, effort = 'medium', feature = 'Complaints (other)' }) {
-  const anthropic = getClient();
+// The request body, built in one place so a batch (complaintReview.js) sends
+// exactly what a direct call would.
+export function claudeParams({ system, user, blocks = [], maxTokens = 4000, effort = 'medium' }) {
   const content = blocks.length ? [...blocks, { type: 'text', text: user }] : user;
-  const res = await track(feature, anthropic.messages.create({
+  return {
     model: config.anthropic.model,
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort },
     system: cachedSystem(system),
     messages: [{ role: 'user', content }],
-  }));
+  };
+}
+
+export async function callClaude({ system, user, blocks = [], maxTokens = 4000, effort = 'medium', feature = 'Complaints (other)' }) {
+  const anthropic = getClient();
+  const res = await track(feature, anthropic.messages.create(claudeParams({ system, user, blocks, maxTokens, effort })));
   if (res.stop_reason === 'refusal') {
     throw new HttpError(502, 'The assistant declined this request.');
   }
@@ -330,6 +339,16 @@ export async function callClaude({ system, user, blocks = [], maxTokens = 4000, 
 }
 
 export async function assistComplaint(input) {
+  const prepared = await prepareAssist(input);
+  return finishAssist(prepared.input, await callClaude({
+    system: SYSTEM, user: prepared.user, blocks: prepared.input.blocks, feature: prepared.input.feature || 'Complaint assistant',
+  }));
+}
+
+// The request for a complaint's draft, without sending it: `params` is the
+// Messages API body (for a batch), `user` the context text, `input` with each
+// document's label filled in.
+export async function prepareAssist(input) {
   // Each document described once, in a line, so the AI knows what
   // "GreencoScan….pdf" is. Only here, on a paid drafting call a person or the
   // review asked for; reading the complaint (a GET, the evidence zip) never
@@ -345,11 +364,19 @@ export async function assistComplaint(input) {
       console.error('[documents] describing:', err.message);
     }
   }
+  const user = contextBlock(input);
+  return { input, user, params: claudeParams({ system: SYSTEM, user, blocks: input.blocks }) };
+}
+
+// The model's answer (text) made into the checked draft: the "no reply"
+// redraft (a second, direct call, only when needed) and the documents it goes
+// with. The same for a direct call and a batch answer.
+export async function finishAssist(input, text) {
   const ask = (user) => callClaude({
     system: SYSTEM, user, blocks: input.blocks, feature: input.feature || 'Complaint assistant',
   });
   const user = contextBlock(input);
-  let result = extractJson(await ask(user));
+  let result = extractJson(text);
   if (!result || !result.email) {
     throw new HttpError(502, 'The assistant returned no usable draft. Try again or add more detail.');
   }

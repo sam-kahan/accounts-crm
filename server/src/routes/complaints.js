@@ -259,6 +259,11 @@ async function fetchNow(res) {
       .then(() => searchAccountEmails().catch((err) => console.error('[complaints] account search:', err.message)))
       .then(() => runAutoImport())
       .catch((err) => console.error('[complaints] automatic import:', err.message));
+    // The morning's half-price review batch, applied once it has been answered.
+    import('../services/complaintReview.js')
+      .then(({ collectReviewBatch }) => collectReviewBatch())
+      .then((b) => b?.applied != null && console.log(`[complaints] morning review batch: ${b.applied} applied, ${b.superseded} already newer, ${b.retried} reviewed directly instead`))
+      .catch((err) => console.error('[complaints] review batch:', err.message));
     res.json({ ...result, inserted: r.inserted, matched: r.matched });
   }
 }

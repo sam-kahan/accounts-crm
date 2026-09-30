@@ -400,6 +400,10 @@ app.listen(config.port, () => {
     .then(({ escalateMissedStage2Requests }) => escalateMissedStage2Requests())
     .then((n) => n && console.log(`  Stage 2 requests caught up: ${n}`))
     .catch((err) => console.error('  Stage 2 catch-up:', err.message));
+  // The morning's review batch, if a restart came while it was being answered.
+  import('./services/complaintReview.js')
+    .then(({ collectReviewBatch }) => collectReviewBatch())
+    .catch((err) => console.error('  Review batch:', err.message));
   // Reviews asked for before a restart (a deploy) and not yet written.
   import('./services/complaintReview.js')
     .then(({ resumeWantedReviews }) => resumeWantedReviews())

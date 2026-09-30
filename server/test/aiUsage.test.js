@@ -40,3 +40,12 @@ test('a cached system prompt is the same words, marked for caching', () => {
   // The same text twice gives byte-identical blocks, so the second call reads the cache.
   assert.equal(JSON.stringify(cachedSystem('x')), JSON.stringify(cachedSystem('x')));
 });
+
+test('a batch answer is priced at half', async () => {
+  const { costOf } = await import('../src/services/aiUsage.js');
+  const r = { input_tokens: 1_000_000, output_tokens: 100_000 };
+  const full = costOf({ ...r, model: 'claude-sonnet-5-5' }).dollars;
+  const half = costOf({ ...r, model: 'claude-sonnet-5-5 (batch)' }).dollars;
+  assert.equal(full, 3);
+  assert.equal(half, 1.5);
+});

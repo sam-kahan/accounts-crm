@@ -803,7 +803,7 @@ the page says how far each date can be trusted.
   is told the same. The Send window lists both; Edit details names whose
   reference it edits.
 
-### 2026-09-30 — AI spend: attachments read once; reviews wait 10 minutes
+### 2026-09-30 — AI spend: attachments read once; reviews wait 10 minutes; morning reviews half price
 - **An email's attachments are labelled by the email reading itself**
   (`emailAnalysis.js` `documents`: one line per attached document it was
   given, clamped in `normaliseAnalysis`), stored as the document's
@@ -816,6 +816,26 @@ the page says how far each date can be trusted.
   first change it waits for (`REVIEW_MAX_WAIT_MS`), so an email, its
   attachments, the step recorded from it and a reply make one paid review,
   not several. Pressing Re-check & update next steps still writes it at once.
+- **A review sends in full only the files that arrived since the last one**
+  (`attachmentBlocks(..., { since })`, the two newest of them): one on file
+  before it is known by its one-line label, and the AI is told so and to say
+  to check the document when a point turns on a detail the label lacks. A file
+  with no label is always sent. `ai_reviewed_at` is now when the review's
+  reading was TAKEN (`startedAt`), and a review never overwrites one taken
+  later (`AND ai_reviewed_at <= startedAt`).
+- **The morning's stale reviews go as one Message Batch at half price**
+  (`complaintReview.js#refreshStaleReviews` submits, `collectReviewBatch`
+  applies, run after every 5-minute check and at start-up;
+  `app_settings.review_batch`). Each request is exactly a direct review's
+  (`prepareReview` + `complaintAssistant.js#prepareAssist` / `claudeParams`),
+  each answer applied exactly as one (`finishAssist` + `applyReview`), with
+  the signature and time of when the request was taken. One batch at a time;
+  a failed, expired or unusable answer falls back to a direct review; one
+  taken before a later direct review is set aside; if the batch can't be
+  sent the reviews are written directly as before. Usage is recorded with the
+  model marked "(batch)", which `aiUsage.js#costOf` prices at half. The
+  morning email is built before the batch is answered, so those complaints'
+  lines carry the dates' step, not the AI's wording, that morning.
 - Checked and left: found threads' account numbers are not read twice (the
   first reading stamps `accounts_read_at`); the re-check's second read happens
   only when a new account number found more emails, and reads them together
