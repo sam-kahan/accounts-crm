@@ -156,6 +156,23 @@ export async function collectComplaintDueItems(days = 30) {
         });
         continue;
       }
+      // Something for Greenco to do now (the organisation asked us for
+      // documents or information, or the step is an email to send): listed
+      // with the things to do today, whatever the dates say, since nothing
+      // is overdue from them while they wait on us. What they asked for and
+      // isn't on file is named, so the person knows to find it. (An overdue
+      // part keeps its own OVERDUE line below, with this step as its detail.)
+      if (t.action_now && aiOwn && !t.needs_chasing) {
+        const missing = (t.asked_for || []).filter((x) => !x.attachment_id).map((x) => x.item);
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint ACTION NEEDED: ${c.subject}`,
+          due_date: todayISO(), company_name: t.org_name, overdue: true,
+          detail: missing.length ? `${aiOwn} Not on file yet: ${missing.join(', ')}.` : aiOwn,
+          link,
+        });
+        continue;
+      }
       if (['responded', 'with_ombudsman', 'resolved', 'closed'].includes(t.status)) continue;
       // Overdue, but Greenco has just written to them: nothing to do until
       // the hold ends, so it is listed as coming up on that day, never as
@@ -284,6 +301,9 @@ router.get(
       // Overdue and not just written to (chase_now): the same rule the next
       // step uses, so the tile never counts one whose step is to wait.
       const chasing = decorated.filter((c) => c.any_chase_now).length;
+      // A step to take now that isn't a chase (they asked us for documents,
+      // say): counted once, never as well as "needs chasing".
+      const action = decorated.filter((c) => c.any_action_now && !c.any_chase_now).length;
       // Against an organisation whose own procedure hasn't been researched
       // (usually set up by an import): its dates are only the standard ones.
       const unresearched = decorated.filter((c) => c.unresearched_orgs.length).length;
@@ -296,7 +316,7 @@ router.get(
       const toCheck = (await query('SELECT count(*)::int AS n FROM complaints WHERE needs_check')).rows[0].n;
       const bounced = (await query('SELECT count(*)::int AS n FROM email_bounces WHERE resolved_at IS NULL')).rows[0].n;
       const looksResolved = rows.filter((c) => c.resolution_suggested).length;
-      complaints = { open: rows.length, chasing, waiting, to_check: toCheck, bounced, looks_resolved: looksResolved, unresearched };
+      complaints = { open: rows.length, chasing, action, waiting, to_check: toCheck, bounced, looks_resolved: looksResolved, unresearched };
     }
 
     res.json({

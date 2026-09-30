@@ -746,6 +746,40 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-09-30 — "Action needed" when they ask us for something; what they asked for, matched to the documents
+- **A step to take now counts as needing attention, not only an overdue
+  date.** EDF asked for proof of ownership, a tenancy agreement and meter
+  readings before it would log the complaint: the review said "Email EDF
+  the documents today", but nothing is overdue from an organisation waiting
+  on us, so the list's Needs attention, the dashboard and the morning email
+  said nothing. `reviewGuard.js#actsNow` (pure, tested: the guarded step is
+  an email to send now, the Stage 2 request or a referral; never a wait or a
+  held step) sets `action_now` on each track and `any_action_now` in
+  `decorateMany`, from an up-to-date review only. It is in Needs attention
+  ("Action needed" badge), the dashboard tile ("N need action now", not
+  double-counted with chasing), and the dashboard / morning email as
+  "Complaint ACTION NEEDED" (an overdue part keeps its own OVERDUE line).
+  The complaint page's next-step box goes amber with the badge.
+- **What they asked for** (`requested` in the review, and per organisation
+  in `by_org`): each thing asked for, matched by the AI to a document on
+  file from its label, or none. `draftChecks.js#normaliseRequested` trusts
+  only a file name that is on file; `withRequestedDocs` puts every matched
+  document on the email. The page lists them ("✓ On file: goes with the
+  email" / "Not on file: Upload it…"); uploading one writes the review again
+  at once, so the email goes with it. The Send window says what is still
+  missing. Start-up rewrote, once, the reviews whose step was to act now
+  (`app_settings.requested_docs_0930`).
+- **Each organisation's email keeps its documents**: `normaliseByOrg`
+  dropped `attachment_ids`, so a per-organisation Send opened with nothing
+  ticked.
+- **Documents are labelled once, when they arrive** (the owner's
+  suggestion): `docChoice.js#describeSoon` (15-second wait so a batch is
+  one call) runs from `saveAttachment` / `saveAttachmentBuffer`, open
+  complaints only; `ensureDescriptions` runs one at a time per complaint so
+  an upload and a draft never pay for the same file; start-up labels the
+  waiting ones (`describeWaitingDocuments`). The label shows under each
+  document in the Documents list.
+
 ### 2026-09-30 — prompt caching on every AI call
 - Anthropic wrote that the cache hit rate was low: no call used prompt
   caching, so the same instructions (1,000-1,500 tokens for the email

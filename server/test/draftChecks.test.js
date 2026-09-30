@@ -44,3 +44,37 @@ test('no reply to something sent yesterday is caught; after 10 working days it i
   // Weeks ago: fair to say.
   assert.equal(staleNoReply('We wrote on 1 September 2026 and have had no response.', today), null);
 });
+
+import { normaliseRequested, withRequestedDocs } from '../src/services/draftChecks.js';
+
+test('what they asked for is matched to the documents on file by name, and a missing one says so', () => {
+  const docs = [{ id: 'd1', filename: 'Land Registry title.pdf' }, { id: 'd2', filename: 'Council tax bill.pdf' }];
+  const r = normaliseRequested([
+    { item: 'Proof of ownership', file: 'land registry TITLE.pdf' },
+    { item: 'Tenancy agreement', file: null },
+    { item: 'Meter readings', file: 'meter photo.jpg' }, // not on file: never taken on trust
+    { item: 'Proof of ownership', file: null }, // a repeat
+    { item: '   ' },
+  ], docs);
+  assert.deepEqual(r, [
+    { item: 'Proof of ownership', attachment_id: 'd1', filename: 'Land Registry title.pdf' },
+    { item: 'Tenancy agreement', attachment_id: null, filename: null },
+    { item: 'Meter readings', attachment_id: null, filename: null },
+  ]);
+  assert.equal(normaliseRequested(null, docs), null);
+  assert.equal(normaliseRequested([], docs), null);
+});
+
+test('the documents they asked for go with the email, whatever else the AI chose', () => {
+  const docs = [{ id: 'd1', filename: 'Title.pdf' }, { id: 'd2', filename: 'Tenancy.pdf' }];
+  const step = withRequestedDocs({
+    email: { subject: 's', body: 'b', attachment_ids: ['d9'] },
+    requested: [{ item: 'Proof of ownership', file: 'Title.pdf' }, { item: 'Tenancy agreement', file: 'Tenancy.pdf' }],
+  }, docs);
+  assert.deepEqual(step.email.attachment_ids, ['d9', 'd1', 'd2']);
+  // Nothing asked for: the email is left as it is.
+  const plain = withRequestedDocs({ email: { body: 'b', attachment_ids: ['d9'] } }, docs);
+  assert.deepEqual(plain.email.attachment_ids, ['d9']);
+  assert.equal(plain.requested, null);
+  assert.equal(withRequestedDocs(null, docs), null);
+});

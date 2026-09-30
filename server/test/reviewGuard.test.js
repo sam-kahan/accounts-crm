@@ -411,3 +411,36 @@ test('each organisation\'s step lines up with the organisations as they are now'
   assert.equal(composed.caution, null);
   assert.equal(composed.next_action, null);
 });
+
+import { actsNow } from '../src/services/reviewGuard.js';
+
+test('a step to take now counts as needing action; a step to wait never does', () => {
+  // EDF asked for proof of ownership: send it now. Never overdue by the dates.
+  assert.equal(actsNow({ headline: 'Email EDF the ownership, tenancy and meter documents today.', email: { body: 'x' }, email_now: true, next_action: { type: 'send_email' } }), true);
+  assert.equal(actsNow({ headline: 'Ask for Stage 2 now.', next_action: { type: 'escalate_stage2' } }), true);
+  assert.equal(actsNow({ headline: 'Refer it now.', next_action: { type: 'refer_ombudsman' } }), true);
+  assert.equal(actsNow({ headline: 'Wait until 6 Oct.', email: { body: 'x' }, email_now: false, next_action: { type: 'wait' } }), false);
+  assert.equal(actsNow({ headline: 'Nothing to send yet: wait for their reply.', email: { body: 'x' }, email_now: true }), false);
+  // Only kept ready (no email_now said): not counted.
+  assert.equal(actsNow({ headline: 'Email them.', email: { body: 'x' } }), false);
+  assert.equal(actsNow(null), false);
+});
+
+test('a guarded step held back to wait is no longer action needed', () => {
+  const r = guardReview(
+    { headline: 'Email EDF the documents today.', email: { body: 'x' }, email_now: true, next_action: { type: 'send_email' } },
+    { today: '2026-09-30', anyOverdue: false, nextDue: null, lastSentOn: '2026-09-30', lastTheirsOn: '2026-09-29' },
+  );
+  assert.equal(actsNow(r), false);
+});
+
+test('each organisation keeps the documents chosen for its email, and what it asked for', () => {
+  const tracks = [{ key: 'main', org_name: 'LCS' }, { key: 'p1', org_name: 'EDF Energy' }];
+  const out = normaliseByOrg([
+    { org: 'EDF Energy', headline: 'Email EDF the documents.', email: { subject: 's', body: 'b', attachment_ids: ['d1', 7] }, email_now: true, next_action: { type: 'send_email' },
+      requested: [{ item: 'Proof of ownership', attachment_id: 'd1', filename: 'Title.pdf' }] },
+  ], tracks);
+  assert.equal(out[0], null);
+  assert.deepEqual(out[1].email.attachment_ids, ['d1']);
+  assert.equal(out[1].requested[0].item, 'Proof of ownership');
+});

@@ -185,6 +185,12 @@ async function alreadyOn(complaintId, hash) {
   )).rows[0] || null;
 }
 
+// A new document is labelled once, as it arrives (docChoice.js#describeSoon).
+// Imported late: docChoice.js reads this module.
+function labelSoon(complaintId) {
+  import('./docChoice.js').then((m) => m.describeSoon(complaintId)).catch(() => {});
+}
+
 export async function saveAttachment(complaintId, file) {
   const hash = sha256Of(await fs.readFile(file.path));
   const existing = await alreadyOn(complaintId, hash);
@@ -202,6 +208,7 @@ export async function saveAttachment(complaintId, file) {
                (extracted_text IS NOT NULL) AS has_text`,
     [complaintId, file.originalname, file.mimetype, file.size, file.path, text, hash],
   );
+  labelSoon(complaintId);
   return rows[0];
 }
 
@@ -228,6 +235,7 @@ export async function saveAttachmentBuffer(complaintId, { filename, mimetype, bu
      RETURNING id, filename`,
     [complaintId, filename || 'attachment', mimetype, buffer.length, filePath, text, sourceEmailId || null, hash],
   );
+  labelSoon(complaintId);
   return rows[0];
 }
 

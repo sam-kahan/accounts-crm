@@ -18,7 +18,7 @@ import {
 } from './complaintRules.js';
 import { listComplaintEmails } from './emailIngest.js';
 import { loadSchemes, schemeFor } from './ombudsmen.js';
-import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral } from './reviewGuard.js';
+import { guardReview, nextDueFromThem, guardByOrg, composeByOrg, chaseHeldUntil, recommendsReferral, actsNow } from './reviewGuard.js';
 import { contactFor } from './trackContact.js';
 import { attachmentTexts, attachmentBlocks, listAttachments } from './attachments.js';
 
@@ -155,6 +155,21 @@ export async function decorateMany(rows) {
         c.ai_review = { ...c.ai_review, headline: h, recommended_action: h, email_now: false, next_action: null, email_step: null, refer_step: false };
       }
     }
+    // Something to DO now that the dates alone can't see: the organisation
+    // asked us for something (documents, information), or the step is an
+    // email, the Stage 2 request or a referral (reviewGuard.js#actsNow, on
+    // the step as guarded above, so a step held back to wait never counts).
+    // Only from a review that is up to date. `asked_for` is what they asked
+    // for, each with the document on file that provides it, or none.
+    const doubt = c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered;
+    const live = c.ai_review_current && c.state === 'open' && !doubt;
+    [c, ...c.parties].forEach((t, i) => {
+      const step = live && trackOpen(t) && t.status !== 'not_sent'
+        ? (c.parties.length ? c.ai_review?.by_org?.[i] : c.ai_review) : null;
+      t.action_now = actsNow(step);
+      t.asked_for = t.action_now && Array.isArray(step.requested) && step.requested.length ? step.requested : null;
+    });
+    c.any_action_now = [c, ...c.parties].some((t) => t.action_now);
     return c;
   });
 }

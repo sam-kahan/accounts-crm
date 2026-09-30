@@ -405,6 +405,28 @@ app.listen(config.port, () => {
     .then(({ resumeWantedReviews }) => resumeWantedReviews())
     .then((n) => n && console.log(`  AI reviews carried over from before the restart: ${n}`))
     .catch((err) => console.error('  Carrying over AI reviews:', err.message));
+  // Documents on open complaints that arrived before each was labelled on
+  // arrival: labelled once each (docChoice.js#describeSoon).
+  import('./services/docChoice.js')
+    .then(({ describeWaitingDocuments }) => describeWaitingDocuments())
+    .then((n) => n && console.log(`  Documents to label on ${n} open complaint(s)`))
+    .catch((err) => console.error('  Labelling documents:', err.message));
+  // Reviews written before they listed what the organisation asked us for
+  // ("requested"): the ones whose step is to act now are written again once,
+  // after the labels above, so what is on file goes with the email and what
+  // isn't is asked for.
+  getSetting('requested_docs_0930')
+    .then(async (done) => {
+      if (done) return;
+      const { decorateMany } = await import('./services/complaintContext.js');
+      const { scheduleReview } = await import('./services/complaintReview.js');
+      const open = (await query(`SELECT * FROM complaints WHERE state = 'open' AND ai_review IS NOT NULL`)).rows;
+      const act = (await decorateMany(open)).filter((c) => c.any_action_now);
+      act.forEach((c, i) => scheduleReview(c.id, 300000 + i * 15000));
+      await setSetting('requested_docs_0930', { at: new Date().toISOString(), scheduled: act.length }, 'start-up');
+      if (act.length) console.log(`  Reviews to list what was asked for: ${act.length}`);
+    })
+    .catch((err) => console.error('  Reviews (what was asked for):', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

@@ -20,6 +20,43 @@ export function pickAttachments(email, docs = []) {
   return [...new Set(docs.filter((d) => named.includes(norm(d.filename))).map((d) => d.id))];
 }
 
+// What the organisation has asked Greenco for (proof of ownership, a
+// tenancy agreement, meter readings…), as the review read it, each matched
+// to the document on file that provides it by the exact file name the AI
+// gave, or null when nothing on file does: the page then asks a person for
+// it. A name that isn't on file is never taken on trust. At most 10 items.
+// `docs`: [{ id, filename }]. Returns [{ item, attachment_id, filename }],
+// or null when they asked for nothing.
+export function normaliseRequested(list, docs = []) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const x of list) {
+    const raw = typeof x === 'string' ? x : x?.item;
+    const item = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    if (!item || seen.has(norm(item))) continue;
+    seen.add(norm(item));
+    const want = typeof x === 'object' && x ? norm(x.file) : '';
+    const d = want ? docs.find((doc) => norm(doc.filename) === want) : null;
+    out.push({ item, attachment_id: d?.id || null, filename: d?.filename || null });
+    if (out.length >= 10) break;
+  }
+  return out.length ? out : null;
+}
+
+// A step with what they asked for: the documents found on file go with its
+// email, whatever else the AI chose, so nothing asked for and on file is
+// left behind. `step`: a review, or one organisation's entry.
+export function withRequestedDocs(step, docs = []) {
+  if (!step || typeof step !== 'object') return step;
+  const requested = normaliseRequested(step.requested, docs);
+  const ids = (requested || []).map((r) => r.attachment_id).filter(Boolean);
+  const email = step.email && ids.length
+    ? { ...step.email, attachment_ids: [...new Set([...(step.email.attachment_ids || []), ...ids])] }
+    : step.email;
+  return { ...step, requested, email };
+}
+
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 const pad = (n) => String(n).padStart(2, '0');
 // The dates a sentence mentions, as YYYY-MM-DD: "28 September 2026",

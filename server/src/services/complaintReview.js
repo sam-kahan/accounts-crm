@@ -7,6 +7,7 @@ import { assistComplaint } from './complaintAssistant.js';
 import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintRules.js';
 import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
+import { withRequestedDocs } from './draftChecks.js';
 
 export { reviewSignature };
 
@@ -52,7 +53,20 @@ const REVIEW_INSTRUCTION =
   'make "email" the follow-up to send only if they don\'t reply by then, with "email_now": false. ' +
   'Once a complaint (or an organisation\'s part of it) is at Stage 2 or with the ombudsman, Stage 2 has ' +
   'already been asked for: never draft the Stage 2 request again; any follow-up asks for their Stage 2 ' +
-  'response by its due date.';
+  'response by its due date. ' +
+  // What they have asked US for: matched to the documents on file, so the
+  // email goes with them, and the page asks a person for anything missing.
+  'ALSO add a key "requested": when the organisation\'s latest email asks Greenco for documents or ' +
+  'information (proof of ownership, a tenancy agreement, meter readings, a letter of authority, a bill, ' +
+  'an account number…) that Greenco has not sent them since, list EACH thing asked for as {"item": what ' +
+  'they asked for, in a few words, "file": the exact file name from DOCUMENTS ON FILE that provides it, ' +
+  'judged by its description, or null when nothing on file does}; otherwise null. Name a file only when ' +
+  'it really is that thing (a council tax bill is not a tenancy agreement); when unsure, null. Sending ' +
+  'what they asked for is a step to take NOW ("next_action" "send_email", "email_now": true): the email ' +
+  'puts every file named in "requested" in "email.attach" and says briefly which is which; for anything ' +
+  'with no file it never says it is attached, it says it will follow. When something asked for is not ' +
+  'on file, the "headline" says so first, e.g. "Upload the tenancy agreement, then email EDF the ' +
+  'documents they asked for today."';
 
 // A complaint against more than one organisation (a debt collector and the
 // council or supplier whose account it is): separate complaints, each with
@@ -62,7 +76,7 @@ const BY_ORG_INSTRUCTION =
   'context). Each is a SEPARATE complaint with its own procedure, deadlines and emails: an email sent to ' +
   'one is not a step with another, and one organisation\'s deadline never applies to another. ALSO add ' +
   '"by_org": an array with ONE entry per organisation, the main organisation first, each {"org": its name ' +
-  'exactly as in the context, "headline", "email", "email_now", "next_action"} following all the rules ' +
+  'exactly as in the context, "headline", "email", "email_now", "next_action", "requested"} following all the rules ' +
   'above but about THAT organisation only: its own stage and deadlines and the emails to and from it. ' +
   'Each "email" is addressed to that organisation only and is about its part only. The top-level ' +
   '"headline" then says in a few words what to do with each (e.g. "CDER: ask for Stage 2 now. Council: ' +
@@ -80,6 +94,10 @@ export async function refreshReview(id) {
     // Every drafted email ends with the sign-off the sender's details go into.
     if (raw?.email?.body) raw.email = { ...raw.email, body: ensureSignOff(raw.email.body) };
     if (Array.isArray(raw?.by_org)) raw.by_org = raw.by_org.map((e) => (e?.email?.body ? { ...e, email: { ...e.email, body: ensureSignOff(e.email.body) } } : e));
+    // What they asked for, matched to the documents on file; those found go
+    // with the email (draftChecks.js#withRequestedDocs).
+    Object.assign(raw, withRequestedDocs(raw, ctx.docList || []));
+    if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, ctx.docList || []));
     const headline = typeof raw.headline === 'string' && raw.headline.trim()
       ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
       : null;

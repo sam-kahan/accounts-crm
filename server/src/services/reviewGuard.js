@@ -62,6 +62,21 @@ export function wantsToSendNow(r) {
   return r.next_action?.type === 'send_email' || Boolean(r.email?.body) || recommendsChasing(r);
 }
 
+// Does the step (a review, or one organisation's entry in it, AFTER
+// guarding) ask a person to do something NOW: send an email (whatever it is
+// about: the documents they asked for, an answer to their question, a
+// chaser), ask for Stage 2, or refer it? Being overdue by the dates isn't
+// the only thing that needs doing: an organisation asking US for something
+// (EDF wanting proof of ownership before it can log the complaint) is
+// never overdue, and was listed nowhere. A step to wait, or one the guard
+// held, is not. Pure.
+const ACT_TYPES = ['send_email', 'escalate_stage2', 'refer_ombudsman'];
+export function actsNow(r) {
+  if (!r) return false;
+  if (r.next_action?.type === 'wait' || r.email_now === false || saysHold(r)) return false;
+  return ACT_TYPES.includes(r.next_action?.type) || (Boolean(r.email?.body) && r.email_now === true);
+}
+
 // Until when chasing is held because Greenco has written to them: the same
 // rule guardReview holds the advice by (sent in the last
 // CHASE_GAP_WORKING_DAYS, or Greenco wrote last and they still have time),
@@ -296,11 +311,19 @@ export function normaliseByOrg(list, tracks) {
       ? e.headline.trim().replace(/\s+/g, ' ').slice(0, 200) : null;
     if (!headline) return null;
     const email = e.email && typeof e.email.body === 'string' && e.email.body.trim()
-      ? { subject: String(e.email.subject || '').slice(0, 300), body: e.email.body.slice(0, 8000) } : null;
+      ? {
+        subject: String(e.email.subject || '').slice(0, 300), body: e.email.body.slice(0, 8000),
+        // The documents chosen for it (complaintAssistant.js): kept, or the
+        // organisation's Send window opened with nothing ticked.
+        attachment_ids: Array.isArray(e.email.attachment_ids) ? e.email.attachment_ids.filter((x) => typeof x === 'string') : [],
+      } : null;
     return {
       key: t.key, org_name: t.org_name, headline, recommended_action: headline, email,
       email_now: email ? e.email_now !== false : false,
       next_action: normaliseNextAction(e.next_action),
+      // What THEY have asked Greenco for (draftChecks.js#normaliseRequested
+      // matches it to the documents on file).
+      requested: Array.isArray(e.requested) ? e.requested : null,
     };
   });
 }

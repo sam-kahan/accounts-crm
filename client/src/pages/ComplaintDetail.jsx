@@ -541,6 +541,8 @@ export default function ComplaintDetail() {
       body: signEmail(draft?.body || '', me),
       // The documents the AI chose for it (from those on file).
       attachment_ids: (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x)),
+      // What they asked for that isn't on file yet, said in the window.
+      missing: ((t || c).asked_for || []).filter((x) => !x.attachment_id).map((x) => x.item),
       then,
     });
   }
@@ -636,6 +638,63 @@ export default function ComplaintDetail() {
     } finally {
       setUploading(false);
     }
+  }
+  // What the organisation asked us for (the review matches each thing to a
+  // document on file): a missing one is uploaded right here, and the review
+  // is written again at once, so the email goes with it and says so.
+  const [askUpload, setAskUpload] = useState(null);
+  async function uploadAskedFor(item, fileList) {
+    if (!fileList?.length || askUpload) return;
+    setAskUpload(item);
+    setMsg(null);
+    try {
+      await api.complaints.attachments(id, Array.from(fileList));
+      if (aiEnabled) {
+        setC(await api.complaints.refreshReview(id).then(() => api.complaints.get(id)));
+        setMsg('Uploaded, and the email has been drafted again with it.');
+      } else {
+        await load();
+        setMsg('Uploaded.');
+      }
+    } catch (e) {
+      setMsg(e.message);
+      await load();
+    } finally {
+      setAskUpload(null);
+    }
+  }
+  function askedForList(t) {
+    const list = t?.asked_for || [];
+    if (!list.length) return null;
+    const missing = list.filter((x) => !x.attachment_id);
+    return (
+      <div style={{ marginTop: 8, fontSize: 14 }}>
+        <div><strong>{multi ? `${t.org_name} asked for:` : 'They asked for:'}</strong></div>
+        {list.map((x) => (
+          <div key={x.item} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0' }}>
+            {x.attachment_id
+              ? <span className="badge ok">✓ On file</span>
+              : <span className="badge amber"><strong>Not on file</strong></span>}
+            <span>{x.item}</span>
+            {x.attachment_id ? (
+              <span className="muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{x.filename}: goes with the email</span>
+            ) : (
+              <label className="btn btn-sm" style={{ cursor: askUpload ? 'default' : 'pointer', margin: 0 }}>
+                {askUpload === x.item ? 'Uploading and redrafting…' : 'Upload it…'}
+                <input type="file" multiple style={{ display: 'none' }} disabled={Boolean(askUpload)}
+                  onChange={(e) => { uploadAskedFor(x.item, e.target.files); e.target.value = ''; }} />
+              </label>
+            )}
+          </div>
+        ))}
+        {missing.length > 0 && (
+          <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+            Upload what isn’t on file and the email is drafted again with it. Something that isn’t a
+            document (meter readings, say) can be typed into the email before sending.
+          </div>
+        )}
+      </div>
+    );
   }
   async function removeAttachment(attId) {
     if (!confirm('Remove this document from the complaint? It will be deleted.')) return;
@@ -1310,7 +1369,7 @@ export default function ComplaintDetail() {
             // Amber when any organisation needs something done now (as the
             // single-organisation box is), with each one that does labelled:
             // green read as "nothing required" while LCS was weeks overdue.
-            <div className={`inline-note ${c.any_chase_now || tracks.some((t) => trackOpen(t) && t.chase_now) ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
+            <div className={`inline-note ${c.any_chase_now || c.any_action_now || tracks.some((t) => trackOpen(t) && (t.chase_now || t.action_now)) ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 16, marginBottom: 6 }}><strong>Next steps</strong> (one for each organisation)</div>
               {tracks.map((t, i) => {
                 if (!trackOpen(t)) {
@@ -1334,9 +1393,10 @@ export default function ComplaintDetail() {
                       <span className="badge navy">{STAGE_LABEL[t.stage]}</span>
                       <span className={`badge ${badgeOf(t)}`}>{t.label}</span>
                       {ombudsmanBadge(t)}
-                      {t.chase_now && <span className="badge amber"><strong>Action needed</strong></span>}
+                      {(t.chase_now || t.action_now) && <span className="badge amber"><strong>Action needed</strong></span>}
                     </div>
                     <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
+                    {askedForList(t)}
                     {draft && (
                       <div className="btn-row" style={{ marginTop: 6 }}>
                         <button className="btn-primary btn-sm" onClick={() => openSend(draft, esc ? 'escalate' : null, t)}>
@@ -1394,8 +1454,12 @@ export default function ComplaintDetail() {
             const withEscalate = Boolean(draft) && !multi && c.stage === 'stage_1' &&
               (c.ai_review.next_action?.type === 'escalate_stage2' || c.ai_review.email_step === 'stage2_request');
             return (
-              <div className={`inline-note ${c.any_needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 16 }}><strong>Next step:</strong> {text}</div>
+              <div className={`inline-note ${c.any_needs_chasing || c.action_now ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 16 }}>
+                  {c.action_now && <span className="badge amber" style={{ marginRight: 6 }}><strong>Action needed</strong></span>}
+                  <strong>Next step:</strong> {text}
+                </div>
+                {askedForList(c)}
                 {(draft || btn) && (
                   <div className="btn-row" style={{ marginTop: 8 }}>
                     {draft && withEscalate ? (
@@ -1858,6 +1922,7 @@ export default function ComplaintDetail() {
                     <a href={api.complaints.attachmentUrl(a.id)} target="_blank" rel="noreferrer">
                       {a.filename}
                     </a>
+                    {a.description && <div style={{ fontSize: 13 }}>{a.description}</div>}
                     <div className="muted" style={{ fontSize: 12 }}>
                       {(a.size_bytes / 1024).toFixed(0)} KB
                       {a.source_email_id ? ` · attached to ${a.copies > 1 ? `${a.copies} emails (shown once)` : 'an email'}` : a.copies > 1 ? ` · on file ${a.copies} times (shown once)` : ''}
@@ -2277,6 +2342,13 @@ export default function ComplaintDetail() {
         >
           {send.error && <div className="login-error" style={{ marginBottom: 12 }}>Not sent: {send.error}</div>}
           {send.caution && <div className="inline-note warn" style={{ marginBottom: 12, fontSize: 13 }}><strong>Check:</strong> {send.caution}</div>}
+          {send.missing?.length > 0 && (
+            <div className="inline-note warn" style={{ marginBottom: 12, fontSize: 13 }}>
+              <strong>Not on file yet:</strong> {send.missing.join(', ')}. They asked for {send.missing.length === 1 ? 'it' : 'these'}:
+              upload {send.missing.length === 1 ? 'it' : 'them'} on the complaint first (the email is drafted again with {send.missing.length === 1 ? 'it' : 'them'}),
+              or add {send.missing.length === 1 ? 'it' : 'them'} to the message yourself.
+            </div>
+          )}
           {send.then === 'refer' && (
             <div className="inline-note" style={{ marginBottom: 12 }}>
               <strong>The evidence goes with it:</strong> a summary with the timeline, all the correspondence as one

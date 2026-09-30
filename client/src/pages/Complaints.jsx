@@ -616,13 +616,14 @@ export default function Complaints() {
   // step is to wait, so it isn't listed as needing chasing (chase_now).
   const overdue = items.filter((c) => c.any_chase_now);
   // What needs a person: an email says it's resolved, emails waiting to be
-  // checked, needs chasing, or created by the system and not yet checked.
+  // checked, needs chasing, a step to take now (they asked us for documents,
+  // say: any_action_now), or created by the system and not yet checked.
   // Open complaints against an organisation whose own procedure hasn't been
   // researched (usually set up by an import): their dates are only the
   // standard ones, so they need a person too.
   const unresearched = items.filter((c) => c.state === 'open' && c.unresearched_orgs?.length);
   const attention = items.filter((c) => c.state === 'open' &&
-    (c.resolution_suggested || c.new_emails > 0 || c.any_chase_now || c.needs_check ||
+    (c.resolution_suggested || c.new_emails > 0 || c.any_chase_now || c.any_action_now || c.needs_check ||
       c.unresearched_orgs?.length));
   // Each such organisation once, to research on the Organisations page.
   const unresearchedOrgs = [...new Map(unresearched.flatMap((c) => [c, ...(c.parties || [])]
@@ -823,6 +824,9 @@ export default function Complaints() {
                     )}
                     {c.state === 'open' && c.resolution_suggested && <span className="badge ok" style={{ marginLeft: 6 }}>Looks resolved: confirm</span>}
                     {c.new_emails > 0 && <span className="badge amber" style={{ marginLeft: 6 }}>{c.new_emails} new email{c.new_emails === 1 ? '' : 's'} to check</span>}
+                    {c.state === 'open' && c.any_action_now && !c.any_chase_now && (
+                      <span className="badge amber" style={{ marginLeft: 6 }}><strong>Action needed</strong></span>
+                    )}
                     {c.state === 'open' && nextStepOf(c) && (
                       <div className="clamp-3" style={{ fontSize: 12, marginTop: 2 }}>
                         <span style={{ fontWeight: 600 }}>Next:</span> {nextStepOf(c)}

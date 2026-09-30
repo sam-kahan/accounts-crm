@@ -210,14 +210,15 @@ export default function Dashboard() {
         )}
         {complaints && (
           <Link
-            to={complaints.chasing || complaints.waiting || complaints.to_check || complaints.bounced || complaints.looks_resolved || complaints.unresearched
+            to={complaints.chasing || complaints.action || complaints.waiting || complaints.to_check || complaints.bounced || complaints.looks_resolved || complaints.unresearched
               ? '/complaints?show=attention' : '/complaints'}
-            className={`stat ${complaints.chasing || complaints.waiting || complaints.bounced ? 'alert' : ''}`}
+            className={`stat ${complaints.chasing || complaints.action || complaints.waiting || complaints.bounced ? 'alert' : ''}`}
           >
             <div className="label">Complaints open</div>
             <div className="value">{complaints.open}</div>
             <div className="muted stat-lines" style={{ fontSize: 12 }}>
               {complaints.chasing > 0 && <div>{plural(complaints.chasing, 'needs', 'need')} chasing</div>}
+              {complaints.action > 0 && <div>{plural(complaints.action, 'needs', 'need')} action now</div>}
               {complaints.waiting > 0 && <div>{plural(complaints.waiting, 'email')} to check</div>}
               {complaints.to_check > 0 && <div>{plural(complaints.to_check, 'imported complaint')} to check</div>}
               {complaints.bounced > 0 && <div>{plural(complaints.bounced, 'bounced email')} to look into</div>}
