@@ -209,8 +209,11 @@ function contextBlock(input) {
       `This complaint is with ${complaint.parties.length + 1} organisations about the same issue. The ` +
         `details above are ${complaint.org_name}'s (the main organisation). Each organisation below runs ` +
         'its OWN complaints procedure, with its own reference and deadlines, and something one of them ' +
-        'says or does can matter to the other. Keep them apart: an email goes to ONE organisation, quotes ' +
-        'THEIR reference, and refers to the other organisation and its reference where that helps.',
+        'says or does can matter to the other. Keep them apart: an email goes to ONE organisation and is ' +
+        'about its part. EVERY email quotes BOTH references, each labelled, straight under the greeting: ' +
+        '"Your reference: …" for the organisation it goes to, and "<other organisation> reference: …" for ' +
+        'each other one (leave out one not known yet). Never quote one organisation\'s reference as the ' +
+        'other\'s.',
     );
     for (const p of complaint.parties) {
       const r = p.rule;

@@ -520,6 +520,37 @@ export function londonDay(ts) {
 // reference is never stored as an account number, because the same account
 // number means the same complaint even across organisations, and a reference
 // is only one organisation's.
+// Every organisation's reference on an email, labelled: "Your reference: …"
+// for the one it goes to, "<organisation> reference: …" for each other one,
+// added under the greeting when the email doesn't already quote it. The same
+// rule as server/src/lib/references.js. `toKey`: 'main', a party id, or null.
+const refKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export function complaintTracks(c) {
+  return [{ key: 'main', org_name: c?.org_name, reference: c?.reference },
+    ...(c?.parties || []).map((p) => ({ key: p.id, org_name: p.org_name, reference: p.reference }))];
+}
+export function referenceLines(tracks, toKey = null) {
+  const known = (tracks || []).filter((t) => t && String(t.reference || '').trim());
+  return [
+    ...known.filter((t) => toKey && t.key === toKey).map((t) => `Your reference: ${t.reference.trim()}`),
+    ...known.filter((t) => !(toKey && t.key === toKey)).map((t) => `${t.org_name} reference: ${t.reference.trim()}`),
+  ];
+}
+export function withReferences(body, lines) {
+  const text = String(body || '');
+  if (!text.trim() || !lines?.length) return text;
+  const flat = refKey(text);
+  const missing = lines.filter((l) => {
+    const ref = refKey(l.slice(l.indexOf(':') + 1));
+    return ref.length >= 3 && !flat.includes(ref);
+  });
+  if (!missing.length) return text;
+  const block = missing.join('\n');
+  const greet = text.match(/^\s*((?:dear|hello|hi|good (?:morning|afternoon|evening))\b[^\n]*)\n+/i);
+  if (greet) return `${greet[1]}\n\n${block}\n\n${text.slice(greet[0].length)}`;
+  return `${block}\n\n${text.replace(/^\s+/, '')}`;
+}
+
 export function accountOrReference(c) {
   const accounts = (c?.account_numbers || []).filter(Boolean);
   if (accounts.length) return { values: accounts, isReference: false };

@@ -18,7 +18,8 @@ import { describeChanges, theOmbudsman, trackOpen, isStage2Request, readable, pr
 import { overallState, tracksOf } from '../services/complaintParties.js';
 import { openBounces } from '../services/bounces.js';
 import { undoRecheck, startRecheck, recheckStatus, startComplaintRecheck, recheckProgressOf, offEmail, keptDomainsFor } from '../services/complaintRecheck.js';
-import { decorate, decorateMany, gatherContext, listEvents } from '../services/complaintContext.js';
+import { decorate, decorateMany, gatherContext, listEvents, tracksForReview } from '../services/complaintContext.js';
+import { referenceLines, withReferences } from '../lib/references.js';
 import { createComplaint } from '../services/complaintCreate.js';
 import { processEmail, undoEmail, fileWaitingEmails } from '../services/complaintEmailProcessor.js';
 import { watchMailboxes } from '../services/mailWatch.js';
@@ -1090,7 +1091,10 @@ export function referralEmailDraft(c, t, grounds = null) {
   lines.push('[Job title]');
   lines.push('Greenco');
   const subject = `Complaint referral: ${t.org_name}${accounts ? `, account ${accounts}` : ''}${c.property ? ` (${c.property})` : ''} [${c.ref_code}]`;
-  return { to: sc.refer_email, subject: subject.slice(0, 250), body: lines.join('\n'), note: sc.refer_email_note || null };
+  // With more than one organisation, each one's reference, by name
+  // (lib/references.js): the ombudsman may need to reach either.
+  const body = (c.parties || []).length ? withReferences(lines.join('\n'), referenceLines(tracksForReview(c), null)) : lines.join('\n');
+  return { to: sc.refer_email, subject: subject.slice(0, 250), body, note: sc.refer_email_note || null };
 }
 
 // A POST, so the pack's grounds (thousands of characters) travel in the body
@@ -2534,8 +2538,9 @@ router.post(
     res.json({
       to: org?.complaints_email || null,
       subject: r.email?.subject || '',
-      // Always the standard sign-off, so the sender's own name goes on it.
-      body: ensureSignOff(r.email?.body || ''),
+      // Always the standard sign-off, so the sender's own name goes on it;
+      // the references of the organisations already on it, by name.
+      body: withReferences(ensureSignOff(r.email?.body || ''), referenceLines(tracksForReview(c), null)),
       caution: r.caution || null,
       // The documents the draft goes with, chosen by the AI from those on file.
       attachment_ids: r.email?.attachment_ids || [],
@@ -2589,7 +2594,7 @@ router.post(
     res.json({
       to: c.org_email || null,
       subject: r.email?.subject || '',
-      body: ensureSignOff(r.email?.body || ''),
+      body: withReferences(ensureSignOff(r.email?.body || ''), referenceLines(tracksForReview(c), 'main')),
       caution: r.caution || null,
       // The documents the draft goes with, chosen by the AI from those on file.
       attachment_ids: r.email?.attachment_ids || [],

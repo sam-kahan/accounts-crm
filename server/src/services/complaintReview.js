@@ -8,6 +8,7 @@ import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintR
 import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 import { withRequestedDocs } from './draftChecks.js';
+import { referenceLines, withReferences } from '../lib/references.js';
 
 export { reviewSignature };
 
@@ -129,7 +130,13 @@ export async function refreshReview(id) {
       const tracks = tracksForReview(c);
       const contact = await contactForOne(id, config.complaintEmail.domain);
       review.by_org = guardByOrg(normaliseByOrg(raw.by_org, tracks), tracks, (k) => contact.get(k) || {});
+      // Each email quotes its organisation's reference as "Your reference"
+      // and every other one by name (lib/references.js), whatever the AI wrote.
+      review.by_org = review.by_org.map((e) => (e?.email?.body
+        ? { ...e, email: { ...e.email, body: withReferences(e.email.body, referenceLines(tracks, e.key)) } } : e));
       review = composeByOrg(review, tracks);
+    } else if (review.email?.body) {
+      review.email = { ...review.email, body: withReferences(review.email.body, referenceLines(tracksForReview(c), 'main')) };
     }
     // Whether each organisation's part could go to the ombudsman when this
     // was written: when that changes the review is out of date

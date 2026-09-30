@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural, complaintTracks, referenceLines, withReferences } from '../api';
 import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
@@ -561,7 +561,13 @@ export default function ComplaintDetail() {
   }
   function openSend(draft, then = null, t = null) {
     const chosen = (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x));
-    if (!chosen.length) autoChoose(signEmail(draft?.subject, me) || '', signEmail(draft?.body || '', me));
+    // With more than one organisation, every email carries each one's
+    // reference, labelled ("Your reference" for the one it goes to), even a
+    // draft written before that rule or a blank one.
+    const refs = multi ? referenceLines(complaintTracks(c), partyIdOf(t) || 'main') : [];
+    const signed = signEmail(draft?.body || '', me);
+    const body = !refs.length ? signed : signed.trim() ? withReferences(signed, refs) : `${refs.join('\n')}\n\n`;
+    if (!chosen.length) autoChoose(signEmail(draft?.subject, me) || '', body);
     setSend({
       // Their complaints address, or failing that the address their latest
       // email came from.
@@ -570,7 +576,7 @@ export default function ComplaintDetail() {
       org_name: t && multi ? t.org_name : null,
       cc: '',
       subject: signEmail(draft?.subject, me) || `Re: ${c.subject} [${c.ref_code}]`,
-      body: signEmail(draft?.body || '', me),
+      body,
       // The documents the AI chose for it (from those on file).
       attachment_ids: chosen,
       // What they asked for that isn't on file yet, said in the window.
@@ -1076,7 +1082,7 @@ export default function ComplaintDetail() {
     // Quoted as theirs only when their procedure states it: a standard figure
     // filled in for them is never passed off as their rule.
     const days = t.rule?.defaulted?.includes('stage2Days') ? null : t.rule?.stage2Days;
-    return {
+    const plain = {
       subject: `Our complaint of ${formatDate(t.raised_on)}${about ? ` (${about})` : ''}: request for Stage 2 review [${c.ref_code}]`,
       body:
         `Dear ${t.org_name} Complaints Team,\n\n` +
@@ -1089,6 +1095,9 @@ export default function ComplaintDetail() {
         `If you need anything further from us to take this forward, please let us know.\n\nKind regards,\n\n` +
         '[Name]\n[Job title]\nGreenco',
     };
+    // Every organisation's reference, labelled (the other one's too).
+    if (multi) plain.body = withReferences(plain.body, referenceLines(complaintTracks(c), partyIdOf(t) || 'main'));
+    return plain;
   };
 
   // How to refer, next to a step that says to. Where the scheme takes a new
@@ -2409,7 +2418,8 @@ export default function ComplaintDetail() {
             {multi && (
               <span className="muted" style={{ fontSize: 12 }}>
                 This complaint is with {tracks.map((t) => t.org_name).join(' and ')}: send it to the
-                one it is for, and quote their reference.
+                one it is for. The email quotes both references:{' '}
+                {tracks.map((t) => `${t.org_name} ${t.reference || 'not known yet'}`).join(' · ')}.
               </span>
             )}
           </label>
@@ -2758,8 +2768,13 @@ function EditComplaintModal({ c, onClose, onSaved }) {
             <input value={form.account_numbers} onChange={(e) => set('account_numbers', e.target.value)} />
           </label>
           <label className="field">
-            <span className="lbl">Their reference</span>
+            <span className="lbl">{(c.parties || []).length ? `${c.org_name}’s reference` : 'Their reference'}</span>
             <input value={form.reference} onChange={(e) => set('reference', e.target.value)} />
+            {(c.parties || []).length > 0 && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                The other organisations’ references are set in their own sections, with “Edit”.
+              </span>
+            )}
           </label>
           <label className="field">
             <span className="lbl">Our own reference</span>

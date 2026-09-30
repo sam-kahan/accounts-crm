@@ -791,6 +791,17 @@ the page says how far each date can be trusted.
   inline, sent as a type from a fixed list (`lib/http.js#viewableType`) with
   nosniff, so nothing that can run script is ever shown; anything else still
   downloads. Sizes read "85 KB" / "1.4 MB" (`fileSize`), never "0.0 MB".
+- **Both references on every email with more than one organisation**
+  (`lib/references.js`, pure, tested; `client/src/api.js#withReferences` is
+  its twin): "Your reference: …" for the organisation it goes to and
+  "<organisation> reference: …" for each other one, added under the
+  greeting when the draft doesn't already quote it (a reference it quotes
+  in any spacing is left as written). Applied to the review's drafts (each
+  organisation's, when written), the formal and supplier drafts, the
+  emailed referral (every one by name), the plain Stage 2 request and
+  anything opened in the Send window (so older drafts get it too). The AI
+  is told the same. The Send window lists both; Edit details names whose
+  reference it edits.
 
 ### 2026-09-30 — prompt caching on every AI call
 - Anthropic wrote that the cache hit rate was low: no call used prompt
