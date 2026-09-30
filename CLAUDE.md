@@ -839,6 +839,18 @@ the page says how far each date can be trusted.
   "full landlord or current tenant details" (given many times, most recently
   23 Sep) showed as "Not on file: Upload it". Start-up re-wrote, once, the
   reviews listing an item under the old rule (`app_settings.requested_given_0930`).
+- **Answered is decided by the dates too, not only the AI**
+  (`complaintContext.js#answeredSince`, pure, tested): when Greenco has
+  written to them since their last word, nothing they asked for shows as
+  missing ("our email of <date>, sent after their request"). "Greenco wrote"
+  counts our own emails brought in from a mailbox (an import, a copy: from
+  our address, not FW:, not read as theirs), not just sends from here.
+- **A forwarded reply is theirs on a one-organisation complaint too**
+  (`lastTheirsByComplaint`): a colleague's forward read as from the
+  organisation, and a response or acknowledgement recorded on the timeline,
+  count as their last word. A forward used to count as nothing, so Greenco's
+  earlier email looked like the last word and the step said to wait (the
+  multi-organisation `contactByTrack` already did this).
 - **Timeline notes are what the AI knows**: the card and the note option say
   the AI reads them, and the review is told to use a person's notes (a call,
   what another company said) where they bear on the email, saying whose they

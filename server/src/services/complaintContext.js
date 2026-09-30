@@ -34,19 +34,27 @@ export async function decorate(c) {
   return (await decorateMany([c]))[0];
 }
 
-// The last day an email arrived FROM them on each complaint.
+// The last day they wrote on each complaint: their emails, INCLUDING a
+// colleague's forward of theirs (it comes from our own address, so the
+// sender alone can't tell; the reading says whose it is), and a response or
+// acknowledgement recorded on the timeline (a reply only ever quoted in our
+// emails). A forwarded reply once counted as nothing, so Greenco's earlier
+// email looked like the last word and the next step said to wait.
 export async function lastTheirsByComplaint(ids) {
   const ours = String(config.complaintEmail.domain || '').toLowerCase();
   const { rows } = await query(
-    `SELECT complaint_id,
-            max(CASE WHEN analysis->>'sent_on' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                     THEN (analysis->>'sent_on')::date
-                     ELSE (received_at AT TIME ZONE 'Europe/London')::date END) AS d
-       FROM complaint_emails
-      WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound' AND removed_org IS NULL
-        AND COALESCE(analysis->>'kind', '') <> 'our_email'
-        AND lower(COALESCE(sender_email, '')) NOT LIKE '%@' || $2
-      GROUP BY complaint_id`,
+    `SELECT complaint_id, max(d)::text AS d FROM (
+        SELECT complaint_id,
+               CASE WHEN analysis->>'sent_on' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (analysis->>'sent_on')::date
+                    ELSE (received_at AT TIME ZONE 'Europe/London')::date END AS d
+          FROM complaint_emails
+         WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound' AND removed_org IS NULL
+           AND COALESCE(analysis->>'kind', '') <> 'our_email'
+           AND (lower(COALESCE(sender_email, '')) NOT LIKE '%@' || $2 OR analysis->>'from_organisation' = 'true')
+        UNION ALL
+        SELECT complaint_id, event_date FROM complaint_events
+         WHERE complaint_id = ANY($1::uuid[]) AND type IN ('acknowledged', 'response_received') AND removed_org IS NULL
+      ) x GROUP BY complaint_id`,
     [ids, ours],
   );
   return new Map(rows.map((x) => [x.complaint_id, x.d]));
@@ -83,6 +91,25 @@ export async function decorateMany(rows) {
   // When they last wrote to us: the date on their email (as read), or the
   // day it arrived — never ours, a forward of ours included.
   const lastTheirs = await lastTheirsByComplaint(rows.map((r) => r.id));
+  // When Greenco last wrote to them, for the same question: sent from here,
+  // a chaser logged, or one of our own emails brought in from a mailbox (an
+  // import or a copy: from our address, not a forward, not read as theirs).
+  const ourLatest = new Map((await query(
+    `SELECT complaint_id, max(d)::text AS d FROM (
+        SELECT complaint_id,
+               CASE WHEN analysis->>'sent_on' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (analysis->>'sent_on')::date
+                    ELSE (received_at AT TIME ZONE 'Europe/London')::date END AS d
+          FROM complaint_emails
+         WHERE complaint_id = ANY($1::uuid[]) AND removed_org IS NULL
+           AND (direction = 'outbound' OR (lower(COALESCE(sender_email, '')) LIKE '%@' || $2
+                AND COALESCE(analysis->>'from_organisation', 'false') <> 'true'
+                AND COALESCE(subject, '') !~* '^[[:space:]]*(fw|fwd)[[:space:]]*:'))
+        UNION ALL
+        SELECT complaint_id, event_date FROM complaint_events
+         WHERE complaint_id = ANY($1::uuid[]) AND type = 'chased' AND removed_org IS NULL
+      ) x GROUP BY complaint_id`,
+    [rows.map((r) => r.id), String(config.complaintEmail.domain || '').toLowerCase()],
+  )).rows.map((x) => [x.complaint_id, x.d]));
   // With more than one organisation, each one's own correspondence.
   const partiesOf = (id) => parties.filter((p) => p.complaint_id === id);
   const contact = await contactFor(
@@ -167,11 +194,26 @@ export async function decorateMany(rows) {
       const step = live && trackOpen(t) && t.status !== 'not_sent'
         ? (c.parties.length ? c.ai_review?.by_org?.[i] : c.ai_review) : null;
       t.action_now = actsNow(step);
-      t.asked_for = t.action_now && Array.isArray(step.requested) && step.requested.length ? step.requested : null;
+      const asked = t.action_now && Array.isArray(step.requested) && step.requested.length ? step.requested : null;
+      // Greenco has written to them since their last email: whatever they
+      // asked for has had its answer, so nothing is shown as missing (the AI
+      // can misjudge what an email already gave; the dates can't).
+      const k = c.parties.length ? contact.get(r.id)?.get(t.key) || {} : { lastSentOn: ourLatest.get(r.id) || null, lastTheirsOn: lastTheirs.get(r.id) || null };
+      t.asked_for = asked ? answeredSince(asked, k) : null;
     });
     c.any_action_now = [c, ...c.parties].some((t) => t.action_now);
     return c;
   });
+}
+
+// What they asked for, with anything not on file, given or not Greenco's
+// marked as answered when Greenco has written to them since their last email
+// (`lastSentOn` >= `lastTheirsOn`, or nothing from them on file). Pure.
+export function answeredSince(asked, { lastSentOn = null, lastTheirsOn = null } = {}) {
+  const replied = lastSentOn && (!lastTheirsOn || String(lastSentOn) >= String(lastTheirsOn));
+  if (!replied) return asked;
+  return asked.map((x) => (x.attachment_id || x.given || x.not_ours
+    ? x : { ...x, given: `our email of ${ukDate(String(lastSentOn).slice(0, 10))}, sent after their request` }));
 }
 
 // Every open part of the complaint is past Stage 1: a Stage 2 request is

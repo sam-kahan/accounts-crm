@@ -91,3 +91,17 @@ test('E.ON asking again for details Greenco already gave, or doesn\'t hold, is n
   assert.equal(r[0].given, 'our email of 23 September 2026');
   assert.match(r[1].not_ours, /no tenant details/);
 });
+
+import { answeredSince } from '../src/services/complaintContext.js';
+
+test('what they asked for counts as answered once Greenco has written to them since', () => {
+  const asked = [{ item: 'Landlord details', attachment_id: null }, { item: 'Bill', attachment_id: 'd1' }];
+  // E.ON: they asked on 19 Sep, we wrote on 23 Sep.
+  const r = answeredSince(asked, { lastSentOn: '2026-09-23', lastTheirsOn: '2026-09-19' });
+  assert.match(r[0].given, /our email of .*23 Sep 2026, sent after their request/);
+  assert.equal(r[1].given, undefined); // on file: left as it is
+  // EDF: they wrote last (30 Sep, forwarded in): still missing.
+  assert.equal(answeredSince(asked, { lastSentOn: '2026-09-28', lastTheirsOn: '2026-09-30' })[0].given, undefined);
+  // Nothing from us: still missing.
+  assert.equal(answeredSince(asked, { lastSentOn: null, lastTheirsOn: '2026-09-30' })[0].given, undefined);
+});
