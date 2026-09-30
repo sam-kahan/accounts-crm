@@ -520,6 +520,21 @@ router.post(
   }),
 );
 
+// The Send window opened with a message that says something is attached and
+// nothing chosen (a draft written before its documents were kept, or one
+// typed by hand): the AI picks them from each document's label, one small
+// text-only call, so the person never has to hunt for them. A POST: it is a
+// paid call, so it needs edit access. Nothing is sent or saved.
+const chooseInput = z.object({ subject: z.string().max(1000).optional().default(''), body: z.string().min(1).max(50000) });
+router.post(
+  '/:id/choose-attachments',
+  asyncHandler(async (req, res) => {
+    const { subject, body } = parse(chooseInput, req.body);
+    if (!config.anthropic.enabled) return res.json({ ids: [], why: null });
+    res.json(await chooseAttachments(req.params.id, { subject, body }));
+  }),
+);
+
 // Send one queued email, then record it and take the step it was. Claimed
 // by one statement (pending → sending), so it is never sent twice.
 export async function deliverOutbox(outboxId) {

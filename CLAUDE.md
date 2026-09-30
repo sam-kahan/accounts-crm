@@ -779,6 +779,12 @@ the page says how far each date can be trusted.
   an upload and a draft never pay for the same file; start-up labels the
   waiting ones (`describeWaitingDocuments`). The label shows under each
   document in the Documents list.
+- **The Send window chooses the documents itself** when a message says
+  something is attached and nothing is ticked (a draft written before the
+  documents were kept, or one typed by hand): `POST /:id/choose-attachments`
+  (`chooseAttachments`, one low-effort text call on the labels, edit access)
+  ticks them and says why; Send waits while it runs. EDF's email said the
+  documents were attached and opened with none ticked.
 
 ### 2026-09-30 — prompt caching on every AI call
 - Anthropic wrote that the cache hit rate was low: no call used prompt

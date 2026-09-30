@@ -529,7 +529,27 @@ export default function ComplaintDetail() {
   // Open the compose modal, optionally pre-filled from an AI draft.
   // `then: 'escalate'`: the email is the Stage 2 request, so sending it also
   // moves the complaint to Stage 2 (one press, not two).
+  // A message that says something is attached, opened with nothing chosen:
+  // the AI picks the documents it relies on from their labels, rather than
+  // leaving the person to hunt for them behind a red warning. Applied only
+  // if the window still holds that message with nothing chosen.
+  const [choosingDocs, setChoosingDocs] = useState(false);
+  async function autoChoose(subject, body) {
+    if (!aiEnabled || !(c.attachments || []).length || !saysAttached(body)) return;
+    setChoosingDocs(true);
+    try {
+      const r = await api.complaints.chooseAttachments(id, subject, body);
+      setSend((s) => (s && s.body === body && !(s.attachment_ids || []).length
+        ? { ...s, attachment_ids: r.ids || [], attach_why: r.why || s.attach_why || null } : s));
+    } catch {
+      // The picker is still there to tick by hand.
+    } finally {
+      setChoosingDocs(false);
+    }
+  }
   function openSend(draft, then = null, t = null) {
+    const chosen = (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x));
+    if (!chosen.length) autoChoose(signEmail(draft?.subject, me) || '', signEmail(draft?.body || '', me));
     setSend({
       // Their complaints address, or failing that the address their latest
       // email came from.
@@ -540,7 +560,7 @@ export default function ComplaintDetail() {
       subject: signEmail(draft?.subject, me) || `Re: ${c.subject} [${c.ref_code}]`,
       body: signEmail(draft?.body || '', me),
       // The documents the AI chose for it (from those on file).
-      attachment_ids: (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x)),
+      attachment_ids: chosen,
       // What they asked for that isn't on file yet, said in the window.
       missing: ((t || c).asked_for || []).filter((x) => !x.attachment_id).map((x) => x.item),
       then,
@@ -2333,7 +2353,7 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]{3,}\]/.test(send.body))}
+                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]{3,}\]/.test(send.body))}
               >
                 {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
@@ -2404,7 +2424,9 @@ export default function ComplaintDetail() {
               {send.attach_why && (
                 <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}><strong>Documents chosen by the AI:</strong> {send.attach_why}</div>
               )}
-              <NothingAttachedWarning body={send.body} ids={send.attachment_ids} docs={c.attachments} />
+              {choosingDocs
+                ? <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>Choosing the documents the message relies on…</div>
+                : <NothingAttachedWarning body={send.body} ids={send.attachment_ids} docs={c.attachments} />}
               <AttachPicker docs={c.attachments || []} value={send.attachment_ids || []}
                 onChange={(ids) => setSend({ ...send, attachment_ids: ids })} />
             </>

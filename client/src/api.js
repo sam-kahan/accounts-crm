@@ -349,6 +349,9 @@ export const api = {
     undoEmail: (id, emailId) =>
       request(`/complaints/${id}/emails/${emailId}/undo`, { method: 'POST' }),
     refreshReview: (id) => request(`/complaints/${id}/review`, { method: 'POST' }),
+    // The documents a message relies on, chosen by the AI from their labels.
+    chooseAttachments: (id, subject, body) =>
+      request(`/complaints/${id}/choose-attachments`, { method: 'POST', body: JSON.stringify({ subject, body }) }),
     // The general inbox: emails the AI couldn't place with confidence.
     unfiledEmails: () => request('/complaints/emails/unfiled'),
     fileEmail: (emailId, complaintId) =>
