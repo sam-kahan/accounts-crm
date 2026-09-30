@@ -431,6 +431,23 @@ app.listen(config.port, () => {
       if (act.length) console.log(`  Reviews to list what was asked for: ${act.length}`);
     })
     .catch((err) => console.error('  Reviews (what was asked for):', err.message));
+  // Drafts written before every figure was checked (figureCheck.js): the ones
+  // to send now with a £ figure in them are written again once, so none goes
+  // out unchecked.
+  getSetting('figure_check_0930')
+    .then(async (done) => {
+      if (done) return;
+      const { decorateMany } = await import('./services/complaintContext.js');
+      const { scheduleReview } = await import('./services/complaintReview.js');
+      const open = (await query(`SELECT * FROM complaints WHERE state = 'open' AND ai_review IS NOT NULL`)).rows;
+      const unchecked = (e) => e?.body && /£\s?\d/.test(e.body) && !e.figure_check;
+      const due = (await decorateMany(open)).filter((c) => c.any_action_now &&
+        [c.ai_review?.email, ...(c.ai_review?.by_org || []).map((x) => x?.email)].some(unchecked));
+      due.forEach((c, i) => scheduleReview(c.id, 360000 + i * 15000));
+      await setSetting('figure_check_0930', { at: new Date().toISOString(), scheduled: due.length }, 'start-up');
+      if (due.length) console.log(`  Drafts to have their figures checked: ${due.length}`);
+    })
+    .catch((err) => console.error('  Figure check of existing drafts:', err.message));
   resumeInterruptedScan()
     .then((resumed) => resumed && console.log('  Past-complaints search: carrying on after restart'))
     .catch((err) => console.error('  Past-complaints search could not resume:', err.message));

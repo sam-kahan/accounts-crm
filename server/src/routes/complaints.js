@@ -2501,6 +2501,30 @@ router.post(
 // on file; a person checks it, then either sends it from here (which adds the
 // supplier to the complaint, dated today) or sends it from Outlook and adds
 // them with the date it went.
+// "Not needed": Greenco doesn't raise it with this organisation (it never
+// deals with them). Remembered on the complaint, so the review never
+// suggests them again (complaintReview.js#declinedSupplier). No AI.
+router.post(
+  '/:id/supplier/decline',
+  asyncHandler(async (req, res) => {
+    const { name } = parse(z.object({ name: z.string().trim().min(1).max(200) }), req.body);
+    const { rows } = await query(
+      `UPDATE complaints SET supplier_declined = array_append(supplier_declined, $2)
+        WHERE id = $1 AND NOT ($2 = ANY(supplier_declined)) RETURNING id`,
+      [req.params.id, name],
+    );
+    if (rows.length) {
+      await query(
+        `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
+        [req.params.id, todayISO(), `Not raising it with ${name}: marked not needed.`, req.user?.name || req.user?.email || null],
+      );
+    }
+    const c = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) throw new HttpError(404, 'Complaint not found');
+    res.json(await decorate(c));
+  }),
+);
+
 const supplierDraftInput = z.object({
   organisation_id: z.string().uuid().optional().nullable(),
   org_name: z.string().trim().min(1).max(200),

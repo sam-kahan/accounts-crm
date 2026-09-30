@@ -426,6 +426,17 @@ export async function finishAssist(input, text) {
   if (Array.isArray(result.by_org)) {
     result.by_org = await Promise.all(result.by_org.map(async (x) => (x?.email ? { ...x, email: await withDocs(x.email) } : x)));
   }
+  // Every figure in an email to be sent is checked against what is on file,
+  // and put right where the correction can be verified (figureCheck.js). An
+  // email only kept ready for later is checked when it becomes the one to send.
+  const { checkFigures, figureNote } = await import('./figureCheck.js');
+  const toSend = (x) => x?.email?.body && x.email_now !== false;
+  if (toSend(result)) result.email = await checkFigures(result.email, input);
+  if (Array.isArray(result.by_org)) {
+    result.by_org = await Promise.all(result.by_org.map(async (x) => (toSend(x) ? { ...x, email: await checkFigures(x.email, input) } : x)));
+  }
+  const notes = [result.email, ...(result.by_org || []).map((x) => x?.email)].map((e) => figureNote(e?.figure_check)).filter(Boolean);
+  if (notes.length) result.caution = [notes.join(' '), result.caution].filter(Boolean).join(' ');
   return result;
 }
 

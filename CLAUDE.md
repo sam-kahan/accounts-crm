@@ -803,6 +803,35 @@ the page says how far each date can be trusted.
   is told the same. The Send window lists both; Edit details names whose
   reference it edits.
 
+### 2026-09-30 — every figure in a draft is checked and put right; no supplier for a managing agent; notes the AI reads
+- **Every £ figure in an email to send is checked** (`services/figureCheck.js`,
+  run by `complaintAssistant.js#finishAssist` for the review's email to send
+  now, each organisation's, and the formal / supplier / assistant drafts; a
+  draft with no £ figure costs nothing). One text call on the facts on file
+  (`sourcesFor`: the outcome wanted, document labels and text, emails,
+  timeline notes) finds figures that don't come from them, totals that don't
+  add up or leave out something the sentence covers, and amounts that
+  disagree with what Greenco asked for before. **The code decides whether
+  the correction is trusted** (`verifiedCorrection`: its parts add up to the
+  penny and each part is a figure on file; `correctedBodyOk`: the corrected
+  email brings in no other figure); a trusted correction is applied (the
+  whole corrected email, or else just the figure swapped), anything else is
+  left as written and shown as "Check the figures: …". `email.figure_check`
+  (`issues`, `amended`, `note`) is kept through `normaliseByOrg`; the page
+  shows the note above the draft and in the Send window, or "✓ Every figure
+  checked". The Livingcity Stage 2 draft asked for £673.07 (£1,297.55 less
+  the £624.48 admin fee it disputed). Start-up re-wrote, once, the drafts to
+  send now written before this (`app_settings.figure_check_0930`).
+- **"Raise it with the supplier" only with a debt collector on the
+  complaint** (in code, `applyReview`, and the page), never for a managing
+  agent acting for a freeholder; **Not needed** (`POST /:id/supplier/decline`,
+  migration `058` `complaints.supplier_declined`) stops one being suggested
+  again, with a timeline note.
+- **Timeline notes are what the AI knows**: the card and the note option say
+  the AI reads them, and the review is told to use a person's notes (a call,
+  what another company said) where they bear on the email, saying whose they
+  are.
+
 ### 2026-09-30 — AI spend: attachments read once; reviews wait 10 minutes; morning reviews half price
 - **An email's attachments are labelled by the email reading itself**
   (`emailAnalysis.js` `documents`: one line per attached document it was

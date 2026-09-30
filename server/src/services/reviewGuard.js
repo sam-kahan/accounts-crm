@@ -316,6 +316,8 @@ export function normaliseByOrg(list, tracks) {
         // The documents chosen for it (complaintAssistant.js): kept, or the
         // organisation's Send window opened with nothing ticked.
         attachment_ids: Array.isArray(e.email.attachment_ids) ? e.email.attachment_ids.filter((x) => typeof x === 'string') : [],
+        // What the figure check found and put right (figureCheck.js).
+        figure_check: e.email.figure_check || null,
       } : null;
     return {
       key: t.key, org_name: t.org_name, headline, recommended_action: headline, email,

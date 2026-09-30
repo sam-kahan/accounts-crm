@@ -320,6 +320,8 @@ export const api = {
       request(`/complaints/${id}/main/remove`, { method: 'POST', body: JSON.stringify({ promote_party_id: promotePartyId }) }),
     formalDraft: (id) => request(`/complaints/${id}/formal/draft`, { method: 'POST' }),
     formalRaise: (id, data) => request(`/complaints/${id}/formal/raise`, { method: 'POST', body: JSON.stringify(data) }),
+    supplierDecline: (id, name) =>
+      request(`/complaints/${id}/supplier/decline`, { method: 'POST', body: JSON.stringify({ name }) }),
     supplierDraft: (id, data) =>
       request(`/complaints/${id}/supplier/draft`, { method: 'POST', body: JSON.stringify(data) }),
     supplierRaise: (id, data) =>

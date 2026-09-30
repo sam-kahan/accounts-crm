@@ -100,6 +100,21 @@ function AttachPicker({ docs = [], value = [], onChange }) {
   );
 }
 
+// What the automatic figure check found in a draft (server/src/services/
+// figureCheck.js): a figure put right and why, one to check, or that every
+// figure was checked against what is on file.
+function FigureNote({ check }) {
+  if (!check) return null;
+  if (check.note) {
+    return (
+      <div className="inline-note warn" style={{ margin: '0 0 10px', fontSize: 13 }}>
+        <strong>{check.amended ? 'Figures corrected:' : 'Check the figures:'}</strong> {check.note}
+      </div>
+    );
+  }
+  return <div className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>✓ Every figure checked against the documents and emails on file.</div>;
+}
+
 // The message says something is attached, but nothing is chosen.
 function saysAttached(body) {
   return /\b(?:attached|enclosed|attach(?:ing)?|enclose|enclosing)\b/i.test(String(body || '').replace(/\n*Attached: [^\n]*/g, ''));
@@ -288,6 +303,7 @@ export default function ComplaintDetail() {
   const [partyForm, setPartyForm] = useState(null);
   // Raising it with the supplier a debt collector acts for (null or {name}).
   const [supplierFor, setSupplierFor] = useState(null);
+  const [decliningSupplier, setDecliningSupplier] = useState(false);
   const [searchBusy, setSearchBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   // Moving an organisation to Stage 2 from the request we already sent.
@@ -579,6 +595,8 @@ export default function ComplaintDetail() {
       body,
       // The documents the AI chose for it (from those on file).
       attachment_ids: chosen,
+      // What the figure check put right or wants checked, said in the window.
+      caution: draft?.figure_check?.note || null,
       // What they asked for that isn't on file yet, said in the window.
       missing: ((t || c).asked_for || []).filter((x) => !x.attachment_id).map((x) => x.item),
       then,
@@ -1022,6 +1040,7 @@ export default function ComplaintDetail() {
             </button>
           </div>
         )}
+        {!later && <FigureNote check={em.figure_check} />}
         <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', background: 'var(--surface-2, #f7f8f5)', padding: 12, borderRadius: 6 }}>
           {signEmail(em.body, me)}
         </pre>
@@ -1437,6 +1456,7 @@ export default function ComplaintDetail() {
                       {(t.chase_now || t.action_now) && <span className="badge amber"><strong>Action needed</strong></span>}
                     </div>
                     <div style={{ fontSize: 15 }}>{text || 'Nothing to do yet.'}</div>
+                    {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                     {askedForList(t)}
                     {draft && (
                       <div className="btn-row" style={{ marginTop: 6 }}>
@@ -1500,6 +1520,7 @@ export default function ComplaintDetail() {
                   {c.action_now && <span className="badge amber" style={{ marginRight: 6 }}><strong>Action needed</strong></span>}
                   <strong>Next step:</strong> {text}
                 </div>
+                {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                 {askedForList(c)}
                 {(draft || btn) && (
                   <div className="btn-row" style={{ marginTop: 8 }}>
@@ -1617,8 +1638,15 @@ export default function ComplaintDetail() {
           return a && b && (a.includes(b) || b.includes(a));
         }));
         if ((c.same_account || []).length && (!c.ai_review?.supplier?.name || onOther(c.ai_review.supplier.name))) return null;
-        const suggested = c.ai_review?.supplier?.name && !onIt(c.ai_review.supplier.name) ? c.ai_review.supplier : null;
         const collector = tracks.find((t) => t.org_type === 'debt_collector');
+        // Only with a debt collector on it, and never one marked not needed.
+        const declined = (n) => (c.supplier_declined || []).some((d) => {
+          const a = String(d || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const b = String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return a && b && (a.includes(b) || b.includes(a));
+        });
+        const suggested = collector && c.ai_review?.supplier?.name && !onIt(c.ai_review.supplier.name) && !declined(c.ai_review.supplier.name)
+          ? c.ai_review.supplier : null;
         const hasSupplier = tracks.some((t) => t.org_type !== 'debt_collector');
         if (c.state !== 'open' || (!suggested && !(collector && !hasSupplier))) return null;
         return (
@@ -1630,6 +1658,16 @@ export default function ComplaintDetail() {
               <button className="btn-primary btn-sm" onClick={() => setSupplierFor({ name: suggested?.name || '' })}>
                 Raise it with {suggested ? suggested.name : 'the supplier'}…
               </button>
+              {suggested && (
+                <button className="btn btn-sm" style={{ marginLeft: 8 }} disabled={decliningSupplier}
+                  title="We don't deal with them: don't suggest them again for this complaint"
+                  onClick={async () => {
+                    setDecliningSupplier(true);
+                    try { setC(await api.complaints.supplierDecline(c.id, suggested.name)); } catch (e) { setMsg(e.message); } finally { setDecliningSupplier(false); }
+                  }}>
+                  {decliningSupplier ? 'Saving…' : 'Not needed'}
+                </button>
+              )}
             </div>
           </div>
         );
@@ -2097,8 +2135,9 @@ export default function ComplaintDetail() {
         <div className="card-head"><h2>Timeline</h2></div>
         <div className="card-body">
           <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-            The full record: every step, email and correction, with who recorded it. Add phone calls
-            and anything else that happened here.
+            The full record: every step, email and correction, with who recorded it. Add phone calls,
+            and anything you have been told (by another company, the landlord, the tenant), here as a
+            note: the AI reads every note when it works out the next step and writes the emails.
           </p>
           <form onSubmit={addEvent} className="form-grid" style={{ alignItems: 'end' }}>
             <label className="field">
@@ -2108,7 +2147,7 @@ export default function ComplaintDetail() {
             <label className="field">
               <span className="lbl">What happened</span>
               <select value={ev.type} onChange={(e) => setEv({ ...ev, type: e.target.value })}>
-                <option value="note">Note (e.g. a phone call)</option>
+                <option value="note">Note (a phone call, or something we were told)</option>
                 <option value="chased">Chased them</option>
                 <option value="deadline_missed">They missed a deadline</option>
               </select>
@@ -2116,7 +2155,7 @@ export default function ComplaintDetail() {
             <label className="field full">
               <span className="lbl">Details</span>
               <input value={ev.note} onChange={(e) => setEv({ ...ev, note: e.target.value })}
-                placeholder="Who you spoke to, what was said or agreed" />
+                placeholder="Who said what, and when (e.g. Urban Bubble told us they had informed Livingcity…)" />
             </label>
             <div className="full" style={{ textAlign: 'right' }}>
               <button className="btn-primary btn-sm" disabled={busy}>{busy ? 'Adding…' : 'Add to timeline'}</button>
@@ -2960,7 +2999,7 @@ function FormalComplaintModal({ c, aiEnabled, onClose, onDone }) {
             <span className="lbl">Message * (check every fact and date before sending)</span>
             <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
-          {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          {draft.caution && <div className="inline-note warn" style={{ fontSize: 13, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
           <NothingAttachedWarning body={draft.body} ids={attachIds} docs={c.attachments} />
           <AttachPicker docs={c.attachments || []} value={attachIds} onChange={setAttachIds} />
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
@@ -3094,7 +3133,7 @@ function SupplierModal({ c, suggestedName, aiEnabled, onClose, onDone }) {
             <span className="lbl">Message * (check every fact and date before sending)</span>
             <textarea rows={14} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
-          {draft.caution && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
+          {draft.caution && <div className="inline-note warn" style={{ fontSize: 13, marginBottom: 8 }}><strong>Check:</strong> {draft.caution}</div>}
           <NothingAttachedWarning body={draft.body} ids={attachIds} docs={c.attachments} />
           <AttachPicker docs={c.attachments || []} value={attachIds} onChange={setAttachIds} />
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>

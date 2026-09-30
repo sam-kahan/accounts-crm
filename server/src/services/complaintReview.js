@@ -43,11 +43,17 @@ const REVIEW_INSTRUCTION =
   '"record_acknowledgement" or "record_response" (an email or document on file shows they have, but ' +
   'it is not recorded), "resolve", "wait" (nothing to do until a date), "by": "YYYY-MM-DD" or null}. ' +
   'Recommend escalate/refer only when their procedure allows it now. ' +
-  'ALSO add a key "supplier": when the complaint is against a debt collector, collections solicitor or ' +
-  'anyone else pursuing a bill ON BEHALF OF another company (the supplier or creditor that owns the ' +
+  'ALSO add a key "supplier": ONLY when the complaint is against a debt collector or collections ' +
+  'solicitor pursuing a bill ON BEHALF OF another company (the supplier or creditor that owns the ' +
   'debt, e.g. LCS collecting for British Gas), and that company is NOT already one of the organisations ' +
   'on this complaint, give {"name": the supplier as named in the emails, "why": one sentence on why the ' +
-  'complaint should be raised with them too}; otherwise null. ' +
+  'complaint should be raised with them too}; otherwise null. Never for a managing agent acting for a ' +
+  'freeholder or landlord: Greenco deals with the agent. ' +
+  // Facts a person noted (a call, what another company told us) are what
+  // Greenco knows: used where they bear on the email, and said whose they are.
+  'Notes Greenco people added to the timeline are facts Greenco knows (a phone call, something another ' +
+  'company or the landlord told them): use each one where it bears on the next step or the email, and say ' +
+  'where it came from ("Urban Bubble have told us that…"), never as more certain than the note says. ' +
   'BEFORE recommending anything, look at what Greenco has most recently done — its latest emails and ' +
   'the "Chased / sent" [chased] entries on the timeline. If Greenco has already done the step you ' +
   'would recommend (sent the chaser, asked for Stage 2, sent what they asked for), do NOT recommend it ' +
@@ -84,6 +90,17 @@ const BY_ORG_INSTRUCTION =
   'Each "email" is addressed to that organisation only and is about its part only. The top-level ' +
   '"headline" then says in a few words what to do with each (e.g. "CDER: ask for Stage 2 now. Council: ' +
   'wait for their acknowledgement, due 2 Oct.").';
+
+// Has Greenco said not to raise it with this organisation? Names compared
+// loosely ("Emerald GR Trustee 2 Ltd" is "Emerald GR Trustee 2 Limited").
+const nameKey = (n) => String(n || '').toLowerCase().replace(/\b(limited|ltd|plc|llp|the)\b/g, '').replace(/[^a-z0-9]/g, '');
+export function declinedSupplier(name, declined = []) {
+  const k = nameKey(name);
+  return Boolean(k) && (declined || []).some((d) => {
+    const x = nameKey(d);
+    return x && (x === k || x.includes(k) || k.includes(x));
+  });
+}
 
 // A review in three parts, so the overnight batch (below) and a direct
 // refresh do exactly the same thing: prepare the request, ask, apply.
@@ -123,7 +140,11 @@ async function applyReview({ id, ctx, startedAt, signature }, raw) {
     ...(ctx.emails || []).filter((e) => e.direction === 'outbound' && e.received_at && !e.removed_org).map((e) => londonDay(e.received_at)),
   ].filter(Boolean).sort();
   // The company a debt collector is acting for, to raise it with too.
-  const supplier = raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim()
+  // Only with a debt collector on the complaint (the debt is the supplier's),
+  // and never one Greenco has said not to raise it with ("Not needed").
+  const collector = [c, ...(c.parties || [])].some((t) => t.org_type === 'debt_collector');
+  const supplier = collector && raw.supplier && typeof raw.supplier.name === 'string' && raw.supplier.name.trim() &&
+    !declinedSupplier(raw.supplier.name, c.supplier_declined)
     ? { name: raw.supplier.name.trim().slice(0, 200), why: typeof raw.supplier.why === 'string' ? raw.supplier.why.trim().slice(0, 400) : null }
     : null;
   let review = guardReview(
