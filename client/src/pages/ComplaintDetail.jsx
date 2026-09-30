@@ -54,16 +54,27 @@ const theOmbudsman = (name) => (/^the\s/i.test(name || '') ? name : `the ${name 
 // a letter). Newest first, as the Documents list shows them; the size is
 // checked again on the server, which refuses more than one email can carry.
 const ATTACH_LIMIT = 14 * 1024 * 1024;
+// A file's size as people read it: "85 KB", "1.4 MB" (never "0.0 MB").
+function fileSize(n) {
+  const b = Number(n) || 0;
+  if (!b) return 'size not known';
+  return b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`;
+}
+// A PDF or photo opens in a new tab to look at; anything else downloads (the
+// server decides which, lib/http.js#viewableType).
+const viewUrl = (d) => `${api.complaints.attachmentUrl(d.id)}?view=1`;
 function AttachPicker({ docs = [], value = [], onChange }) {
   if (!docs.length) return null;
   const chosen = new Set(value);
   const total = docs.filter((d) => chosen.has(d.id)).reduce((n, d) => n + (Number(d.size_bytes) || 0), 0);
-  const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
   const toggle = (id) => onChange(chosen.has(id) ? value.filter((x) => x !== id) : [...value, id]);
   return (
     <div className="field">
       <span className="lbl">
-        Attach documents from this complaint{value.length ? ` (${value.length} chosen, ${mb(total)})` : ''}
+        Attach documents from this complaint{value.length ? ` (${value.length} chosen, ${fileSize(total)} in all)` : ''}
+      </span>
+      <span className="muted" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>
+        Click a document’s name to open it and check it before sending.
       </span>
       <div className="btn-row" style={{ margin: '2px 0 6px', gap: 12 }}>
         <button type="button" className="btn-ghost btn-sm" onClick={() => onChange(docs.map((d) => d.id))}>All</button>
@@ -72,11 +83,12 @@ function AttachPicker({ docs = [], value = [], onChange }) {
       {docs.map((d) => (
         <label key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '0 0 6px', fontSize: 14 }}>
           <input type="checkbox" checked={chosen.has(d.id)} onChange={() => toggle(d.id)} />
-          <span style={{ overflowWrap: 'anywhere' }}>
-            {d.filename}
+          <span style={{ overflowWrap: 'anywhere', flex: 1 }}>
+            {/* Opens it in a new tab; the click never ticks or unticks it. */}
+            <a href={viewUrl(d)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{d.filename}</a>
             {d.description && <span className="muted" style={{ display: 'block', fontSize: 12 }}>{d.description}</span>}
           </span>
-          <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{d.size_bytes ? mb(d.size_bytes) : ''}</span>
+          <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fileSize(d.size_bytes)}</span>
         </label>
       ))}
       {total > ATTACH_LIMIT && (
@@ -1939,12 +1951,12 @@ export default function ComplaintDetail() {
               {firstOf('docs', c.attachments).map((a) => (
                 <tr key={a.id}>
                   <td>
-                    <a href={api.complaints.attachmentUrl(a.id)} target="_blank" rel="noreferrer">
+                    <a href={viewUrl(a)} target="_blank" rel="noreferrer">
                       {a.filename}
                     </a>
                     {a.description && <div style={{ fontSize: 13 }}>{a.description}</div>}
                     <div className="muted" style={{ fontSize: 12 }}>
-                      {(a.size_bytes / 1024).toFixed(0)} KB
+                      {fileSize(a.size_bytes)}
                       {a.source_email_id ? ` · attached to ${a.copies > 1 ? `${a.copies} emails (shown once)` : 'an email'}` : a.copies > 1 ? ` · on file ${a.copies} times (shown once)` : ''}
                       {a.ai_readable ? ' · read by the AI assistant' : ' · not readable by the AI'}
                     </div>

@@ -110,3 +110,16 @@ test('digest puts overdue first, with UK dates and counts in the subject', () =>
   assert.ok(d.text.includes('Mon 5 Oct 2026'));
   assert.ok(!d.html.includes('2026-10-05'));
 });
+
+import { attachmentDisposition, viewableType } from '../src/lib/http.js';
+
+test('only a PDF or a photo is ever shown in the browser, as a type from the fixed list', () => {
+  assert.equal(viewableType('application/pdf'), 'application/pdf');
+  assert.equal(viewableType('IMAGE/JPG'), 'image/jpeg');
+  for (const t of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'text/plain', '', null,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document']) {
+    assert.equal(viewableType(t), null, t);
+  }
+  assert.match(attachmentDisposition('Title.pdf', 'x', { inline: true }), /^inline; filename="Title\.pdf"/);
+  assert.match(attachmentDisposition('Title.pdf'), /^attachment;/);
+});

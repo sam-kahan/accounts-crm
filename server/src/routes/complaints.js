@@ -4,7 +4,7 @@ import { saysAttached, staleNoReply } from '../services/draftChecks.js';
 import { chooseAttachments } from '../services/docChoice.js';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
@@ -1302,12 +1302,16 @@ router.get(
     }
     const a = await getAttachment(req.params.attId);
     if (!a) throw new HttpError(404, 'Attachment not found');
-    // Force a download (never render inline): a user could upload an HTML/SVG
-    // file whose stored mimetype would otherwise execute as script on our own
+    // A download, never shown inline: a user could upload an HTML/SVG file
+    // whose stored mimetype would otherwise execute as script on our own
     // origin. `nosniff` stops the browser second-guessing the content type.
-    res.setHeader('Content-Type', a.mimetype || 'application/octet-stream');
+    // The one exception is ?view=1 on a PDF or a photo (to look at it before
+    // it goes with an email), sent as a type from a fixed list
+    // (lib/http.js#viewableType), so nothing that can run script is shown.
+    const view = req.query.view === '1' ? viewableType(a.mimetype) : null;
+    res.setHeader('Content-Type', view || a.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', attachmentDisposition(a.filename, 'attachment'));
+    res.setHeader('Content-Disposition', attachmentDisposition(a.filename, 'attachment', { inline: Boolean(view) }));
     a.stream().pipe(res);
   }),
 );

@@ -785,6 +785,12 @@ the page says how far each date can be trusted.
   (`chooseAttachments`, one low-effort text call on the labels, edit access)
   ticks them and says why; Send waits while it runs. EDF's email said the
   documents were attached and opened with none ticked.
+- **A document can be opened to check it before it goes**: its name in the
+  Send windows' picker (and the Documents list) opens it in a new tab
+  (`/attachments/:id/download?view=1`). Only a PDF or a photo is shown
+  inline, sent as a type from a fixed list (`lib/http.js#viewableType`) with
+  nosniff, so nothing that can run script is ever shown; anything else still
+  downloads. Sizes read "85 KB" / "1.4 MB" (`fileSize`), never "0.0 MB".
 
 ### 2026-09-30 — prompt caching on every AI call
 - Anthropic wrote that the cache hit rate was low: no call used prompt
