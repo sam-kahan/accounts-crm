@@ -746,6 +746,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-04 — a contractor can have more than one email address
+- The contractor's Email (and the commission invoice's Send "To") take
+  several addresses, commas between them (`lib/emailList.js`; semicolons,
+  spaces and new lines are read as separators too). Stored as
+  "a@x.co.uk, b@x.co.uk", the form Greenco Invoicing keeps a client's
+  addresses in, so the push carries them across unchanged (500 characters at
+  most, its limit). Anything that isn't an address is refused by name, never
+  dropped. Greenco Invoicing only fills a client's email when it has none, so
+  a contractor already set up there is updated on that side by hand.
+
 ### 2026-09-30 — a response in on an open complaint always needs deciding
 - **E.ON (87 Spekeland Road) lost "Action needed"** after the "already
   given" change: their Stage 1 "response" only asked for the landlord's

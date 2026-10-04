@@ -30,7 +30,8 @@ function SendModal({ invoice, onClose, onSent }) {
       <form onSubmit={send}>
         <label className="field">
           <span className="lbl">To *</span>
-          <input required type="email" value={to} onChange={(e) => setTo(e.target.value)} />
+          <input required type="text" inputMode="email" value={to} onChange={(e) => setTo(e.target.value)} />
+          <span className="muted" style={{ fontSize: 12 }}>For more than one address, put commas between them.</span>
         </label>
         <label className="field">
           <span className="lbl">Note to add to the invoice</span>

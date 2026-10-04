@@ -72,12 +72,19 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
           </label>
           <label className="field">
             <span className="lbl">Email</span>
+            {/* Text, not type="email": that allows one address only. The
+                server checks each address in the list. */}
             <input
-              type="email"
+              type="text"
+              inputMode="email"
+              autoComplete="off"
               value={form.email || ''}
               onChange={(e) => set('email', e.target.value)}
-              placeholder="Where the commission invoice goes"
+              placeholder="e.g. accounts@firm.co.uk, ben@firm.co.uk"
             />
+            <span className="muted" style={{ fontSize: 12 }}>
+              Where the commission invoice goes. For more than one address, put commas between them.
+            </span>
           </label>
           <label className="field">
             <span className="lbl">Phone</span>

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { emailListProblem, splitEmails } from '../lib/emailList.js';
 import { config } from '../config.js';
 import { todayISO, monthRange, monthOf } from '../lib/dates.js';
 import { withNumbers, fromPence } from '../lib/money.js';
@@ -366,7 +367,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const d = parse(
       z.object({
-        to: z.string().max(320).optional().nullable(),
+        to: z.string().max(2000).optional().nullable(),
         message: z.string().max(2000).optional().nullable(),
       }),
       req.body || {},
@@ -390,10 +391,14 @@ router.post(
         `Set REGION_${String(invoice.region || 'manchester').toUpperCase()}_VAT_NUMBER on the server.`);
     }
 
-    const to = (d.to || invoice.contractor_email || '').trim();
-    if (!to) {
+    const rawTo = (d.to || invoice.contractor_email || '').trim();
+    if (!rawTo) {
       throw new HttpError(400, 'No email address for this contractor — add one, or type one here.');
     }
+    // One address or several, commas between them: every one gets the invoice.
+    const problem = emailListProblem(rawTo);
+    if (problem) throw new HttpError(400, problem);
+    const to = splitEmails(rawTo);
 
     const { rows: lines } = await query(
       `SELECT invoice_number, invoice_date, property, description, total_amount,
@@ -422,9 +427,9 @@ router.post(
           SET status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END,
               sent_at = now(), sent_to = $2
         WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
-      [req.params.id, to],
+      [req.params.id, to.join(', ')],
     );
-    res.json({ sent: true, to, invoice: decorate(updated[0]) });
+    res.json({ sent: true, to: to.join(', '), invoice: decorate(updated[0]) });
   }),
 );
 

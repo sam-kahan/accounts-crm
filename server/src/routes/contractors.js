@@ -7,6 +7,7 @@ import { withNumbers } from '../lib/money.js';
 import { config } from '../config.js';
 import { COMMISSION_TYPES, COMMISSION_ON, COMMISSION_BASES, describeDeal } from '../services/commission.js';
 import { REGION_KEYS } from '../services/regions.js';
+import { emailListProblem, parseEmailList } from '../lib/emailList.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -24,7 +25,8 @@ const input = z.object({
   name: z.string().min(1).max(200),
   trade: z.string().max(100).optional().nullable(),
   contact_name: z.string().max(200).optional().nullable(),
-  email: z.string().max(320).optional().nullable(),
+  // One address or several (commas between them); see emailWanted().
+  email: z.string().max(2000).optional().nullable(),
   phone: z.string().max(64).optional().nullable(),
   address: z.string().max(1000).optional().nullable(),
   commission_type: z.enum(COMMISSION_TYPES).optional(),
@@ -105,10 +107,21 @@ router.get(
   }),
 );
 
+// The email field as stored: "a@x.co.uk, b@x.co.uk", null when cleared, and
+// undefined (left alone) when not sent. Refused, naming the culprit, rather
+// than saved with an address that would bounce or be dropped.
+function emailWanted(raw) {
+  if (raw === undefined) return undefined;
+  const problem = emailListProblem(raw);
+  if (problem) throw new HttpError(400, problem);
+  return parseEmailList(raw).value;
+}
+
 router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
+    d.email = emailWanted(d.email);
     // Defaults are resolved here rather than with COALESCE in SQL: an untyped
     // null parameter comes through as text, which a NUMERIC column rejects.
     const { rows } = await query(
@@ -142,6 +155,7 @@ router.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const d = parse(input.partial(), req.body);
+    d.email = emailWanted(d.email);
     // buildUpdateSet so an omitted field is left alone while an explicit null
     // clears a nullable column (a contact name really can be removed).
     const { clause, values } = buildUpdateSet({
