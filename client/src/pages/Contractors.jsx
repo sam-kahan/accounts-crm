@@ -9,12 +9,29 @@ const EMPTY = {
   name: '', trade: '', contact_name: '', email: '', phone: '', address: '',
   commission_type: 'percentage', commission_rate: '', commission_fixed: '',
   commission_on: 'net', commission_basis: 'markup',
-  payment_terms_days: '', vat_registered: true, default_region: '',
+  payment_terms_days: '', vat_registered: true, commission_vat_exempt: false, default_region: '',
   agreement_notes: '', active: true, notes: '',
 };
 
 function num(v) {
   return v === '' || v === null || v === undefined ? undefined : Number(v);
+}
+
+// What changing "exempt from VAT" did to invoices already logged, so nobody
+// has to wonder whether last week's ones were caught.
+function vatExemptNote(saved) {
+  const restated = saved?.vat_exempt_restated || 0;
+  const billed = saved?.vat_exempt_already_invoiced || 0;
+  if (!restated && !billed) return null;
+  const how = saved.commission_vat_exempt ? 'exempt from VAT' : 'charged VAT as normal';
+  return [
+    restated
+      ? `${plural(restated, 'invoice')} from ${saved.name} not yet invoiced back now ${restated === 1 ? 'has' : 'have'} the commission ${how}.`
+      : null,
+    billed
+      ? `${plural(billed, 'commission invoice')} already raised to them ${billed === 1 ? 'was' : 'were'} raised the other way and ${billed === 1 ? 'is' : 'are'} unchanged: void and re-raise ${billed === 1 ? 'it' : 'them'} to correct the VAT.`
+      : null,
+  ].filter(Boolean).join(' ');
 }
 
 function ContractorModal({ initial, defaults, onClose, onSaved }) {
@@ -197,6 +214,23 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
                 : 'They can’t charge VAT, so the commission they collect is treated as VAT-inclusive — we bill it netted down, and they pay back exactly what they took.'}
             </span>
           </label>
+          <label className="field full" style={{ gap: 6 }}>
+            <span className="lbl">Is their commission exempt from VAT?</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={!!form.commission_vat_exempt}
+                onChange={(e) => set('commission_vat_exempt', e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              <span>Yes: it is insurance commission (e.g. an insurance broker)</span>
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {form.commission_vat_exempt
+                ? 'Commission on arranging insurance is exempt from VAT, so we invoice the commission they collected with no VAT: the total, at 0%.'
+                : 'Leave this unticked for anyone else: VAT applies to our commission as normal.'}
+            </span>
+          </label>
           <label className="field full">
             <span className="lbl">Which office do they usually work for?</span>
             <select
@@ -221,7 +255,9 @@ function ContractorModal({ initial, defaults, onClose, onSaved }) {
           <div className="field full">
             <span className="lbl">VAT on our commission invoice</span>
             <div className="inline-note" style={{ marginTop: 2 }}>
-              {form.vat_registered
+              {form.commission_vat_exempt
+                ? 'None: their commission is exempt from VAT (insurance), so the invoice is the commission they collected, at 0% VAT.'
+                : form.vat_registered
                 ? `${defaults?.vat_rate ?? 20}% is added to the commission we invoice — Greenco is VAT registered, so it applies to every one.`
                 : `They can’t charge VAT, so the commission they collect is treated as including it: we invoice it netted down at ${
                     defaults?.vat_rate ?? 20
@@ -268,6 +304,7 @@ export default function Contractors() {
   const [defaults, setDefaults] = useState(null);
   const [search, setSearch] = useState('');
   const [err, setErr] = useState(null);
+  const [saveNote, setSaveNote] = useState(null);
 
   const load = () => {
     setErr(null);
@@ -309,6 +346,12 @@ export default function Contractors() {
         />
         <button className="btn-primary" onClick={() => setEditing('new')}>+ Add contractor</button>
       </div>
+
+      {saveNote && (
+        <div className="inline-note" style={{ marginBottom: 12 }}>
+          {saveNote} <button className="linkish" onClick={() => setSaveNote(null)}>OK</button>
+        </div>
+      )}
 
       {err && (
         <div className="inline-note warn" style={{ marginBottom: 12 }}>
@@ -374,7 +417,16 @@ export default function Contractors() {
                   </td>
                   <td>
                     <span className="badge green">{c.deal_summary}</span>
-                    {!c.vat_registered && (
+                    {c.commission_vat_exempt && (
+                      <span
+                        className="badge"
+                        style={{ marginLeft: 6 }}
+                        title="Insurance commission is exempt from VAT, so we invoice it at 0%"
+                      >
+                        VAT exempt
+                      </span>
+                    )}
+                    {!c.vat_registered && !c.commission_vat_exempt && (
                       <span
                         className="badge amber"
                         style={{ marginLeft: 6 }}
@@ -411,8 +463,9 @@ export default function Contractors() {
           initial={editing === 'new' ? null : editing}
           defaults={defaults}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={(saved) => {
             setEditing(null);
+            setSaveNote(vatExemptNote(saved));
             load();
           }}
         />

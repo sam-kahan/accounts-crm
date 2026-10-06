@@ -64,9 +64,15 @@ export async function voidRefusal(row) {
 
 // Hand every line on this invoice back to "to invoice", so its commission can
 // be re-billed. Takes a client so the void path can do it in its transaction.
+// A released line takes the contractor's CURRENT "exempt from VAT" setting:
+// voiding is how an invoice raised with the wrong VAT is corrected, so the
+// re-raise must not repeat it.
 export async function releaseLinesOf(id, client = { query }) {
   const { rowCount } = await client.query(
-    'UPDATE contractor_invoices SET commission_invoice_id = NULL WHERE commission_invoice_id = $1',
+    `UPDATE contractor_invoices i
+        SET commission_invoice_id = NULL, commission_vat_exempt = c.commission_vat_exempt
+       FROM contractors c
+      WHERE c.id = i.contractor_id AND i.commission_invoice_id = $1`,
     [id],
   );
   return rowCount;

@@ -50,7 +50,7 @@ async function loadForPush(id) {
   const { rows: lines } = await query(
     `SELECT id, invoice_number, invoice_date, property, description,
             net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-            commission_vat_inclusive
+            commission_vat_inclusive, commission_vat_exempt
        FROM contractor_invoices
       WHERE commission_invoice_id = $1
       ORDER BY invoice_date, created_at`,
@@ -184,9 +184,10 @@ async function withdrawVoided() {
 // is invisible: it isn't pending, so no month end will ever bill it again.
 async function releaseOrphanedLines() {
   const { rowCount } = await query(
-    `UPDATE contractor_invoices i SET commission_invoice_id = NULL
-       FROM commission_invoices ci
-      WHERE ci.id = i.commission_invoice_id AND ci.status = 'void'`,
+    `UPDATE contractor_invoices i
+        SET commission_invoice_id = NULL, commission_vat_exempt = c.commission_vat_exempt
+       FROM commission_invoices ci, contractors c
+      WHERE ci.id = i.commission_invoice_id AND ci.status = 'void' AND c.id = i.contractor_id`,
   );
   if (rowCount > 0) {
     console.warn(`[invoicing] released ${rowCount} line(s) stranded on a voided invoice`);

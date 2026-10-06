@@ -161,7 +161,7 @@ router.get(
     const { rows: lines } = await query(
       `SELECT id, invoice_number, invoice_date, property, landlord_ref, description,
               net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-              commission_vat_inclusive, region, (storage_path IS NOT NULL) AS has_document
+              commission_vat_inclusive, commission_vat_exempt, region, (storage_path IS NOT NULL) AS has_document
          FROM contractor_invoices
         WHERE commission_invoice_id = $1
         ORDER BY invoice_date, created_at`,
@@ -207,7 +207,7 @@ router.get(
     const { rows: lines } = await query(
       `SELECT i.id, i.invoice_number, i.invoice_date, i.property, i.description,
               i.net_amount, i.vat_amount, i.total_amount, i.commission_rate, i.commission_amount,
-              i.commission_vat_inclusive, i.region
+              i.commission_vat_inclusive, i.commission_vat_exempt, i.region
          FROM contractor_invoices i
         WHERE i.contractor_id = $1 AND i.commission_invoice_id IS NULL AND NOT i.waived
           AND ${monthEndLinesSql('i', '$2', '$3')}
@@ -274,7 +274,7 @@ router.post(
       // two people raising the same month's invoice at once would otherwise
       // each claim the same commission, and we'd bill the contractor twice.
       const { rows: lines } = await client.query(
-        `SELECT i.id, i.commission_amount, i.commission_vat_inclusive
+        `SELECT i.id, i.commission_amount, i.commission_vat_inclusive, i.commission_vat_exempt
            FROM contractor_invoices i
           WHERE i.contractor_id = $1 AND i.commission_invoice_id IS NULL AND NOT i.waived
             AND ${monthEndLinesSql('i', '$2', '$3')}
@@ -402,7 +402,7 @@ router.post(
 
     const { rows: lines } = await query(
       `SELECT invoice_number, invoice_date, property, description, total_amount,
-              commission_amount, commission_vat_inclusive
+              commission_amount, commission_vat_inclusive, commission_vat_exempt
          FROM contractor_invoices WHERE commission_invoice_id = $1 ORDER BY invoice_date, created_at`,
       [req.params.id],
     );
@@ -446,7 +446,7 @@ async function loadForPush(id, client = { query }) {
   if (!invoice) throw new HttpError(404, 'Commission invoice not found');
   const { rows: lines } = await client.query(
     `SELECT invoice_number, invoice_date, property, description, commission_amount,
-            commission_vat_inclusive
+            commission_vat_inclusive, commission_vat_exempt
        FROM contractor_invoices WHERE commission_invoice_id = $1
       ORDER BY invoice_date, created_at`,
     [id],

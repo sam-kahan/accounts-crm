@@ -42,7 +42,7 @@ const MONEY_COLS = ['net_amount', 'vat_amount', 'total_amount', 'commission_rate
 const COLS = `i.id, i.ref, i.contractor_id, i.invoice_number, i.invoice_date, i.property, i.landlord_ref,
   i.description, i.net_amount, i.vat_amount, i.total_amount, i.commission_type, i.commission_rate,
   i.commission_on, i.commission_basis, i.commission_fixed, i.commission_amount, i.commission_override,
-  i.commission_vat_inclusive, i.commissionable_amount, i.commissionable_note, i.region, i.paid_from,
+  i.commission_vat_inclusive, i.commission_vat_exempt, i.commissionable_amount, i.commissionable_note, i.region, i.paid_from,
   i.paid_on, i.waived, i.waived_reason, i.commission_invoice_id, i.filename, i.mimetype,
   i.size_bytes, i.extracted, i.notes, i.created_at, i.updated_at`;
 
@@ -458,7 +458,7 @@ async function summarise({ from, to }) {
   // down of a VAT-inclusive commission searches for the exact split, which is
   // not something to re-implement in SQL and hope stays in step.
   const { rows: claimableLines } = await query(
-    `SELECT i.contractor_id, i.region, i.commission_amount, i.commission_vat_inclusive
+    `SELECT i.contractor_id, i.region, i.commission_amount, i.commission_vat_inclusive, i.commission_vat_exempt
        FROM contractor_invoices i
       WHERE ${pending}
         AND ${monthEndLinesSql('i', '$1', '$2')}`,
@@ -701,9 +701,9 @@ router.post(
            commission_basis, commission_amount, commission_override, commission_vat_inclusive,
            paid_from, paid_on, notes,
            filename, mimetype, size_bytes, storage_path, extracted, region, commission_fixed,
-           commissionable_amount, commissionable_note)
+           commissionable_amount, commissionable_note, commission_vat_exempt)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$24,
-                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25,$26,$27,$28)
+                 COALESCE($16,'client'),$17,$18,$19,$20,$21,$22,COALESCE($23,false),$25,$26,$27,$28,$29)
          RETURNING id`,
         [
           d.contractor_id, d.invoice_number || null, d.invoice_date, d.property || null,
@@ -725,6 +725,9 @@ router.post(
           // when the rate applies to the whole thing, which is the usual case.
           commission.commissionable_amount,
           d.commissionable_note || null,
+          // Exempt from VAT (insurance commission): snapshotted like the rest
+          // of the deal, so month end reads it off the line.
+          Boolean(contractor.commission_vat_exempt),
         ],
       );
 

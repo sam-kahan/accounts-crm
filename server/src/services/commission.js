@@ -176,7 +176,7 @@ export function invoiceTotals(netAmount, vatRate) {
 // penny under rather than a penny over.
 export function commissionNetPence(line, vatRate) {
   const collected = Math.max(0, toPence(line.commission_amount) ?? 0);
-  const rate = Number(vatRate || 0);
+  const rate = lineVatRate(line, vatRate);
   if (!line.commission_vat_inclusive || !rate || !collected) return collected;
   const start = Math.floor((collected * 100) / (100 + rate));
   for (const candidate of [start, start + 1, start - 1]) {
@@ -185,6 +185,21 @@ export function commissionNetPence(line, vatRate) {
     }
   }
   return start;
+}
+
+// The VAT rate one line is charged at. Commission that is EXEMPT from VAT (an
+// insurance broker's: arranging insurance is an exempt supply, VAT Act 1994
+// Sch 9 Group 2) carries none, so it is invoiced at 0% and never netted down —
+// the broker pays back exactly the commission they collected.
+export function lineVatRate(line, vatRate) {
+  return line?.commission_vat_exempt ? 0 : Number(vatRate || 0);
+}
+
+// The rate a raised invoice records: 0 when every line on it is exempt (it
+// charges no VAT, and must not read "VAT (20%): £0.00"), otherwise Greenco's
+// rate, applied line by line to the lines that aren't exempt.
+export function invoiceVatRate(lines, vatRate) {
+  return lines.length && lines.every((l) => l.commission_vat_exempt) ? 0 : Number(vatRate || 0);
 }
 
 // The invoice totals, with VAT worked out per line and then summed — which is
@@ -198,11 +213,11 @@ export function invoiceTotalsFromLines(lines, vatRate) {
   for (const line of lines) {
     const lineNet = commissionNetPence(line, vatRate);
     netPence += lineNet;
-    vatPence += percentOfPence(lineNet, vatRate);
+    vatPence += percentOfPence(lineNet, lineVatRate(line, vatRate));
   }
   return {
     net_amount: fromPence(netPence),
-    vat_rate: Number(vatRate || 0),
+    vat_rate: invoiceVatRate(lines, vatRate),
     vat_amount: fromPence(vatPence),
     total_amount: fromPence(netPence + vatPence),
   };
@@ -334,13 +349,25 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
     String(invoice.period_end).slice(0, 7),
   )}`;
 
+  // Exempt commission (insurance) carries no VAT, and the invoice says why —
+  // a VAT-registered business invoicing without VAT should never leave the
+  // reader wondering whether it was forgotten. On an invoice that mixes the
+  // two, the exempt lines are marked.
+  const exempt = lines.filter((l) => l.commission_vat_exempt);
+  const mixed = exempt.length > 0 && exempt.length < lines.length;
+  const exemptNote = exempt.length
+    ? mixed
+      ? 'Lines marked "exempt from VAT" are commission on arranging insurance, which is exempt from VAT; no VAT is charged on them.'
+      : 'No VAT is charged: commission on arranging insurance is exempt from VAT.'
+    : '';
+
   const textLines = lines.map(
     (l) =>
       `  ${fmtDate(l.invoice_date)}  ${l.invoice_number || '(no number)'}  ${
         l.property || l.description || 'Works'
       }  invoice ${formatPence(toPence(l.total_amount) ?? 0)}  commission ${formatPence(
         toPence(l.commission_amount) ?? 0,
-      )}`,
+      )}${mixed && l.commission_vat_exempt ? ' (exempt from VAT)' : ''}`,
   );
 
   const text = [
@@ -362,6 +389,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
           `Total due:        ${formatPence(toPence(invoice.total_amount) ?? 0)}`,
         ]
       : []),
+    ...(exemptNote ? ['', exemptNote] : []),
     '',
     ...(billing.bank_details ? ['Payment details:', billing.bank_details, ''] : []),
     ...(invoice.notes ? [invoice.notes, ''] : []),
@@ -390,7 +418,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
         )}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap;font-weight:600;">${formatPence(
           toPence(l.commission_amount) ?? 0,
-        )}</td>
+        )}${mixed && l.commission_vat_exempt ? ' <span style="font-weight:400;color:#6b7280;">(exempt from VAT)</span>' : ''}</td>
       </tr>`,
     )
     .join('');
@@ -449,6 +477,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
             )}</td></tr>
       </tfoot>
     </table>
+    ${exemptNote ? `<p style="font-size:13px;">${escapeHtml(exemptNote)}</p>` : ''}
     ${invoice.notes ? `<p style="font-size:13px;color:#6b7280;">${escapeHtml(invoice.notes)}</p>` : ''}
     ${
       billing.bank_details

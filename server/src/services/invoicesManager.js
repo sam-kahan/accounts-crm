@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { toPence, fromPence } from '../lib/money.js';
-import { commissionNetPence } from './commission.js';
+import { commissionNetPence, lineVatRate } from './commission.js';
 import { REGIONS, REGION_LABEL, isRegion } from './regions.js';
 
 // ---------------------------------------------------------------------------
@@ -114,8 +114,13 @@ export function buildInvoicePayload({ invoice, contractor, lines, companyId, asS
     status: asSent ? 'sent' : 'draft',
     notes:
       invoice.notes ||
-      `Commission included in your invoices between ${ukLong(invoice.period_start)} and ${ukLong(invoice.period_end)}.`,
-    lines: billable.map((l) => ({ ...lineFor(l, vatRate), vatRate })),
+      `Commission included in your invoices between ${ukLong(invoice.period_start)} and ${ukLong(invoice.period_end)}.` +
+        (billable.every((l) => l.commission_vat_exempt)
+          ? ' No VAT is charged: commission on arranging insurance is exempt from VAT.'
+          : ''),
+    // Per line: exempt commission (insurance) goes across at 0% even on an
+    // invoice whose other lines carry VAT.
+    lines: billable.map((l) => ({ ...lineFor(l, vatRate), vatRate: lineVatRate(l, vatRate) })),
   };
 }
 

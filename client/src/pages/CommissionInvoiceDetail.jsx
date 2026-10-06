@@ -103,11 +103,20 @@ export default function CommissionInvoiceDetail() {
   // rounded DOWN, so the invoice comes to a penny less than the contractor
   // collected rather than a penny more. About one value in six.
   const roundedDown = (line, rate) => {
-    if (!line.commission_vat_inclusive || !line.commission_net) return false;
+    if (!line.commission_vat_inclusive || line.commission_vat_exempt || !line.commission_net) return false;
     const net = Math.round(Number(line.commission_net) * 100);
     const gross = net + Math.round((net * Number(rate || 0)) / 100);
     return gross !== Math.round(Number(line.commission_amount) * 100);
   };
+  // Insurance commission is exempt from VAT; the invoice says so rather than
+  // leave a VAT-registered company's 0% looking like an oversight. The same
+  // wording as the emailed copy (services/commission.js).
+  const exemptLines = (inv.lines || []).filter((l) => l.commission_vat_exempt).length;
+  const exemptNote = !exemptLines
+    ? null
+    : exemptLines < (inv.lines || []).length
+    ? 'Lines marked "exempt from VAT" are commission on arranging insurance, which is exempt from VAT; no VAT is charged on them.'
+    : 'No VAT is charged: commission on arranging insurance is exempt from VAT.';
   const anyRoundedDown = (inv.lines || []).some((l) => roundedDown(l, inv.vat_rate));
   const carried = (inv.lines || []).filter(
     (l) => l.invoice_date < inv.period_start || l.invoice_date > inv.period_end,
@@ -434,7 +443,10 @@ export default function CommissionInvoiceDetail() {
                 <td className="num muted">{Number(l.commission_rate) ? `${Number(l.commission_rate)}%` : '—'}</td>
                 <td className="num">
                   {formatMoney(l.commission_net ?? l.commission_amount)}
-                  {l.commission_vat_inclusive && (
+                  {l.commission_vat_exempt && hasVat && (
+                    <div className="muted" style={{ fontSize: 11 }}>exempt from VAT</div>
+                  )}
+                  {l.commission_vat_inclusive && !l.commission_vat_exempt && (
                     <div className="muted" style={{ fontSize: 11 }}>
                       of {formatMoney(l.commission_amount)} collected
                       {roundedDown(l, inv.vat_rate) ? ' (1p under)' : ''}
@@ -462,6 +474,7 @@ export default function CommissionInvoiceDetail() {
           </tbody>
         </table>
 
+        {exemptNote && <p style={{ fontSize: 13, marginTop: 16 }}>{exemptNote}</p>}
         {inv.notes && <p style={{ fontSize: 13, marginTop: 16 }}>{inv.notes}</p>}
 
         {b.bank_details && (

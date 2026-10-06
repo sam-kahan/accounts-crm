@@ -104,7 +104,9 @@ export default function CommissionInvoices() {
       !confirm(
         `Raise a commission invoice from ${from} to ${row.contractor_name} for ${formatMoney(
           totalToRaise,
-        )} (${formatMoney(row.raises?.net_amount ?? row.pending_commission)} + VAT, from ${formatMoney(
+        )} (${formatMoney(row.raises?.net_amount ?? row.pending_commission)} ${
+          row.raises && Number(row.raises.vat_rate) === 0 ? 'with no VAT: exempt' : '+ VAT'
+        }, from ${formatMoney(
           row.pending_commission,
         )} of commission on ${plural(row.pending_count, 'invoice')}, ${monthLabel(month)}).${carried}`,
       )
@@ -290,7 +292,9 @@ export default function CommissionInvoices() {
                     </strong>
                     {r.raises && Number(r.pending_commission) > 0 && (
                       <div className="cell-note muted">
-                        {formatMoney(r.raises.net_amount)} + {formatMoney(r.raises.vat_amount)} VAT
+                        {Number(r.raises.vat_rate) === 0
+                          ? 'no VAT (exempt)'
+                          : `${formatMoney(r.raises.net_amount)} + ${formatMoney(r.raises.vat_amount)} VAT`}
                         {' · '}
                         {r.pending_count} line{r.pending_count === 1 ? '' : 's'}
                       </div>

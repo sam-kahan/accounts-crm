@@ -12,6 +12,8 @@ import {
   invoiceTotals,
   invoiceTotalsFromLines,
   commissionNetPence,
+  lineVatRate,
+  invoiceVatRate,
   applyExternalState,
   needsWithdrawing,
   sumCommissionPence,
@@ -1188,4 +1190,95 @@ test('a contractor name is matched as whole words, and a tie or a different init
   assert.equal(matchContractorByName('Smith Plumbing', cs)?.confident, false); // two fit equally
   assert.equal(matchContractorByName('J Smith Plumbing Ltd', cs)?.contractor.name, 'J Smith Plumbing');
   assert.equal(matchContractorByName('J Smith Plumbing Ltd', cs)?.confident, true);
+});
+
+// --- commission exempt from VAT (an insurance broker's) ---------------------
+
+test('exempt commission is invoiced at its total with no VAT', () => {
+  // A broker collects £150 of commission: we invoice £150, VAT £0, total £150.
+  assert.deepEqual(invoiceTotalsFromLines([{ commission_amount: 150, commission_vat_exempt: true }], 20), {
+    net_amount: 150,
+    vat_rate: 0,
+    vat_amount: 0,
+    total_amount: 150,
+  });
+  // Never netted down, even if the broker isn't VAT registered themselves.
+  assert.equal(
+    commissionNetPence({ commission_amount: 150, commission_vat_inclusive: true, commission_vat_exempt: true }, 20),
+    15000,
+  );
+  assert.deepEqual(
+    invoiceTotalsFromLines(
+      [
+        { commission_amount: 99.99, commission_vat_inclusive: true, commission_vat_exempt: true },
+        { commission_amount: 0.01, commission_vat_exempt: true },
+      ],
+      20,
+    ),
+    { net_amount: 100, vat_rate: 0, vat_amount: 0, total_amount: 100 },
+  );
+});
+
+test('an invoice mixing exempt and standard lines charges VAT only on the standard ones', () => {
+  const t = invoiceTotalsFromLines(
+    [
+      { commission_amount: 100, commission_vat_exempt: true }, // exempt: £100, no VAT
+      { commission_amount: 9 }, // registered contractor: £9 + £1.80
+      { commission_amount: 9, commission_vat_inclusive: true }, // unregistered: £7.50 + £1.50
+    ],
+    20,
+  );
+  assert.deepEqual(t, { net_amount: 116.5, vat_rate: 20, vat_amount: 3.3, total_amount: 119.8 });
+});
+
+test('lineVatRate and invoiceVatRate', () => {
+  assert.equal(lineVatRate({ commission_vat_exempt: true }, 20), 0);
+  assert.equal(lineVatRate({ commission_vat_exempt: false }, 20), 20);
+  assert.equal(lineVatRate({}, 20), 20);
+  assert.equal(invoiceVatRate([{ commission_vat_exempt: true }, { commission_vat_exempt: true }], 20), 0);
+  assert.equal(invoiceVatRate([{ commission_vat_exempt: true }, {}], 20), 20);
+  assert.equal(invoiceVatRate([], 20), 20);
+});
+
+test('an exempt invoice is pushed at 0% and says why', () => {
+  const payload = buildInvoicePayload({
+    invoice: { ...PUSH_INVOICE, vat_rate: 0 },
+    contractor: PUSH_CONTRACTOR,
+    lines: [{ invoice_number: 'P-1', commission_amount: 150, commission_vat_exempt: true }],
+    companyId: 1,
+    asSent: false,
+  });
+  assert.equal(payload.lines[0].unitPrice, 150);
+  assert.equal(payload.lines[0].vatRate, 0);
+  assert.match(payload.notes, /exempt from VAT/);
+});
+
+test('a mixed invoice pushes the exempt line at 0% and the rest at 20%', () => {
+  const payload = buildInvoicePayload({
+    invoice: { ...PUSH_INVOICE, vat_rate: 20 },
+    contractor: PUSH_CONTRACTOR,
+    lines: [
+      { invoice_number: 'P-1', commission_amount: 150, commission_vat_exempt: true },
+      { invoice_number: 'P-2', commission_amount: 9 },
+    ],
+    companyId: 1,
+    asSent: false,
+  });
+  assert.deepEqual(payload.lines.map((l) => [l.unitPrice, l.vatRate]), [[150, 0], [9, 20]]);
+  assert.doesNotMatch(payload.notes, /exempt/);
+});
+
+test('the emailed invoice says why there is no VAT', () => {
+  const mail = buildCommissionInvoiceEmail({
+    invoice: {
+      invoice_number: 'GC-COM-00009', period_start: '2026-09-01', period_end: '2026-09-30',
+      issue_date: '2026-10-01', due_date: '2026-10-31',
+      net_amount: 150, vat_rate: 0, vat_amount: 0, total_amount: 150,
+    },
+    contractor: { name: 'Acme Insurance Brokers' },
+    lines: [{ invoice_number: 'P-1', commission_amount: 150, total_amount: 1500, commission_vat_exempt: true }],
+  });
+  assert.match(mail.text, /No VAT is charged: commission on arranging insurance is exempt from VAT\./);
+  assert.doesNotMatch(mail.text, /VAT \(/);
+  assert.match(mail.html, /exempt from VAT/);
 });

@@ -305,6 +305,21 @@ contractor at month end.
     because Greenco Invoicing recomputes VAT from the net we send it — agreeing
     with the copy the contractor reads beats textbook arithmetic. About one
     penny value in six has no exact split; those land a penny under.
+- **Insurance commission is exempt from VAT** (`commission_vat_exempt`,
+  migration `059`, on the contractor and snapshotted per logged invoice).
+  Arranging insurance is an exempt supply (VAT Act 1994 Sch 9 Group 2), so a
+  broker's commission is invoiced back at its total with 0% VAT and never
+  netted down, whether or not they are VAT registered.
+  `commission.js#lineVatRate` is the per-line rule (used by
+  `commissionNetPence`, `invoiceTotalsFromLines` and the push's per-line
+  `vatRate`); `invoiceVatRate` stores 0 on an invoice whose lines are all
+  exempt, so it never reads "VAT (20%): £0.00". The invoice (page, email and
+  Greenco Invoicing notes) says why there is no VAT; on a mixed invoice the
+  exempt lines are marked. Ticking or unticking it on a contractor restates
+  their invoices not yet invoiced back, and says how many commission
+  invoices were already raised the other way; voiding one releases its lines
+  with the contractor's CURRENT setting (`releaseLinesOf`), so a re-raise
+  corrects it.
 - **Money maths is integer pence** (`lib/money.js`). `toPence` reads the digits
   out of the decimal string — `Math.round(1.005 * 100)` is 100, which loses a
   penny. VAT is worked out **per line** (`invoiceTotalsFromLines`) because that
@@ -745,6 +760,11 @@ the page says how far each date can be trusted.
   `main` only after `npm test` and `npm run build -w client` pass.
 
 ## Recent changes
+
+### 2026-10-06 — insurance commission invoiced with no VAT
+- **"Is their commission exempt from VAT?"** on the contractor form (an
+  insurance broker): their commission is invoiced at its total, 0% VAT. See
+  "Insurance commission is exempt from VAT" under Contractor commission.
 
 ### 2026-10-04 — a contractor can have more than one email address
 - The contractor's Email (and the commission invoice's Send "To") take

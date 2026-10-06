@@ -1514,12 +1514,14 @@ export default function ContractorInvoices() {
                       className="muted"
                       style={{ fontSize: 12 }}
                       title={
-                        r.commission_vat_inclusive
+                        r.commission_vat_exempt
+                          ? 'Insurance commission is exempt from VAT: we invoice exactly this, with no VAT.'
+                          : r.commission_vat_inclusive
                           ? 'They aren’t VAT registered, so this is all they collected — we invoice it netted down and VAT comes out of it, not on top.'
                           : 'They are VAT registered, so this is the net — VAT is added on top when we invoice it back.'
                       }
                     >
-                      {r.commission_vat_inclusive ? 'incl. VAT' : '+ VAT'}
+                      {r.commission_vat_exempt ? 'no VAT (exempt)' : r.commission_vat_inclusive ? 'incl. VAT' : '+ VAT'}
                     </div>
                     {r.commissionable_amount !== null && r.commissionable_amount !== undefined && (
                       <div
