@@ -153,12 +153,15 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
       `INSERT INTO complaint_emails
          (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
           to_addresses, body_preview, received_at, direction, match_method,
-          reviewed_at, reviewed_as, reviewed_by, party_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($11::timestamptz, now()),'outbound','sent',now(),'sent',$9,$10)
+          reviewed_at, reviewed_as, reviewed_by, party_id, body_text)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($11::timestamptz, now()),'outbound','sent',now(),'sent',$9,$10,$12)
        RETURNING id`,
       [
         complaintId, graphId, messageId || graphId, subject, 'You (sent from CRM)', fromEmail,
         recipients, (body || '').slice(0, 2000), sentBy || null, partyId, sentAt,
+        // The whole email as sent (the preview stops at 2,000 characters), so
+        // a copy of it can be made later (emailCopies.js).
+        body || null,
       ],
     )).rows[0];
     await client.query(

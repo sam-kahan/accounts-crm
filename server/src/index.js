@@ -463,6 +463,22 @@ app.listen(config.port, () => {
       if (due.length) console.log(`  Reviews to re-read what was asked for: ${due.length}`);
     })
     .catch((err) => console.error('  Reviews (what was already given):', err.message));
+  // Reviews showing a copy of an email on file as "Not on file" (an
+  // organisation asked for "our email of 16 September"): the PDF made and
+  // the review updated in place, once, with no AI (emailCopies.js).
+  getSetting('email_copies_1006')
+    .then(async (done) => {
+      if (done) return;
+      const { attachEmailsToStoredReview } = await import('./services/complaintReview.js');
+      const open = (await query(`SELECT id FROM complaints WHERE state = 'open' AND ai_review IS NOT NULL`)).rows;
+      let n = 0;
+      for (const c of open) {
+        try { if (await attachEmailsToStoredReview(c.id)) n += 1; } catch (err) { console.warn(`  Email copy for ${c.id}: ${err.message}`); }
+      }
+      await setSetting('email_copies_1006', { at: new Date().toISOString(), attached: n }, 'start-up');
+      if (n) console.log(`  Reviews given a PDF of an email they asked for: ${n}`);
+    })
+    .catch((err) => console.error('  Email copies for reviews:', err.message));
   // Reviews that said to wait, with no date, after their response had come
   // (Greenco had answered what they asked for): written again once under the
   // rule that the complaint then moves on to the next stage.

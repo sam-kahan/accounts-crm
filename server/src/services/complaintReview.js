@@ -10,6 +10,7 @@ import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintR
 import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 import { withRequestedDocs } from './draftChecks.js';
+import { attachRequestedEmails } from './emailCopies.js';
 import { referenceLines, withReferences } from '../lib/references.js';
 
 export { reviewSignature };
@@ -82,7 +83,9 @@ const REVIEW_INSTRUCTION =
   '2026" (information counts as given when it is written in one of Greenco\'s emails, before or after ' +
   'their request: read Greenco\'s emails for it), or null; "not_ours": when it is not Greenco\'s to ' +
   'give, one short reason (e.g. "Greenco no longer manages the property and holds no tenant details"), ' +
-  'or null}; otherwise null. Name a file only when it really is that thing (a council tax bill is not a ' +
+  'or null; "email_date": when what they asked for is a copy of an email in the context, the date that ' +
+  'email was sent as YYYY-MM-DD, else null (a copy of an email on file is made into a PDF and attached ' +
+  'automatically, so it is never missing: the email says it is attached)}; otherwise null. Name a file only when it really is that thing (a council tax bill is not a ' +
   'tenancy agreement); when unsure, null. An item already given, or not Greenco\'s to give, is never ' +
   'asked for again: the email repeats what was given (quoting it), says when it was first given, and says ' +
   'plainly what Greenco does not hold. Sending the reply is a step to take NOW ("next_action" ' +
@@ -142,8 +145,14 @@ async function applyReview({ id, ctx, startedAt, signature }, raw) {
   if (Array.isArray(raw?.by_org)) raw.by_org = raw.by_org.map((e) => (e?.email?.body ? { ...e, email: { ...e.email, body: ensureSignOff(e.email.body) } } : e));
   // What they asked for, matched to the documents on file; those found go
   // with the email (draftChecks.js#withRequestedDocs).
-  Object.assign(raw, withRequestedDocs(raw, ctx.docList || []));
-  if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, ctx.docList || []));
+  // A copy of an email on file that they asked for ("our email of 16
+  // September") is made into a PDF document first (emailCopies.js), so it
+  // goes too instead of reading "Not on file".
+  const docList = [...(ctx.docList || [])];
+  await attachRequestedEmails(id, raw?.requested, { emails: ctx.emails, docList });
+  for (const e of Array.isArray(raw?.by_org) ? raw.by_org : []) await attachRequestedEmails(id, e?.requested, { emails: ctx.emails, docList });
+  Object.assign(raw, withRequestedDocs(raw, docList));
+  if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, docList));
   const headline = typeof raw.headline === 'string' && raw.headline.trim()
     ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
     : null;
@@ -376,4 +385,29 @@ export async function collectReviewBatch() {
   } finally {
     collecting = false;
   }
+}
+
+// A review already written, with a copy of an email asked for and shown as
+// "Not on file": the PDF made and the review's list and email updated in
+// place. No AI, and the review keeps its date and signature. Returns whether
+// anything was attached.
+export async function attachEmailsToStoredReview(id) {
+  const row = (await query('SELECT ai_review FROM complaints WHERE id = $1', [id])).rows[0];
+  const review = row?.ai_review;
+  if (!review) return false;
+  const steps = [review, ...(Array.isArray(review.by_org) ? review.by_org : [])];
+  if (!steps.some((s) => (s?.requested || []).some((x) => !x.attachment_id && !x.given && !x.not_ours))) return false;
+  const { listComplaintEmails } = await import('./emailIngest.js');
+  const { listAttachments } = await import('./attachments.js');
+  const ctx = { emails: await listComplaintEmails(id) };
+  const docList = (await listAttachments(id)).map((d) => ({ id: d.id, filename: d.filename, uploaded_at: d.uploaded_at, description: d.description || null }));
+  // A stored item names its file as `filename`; the matcher reads `file`.
+  for (const s of steps) for (const x of s?.requested || []) if (x.filename && !x.file) x.file = x.filename;
+  const before = docList.length;
+  for (const s of steps) await attachRequestedEmails(id, s?.requested, { emails: ctx.emails, docList });
+  if (docList.length === before && !steps.some((s) => (s?.requested || []).some((x) => x.file && !x.attachment_id))) return false;
+  const next = { ...review, ...withRequestedDocs(review, docList) };
+  if (Array.isArray(review.by_org)) next.by_org = review.by_org.map((e) => withRequestedDocs(e, docList));
+  await query('UPDATE complaints SET ai_review = $2 WHERE id = $1', [id, next]);
+  return true;
 }

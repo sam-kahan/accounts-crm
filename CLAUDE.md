@@ -761,6 +761,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — an email they ask a copy of goes as a PDF
+- **"Copy of our 16 September email" is never "Not on file"** when the
+  email is on the complaint (`services/emailCopies.js`, no AI): the review's
+  `requested` item gives `email_date` (or the item's words name the date;
+  "our"/"their" picks whose), `emailsRequested()` (pure, tested) finds that
+  day's email(s), and `attachRequestedEmails()` makes a PDF (`lib/pdf.js`,
+  no dependency, deterministic so the hash store keeps one copy), saves it
+  as a document ("Email 16 Sep 2026 - <subject>.pdf") and names it on the
+  item, so `withRequestedDocs` counts it on file and puts it on the email.
+  Two dates, no date, or a body only known from its 2,000-character preview
+  makes nothing (a cut-off copy is not a copy). Emails sent from here now
+  keep their whole text (`recordOutboundEmail` writes `body_text`); older
+  ones take it from their `complaint_outbox` row. Start-up did this once for
+  reviews already written (`attachEmailsToStoredReview`,
+  `app_settings.email_copies_1006`), with no AI.
+
 ### 2026-10-06 — filing an email: complaints listed by company and account number
 - **Emails to file** (Complaints page) offers each open complaint as
   "British Gas · Account 850123456 · 10 Dale St, L2 2BT" (`fileChoiceLabel`
