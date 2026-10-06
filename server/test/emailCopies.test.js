@@ -61,3 +61,32 @@ test('long lines wrap at a space, and a long word is cut', () => {
   assert.ok(lines.includes(''));
   assert.equal(lines.at(-1), 'x'.repeat(5));
 });
+
+import { fillPasteGaps, copiesMade } from '../src/services/emailCopies.js';
+import { gapIn } from '../src/lib/signature.js';
+
+test('a "paste the email here" gap becomes "a copy is attached" once the copy is made', () => {
+  const body = 'Dear E.ON,\n\nAs requested:\n\n[Paste our email of 16 September 2026 here]\n\nKind regards,';
+  assert.equal(fillPasteGaps(body, [{ day: '2026-09-16', ours: true }]),
+    'Dear E.ON,\n\nAs requested:\n\nA copy of our email of 16 September 2026 is attached.\n\nKind regards,');
+  // Two copies, or none: left for a person (and the send refuses it).
+  assert.equal(fillPasteGaps(body, []), body);
+  assert.equal(fillPasteGaps(body, [{ day: '2026-09-16', ours: true }, { day: '2026-09-20', ours: true }]), body);
+  // Only a gap about an email.
+  assert.equal(fillPasteGaps('[Insert meter reading]', [{ day: '2026-09-16', ours: true }]), '[Insert meter reading]');
+});
+
+test('an item already on file from an earlier pass is worked out again', () => {
+  const items = [{ item: 'Copy of our 16 September 2026 email', attachment_id: 'x' }];
+  assert.deepEqual(copiesMade(items, all, { today: '2026-10-06' }), [{ day: '2026-09-16', ours: true }]);
+  assert.deepEqual(copiesMade(items), []);
+});
+
+test('a gap in square brackets is found; [Name] once filled, [sic] and bracketed addresses are not gaps', () => {
+  assert.equal(gapIn('Hello', '[Paste our email of 16 September 2026 here]'), '[Paste our email of 16 September 2026 here]');
+  assert.equal(gapIn('The amount was [amount].'), '[amount]');
+  assert.equal(gapIn('They wrote "recieved" [sic].'), null);
+  assert.equal(gapIn('From: Jo [mailto:jo@eon.com]'), null);
+  assert.equal(gapIn('See [https://eon.com/complaints]'), null);
+  assert.equal(gapIn('Kind regards,\nSam Kahan'), null);
+});

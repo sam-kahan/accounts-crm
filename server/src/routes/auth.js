@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { describeAccess } from '../services/permissions.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
+import { buildSignature, signatureAssetPath } from '../lib/emailSignature.js';
 
 const router = Router();
 
@@ -75,6 +76,13 @@ router.post(
           id: user.id,
           email: user.email,
           name: user.name,
+          // The same as /me: the page signs drafts with these, and My
+          // signature opens on them, straight after signing in.
+          job_title: user.job_title,
+          post_nominals: user.post_nominals,
+          direct_line: user.direct_line,
+          office_phone: user.office_phone,
+          mobile: user.mobile,
           ...describeAccess(user),
         });
       });
@@ -224,7 +232,7 @@ router.get(
   asyncHandler(async (req, res) => {
     if (!req.session?.userId) throw new HttpError(401, 'Not authenticated');
     const { rows } = await query(
-      'SELECT id, email, name, job_title, role, permissions, active FROM users WHERE id = $1',
+      'SELECT id, email, name, job_title, post_nominals, direct_line, office_phone, mobile, role, permissions, active FROM users WHERE id = $1',
       [req.session.userId],
     );
     const user = rows[0];
@@ -242,9 +250,73 @@ router.get(
       email: user.email,
       name: user.name,
       job_title: user.job_title,
+      post_nominals: user.post_nominals,
+      direct_line: user.direct_line,
+      office_phone: user.office_phone,
+      mobile: user.mobile,
       ...describeAccess(user),
     });
   }),
+);
+
+// --- My signature: the details every email I send is signed with --------
+// Each person sets their own; an administrator can also set them in Staff &
+// access. Name and job title are here too, since the signature is where they
+// are read. Blank clears a line.
+const line = z.string().max(120).optional().nullable();
+const signatureInput = z.object({
+  name: z.string().max(200).optional().nullable(),
+  job_title: z.string().max(200).optional().nullable(),
+  post_nominals: z.string().max(60).optional().nullable(),
+  direct_line: line,
+  office_phone: line,
+  mobile: line,
+});
+const tidy = (v) => (v === undefined ? undefined : (String(v ?? '').replace(/\s+/g, ' ').trim() || null));
+
+router.put(
+  '/me/signature',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const d = parse(signatureInput, req.body);
+    const fields = ['name', 'job_title', 'post_nominals', 'direct_line', 'office_phone', 'mobile']
+      .filter((k) => d[k] !== undefined);
+    if (!fields.length) throw new HttpError(400, 'Nothing to update');
+    const { rows } = await query(
+      `UPDATE users SET ${fields.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1
+       RETURNING name, email, job_title, post_nominals, direct_line, office_phone, mobile`,
+      [req.user.id, ...fields.map((k) => tidy(d[k]))],
+    );
+    res.json(rows[0]);
+  }),
+);
+
+// What my signature looks like (the pictures by URL, below, rather than
+// inside an email). Takes the form's values, so the preview follows typing.
+router.post(
+  '/me/signature/preview',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const d = parse(signatureInput, req.body);
+    const user = { ...req.user };
+    for (const k of Object.keys(d)) if (d[k] !== undefined) user[k] = tidy(d[k]);
+    const sig = buildSignature(user, {
+      links: config.signature.links,
+      imageSrc: (n) => `/api/auth/signature-asset/${n === 'banner' ? 'banner.jpg' : `${n}.png`}`,
+    });
+    res.json({ html: sig.html, text: sig.text, enabled: config.signature.enabled });
+  }),
+);
+
+router.get(
+  '/signature-asset/:file',
+  requireAuth,
+  (req, res) => {
+    const file = signatureAssetPath(req.params.file);
+    if (!file) return res.status(404).end();
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.sendFile(file, (err) => { if (err && !res.headersSent) res.status(404).end(); });
+  },
 );
 
 export default router;

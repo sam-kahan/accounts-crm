@@ -33,6 +33,10 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // After a person changes their own details (My signature): the name and
+  // title the page signs drafts with follow at once.
+  const refresh = () => api.auth.me().then(setUser).catch(() => {});
+
   // What this user may do, straight from the server — the same answer the API
   // will give when the request actually arrives, so the menu and the buttons
   // can never offer something that would be refused.
@@ -41,7 +45,7 @@ export function AuthProvider({ children }) {
   const canEdit = (section) => level(section) === 'edit';
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, level, canView, canEdit }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refresh, level, canView, canEdit }}>
       {children}
     </AuthContext.Provider>
   );

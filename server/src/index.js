@@ -464,9 +464,10 @@ app.listen(config.port, () => {
     })
     .catch((err) => console.error('  Reviews (what was already given):', err.message));
   // Reviews showing a copy of an email on file as "Not on file" (an
-  // organisation asked for "our email of 16 September"): the PDF made and
-  // the review updated in place, once, with no AI (emailCopies.js).
-  getSetting('email_copies_1006')
+  // organisation asked for "our email of 16 September"), or a draft with a
+  // "[Paste our email of … here]" gap: the PDF made, the gap filled and the
+  // review updated in place, once, with no AI (emailCopies.js).
+  getSetting('email_copies_1006b')
     .then(async (done) => {
       if (done) return;
       const { attachEmailsToStoredReview } = await import('./services/complaintReview.js');
@@ -475,7 +476,7 @@ app.listen(config.port, () => {
       for (const c of open) {
         try { if (await attachEmailsToStoredReview(c.id)) n += 1; } catch (err) { console.warn(`  Email copy for ${c.id}: ${err.message}`); }
       }
-      await setSetting('email_copies_1006', { at: new Date().toISOString(), attached: n }, 'start-up');
+      await setSetting('email_copies_1006b', { at: new Date().toISOString(), attached: n }, 'start-up');
       if (n) console.log(`  Reviews given a PDF of an email they asked for: ${n}`);
     })
     .catch((err) => console.error('  Email copies for reviews:', err.message));

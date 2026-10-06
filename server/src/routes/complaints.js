@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
+import { signedEmail } from '../lib/emailSignature.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
@@ -45,7 +46,7 @@ import {
   parseImportedComplaint,
 } from '../services/complaintAssistant.js';
 import { sendMail, fromAddress, withExternalCc } from '../services/mailer.js';
-import { signEmail, ensureSignOff } from '../lib/signature.js';
+import { signEmail, ensureSignOff, gapIn } from '../lib/signature.js';
 import {
   listAttachments,
   attachmentTexts,
@@ -398,6 +399,7 @@ router.post(
     // Signed by whoever is sending (a draft's "[Name]" never goes out).
     const subject = signEmail(d.subject, req.user);
     const body = signEmail(d.body, req.user);
+    refuseGaps(subject, body);
     // The same email to the same people, queued in the last ten minutes and
     // not failed, is a second press, not a second email.
     const out = await queueOutbox(complaint.id, {
@@ -408,9 +410,9 @@ router.post(
       },
       refusal: 'This email has just been sent (or is being sent) from this complaint, so it wasn’t sent again.',
     },
-    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by, attachment_ids)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [complaint.id, party?.id || null, Boolean(party), to, cc, subject, body, d.then === 'escalate', who(req), attachmentIds]);
+    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, then_escalate, sent_by, attachment_ids, sender_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    [complaint.id, party?.id || null, Boolean(party), to, cc, subject, body, d.then === 'escalate', who(req), attachmentIds, req.user?.id || null]);
     res.status(202).json({ queued: true, outbox_id: out.id, escalating: d.then === 'escalate' });
   }),
 );
@@ -541,6 +543,22 @@ router.post(
   }),
 );
 
+function refuseGaps(...texts) {
+  const gap = gapIn(...texts);
+  if (gap) throw new HttpError(400, `The email still has a gap to fill in: ${gap}. Fill it in or take it out, then send it.`);
+}
+
+// An email signed in full for the person who sent it: their details as they
+// are now (one lookup). No sender (queued before signatures, or the
+// signature switched off): the email goes as written.
+export async function signedForSender(body, senderId) {
+  if (!config.signature.enabled || !senderId) return { text: body, html: undefined, attachments: [] };
+  const user = (await query(
+    'SELECT name, email, job_title, post_nominals, direct_line, office_phone, mobile FROM users WHERE id = $1', [senderId],
+  )).rows[0];
+  return signedEmail(body, user || null, { links: config.signature.links });
+}
+
 // Send one queued email, then record it and take the step it was. Claimed
 // by one statement (pending → sending), so it is never sent twice.
 export async function deliverOutbox(outboxId) {
@@ -568,7 +586,17 @@ export async function deliverOutbox(outboxId) {
       o.body = withAttachedLine(o.body, attachments.map((x) => x.filename));
       await query('UPDATE complaint_outbox SET body = $2 WHERE id = $1', [o.id, o.body]);
     }
-    sent = await sendMail({ to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: o.body, attachments });
+    // The last check before it goes: a gap never reaches them (an email
+    // queued before the check at Send, or retried).
+    const gap = gapIn(o.subject, o.body);
+    if (gap) throw new Error(`Not sent: the email still has a gap to fill in, ${gap}. Discard it and send it again with the gap filled.`);
+    // Signed in full by the person who pressed Send (lib/emailSignature.js):
+    // the short sign-off in the body is replaced by their signature.
+    const signed = await signedForSender(o.body, o.sender_id);
+    sent = await sendMail({
+      to: o.to_addresses, cc: o.cc_addresses, subject: o.subject, text: signed.text, html: signed.html,
+      attachments: [...(attachments || []), ...signed.attachments],
+    });
   } catch (err) {
     // The mail server refused it outright, so it certainly didn't go (a
     // Try again after a restart that may have sent it included): no "It
@@ -1115,9 +1143,6 @@ router.post(
   }),
 );
 
-// A gap left to fill in: anything in [square brackets] of a few words (the
-// draft's own, or one the AI's grounds left). An ombudsman must never get one.
-const GAP_RE = /\[[^\]\n]{3,}\]/;
 
 const referralSendInput = z.object({
   party_id: z.string().uuid().optional().nullable(),
@@ -1136,9 +1161,7 @@ router.post(
     if (refusal) throw new HttpError(409, refusal);
     // A draft's gaps must be filled in before it goes to an ombudsman.
     // Checked once signed ([Name] / [Job title] are the sender's to fill).
-    if (GAP_RE.test(signEmail(d.body, req.user))) {
-      throw new HttpError(400, 'The email still has a gap in square brackets to fill in (what went wrong, or what you are asking for).');
-    }
+    refuseGaps(signEmail(d.subject, req.user), signEmail(d.body, req.user));
     const to = parseRecipients(d.to);
     const cc = parseRecipients(d.cc);
     if (!to.length) throw new HttpError(400, 'At least one valid recipient is required');
@@ -1149,9 +1172,9 @@ router.post(
       guard: { sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND then_refer AND party_id IS NOT DISTINCT FROM $2 AND status <> 'sent'`, params: [c.id, partyId] },
       refusal: 'A referral to the ombudsman is already being sent, or failed and is waiting on this complaint: deal with that one first (Try again, It went, or Discard).',
     },
-    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, sent_by, then_refer, attach_evidence)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true) RETURNING id`,
-    [c.id, partyId, Boolean(partyId), to, cc, signEmail(d.subject, req.user), signEmail(d.body, req.user), who(req)]);
+    `INSERT INTO complaint_outbox (complaint_id, party_id, to_party, to_addresses, cc_addresses, subject, body, sent_by, then_refer, attach_evidence, sender_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true,$9) RETURNING id`,
+    [c.id, partyId, Boolean(partyId), to, cc, signEmail(d.subject, req.user), signEmail(d.body, req.user), who(req), req.user?.id || null]);
     res.status(202).json({ queued: true, outbox_id: out.id });
   }),
 );
@@ -2675,10 +2698,11 @@ router.post(
       if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
       for (const a of withExternalCc(to, cc)) if (!cc.includes(a)) cc.push(a);
       const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids, d.send.body);
+      refuseGaps(signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user));
       const out = await queueOutbox(c.id, formalGuard,
-        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal, attachment_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,true,$7) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), attachmentIds]);
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_formal, attachment_ids, sender_id)
+         VALUES ($1,$2,$3,$4,$5,$6,true,$7,$8) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), attachmentIds, req.user?.id || null]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
     if (d.sent_on > todayISO()) throw new HttpError(400, 'That date is in the future');
@@ -2738,10 +2762,11 @@ router.post(
       // joins once it has gone (dated that day), and nothing is added if it
       // fails — it waits on the complaint with Try again / Discard.
       const attachmentIds = await checkAttachmentIds(c.id, d.send.attachment_ids, d.send.body);
+      refuseGaps(signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user));
       const out = await queueOutbox(c.id, supplierGuard,
-        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier, attachment_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier, attachmentIds]);
+        `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, then_supplier, attachment_ids, sender_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [c.id, to, cc, signEmail(d.send.subject, req.user), signEmail(d.send.body, req.user), who(req), supplier, attachmentIds, req.user?.id || null]);
       return res.status(202).json({ queued: true, outbox_id: out.id });
     }
     if (!(await joinSupplierOnce(c.id, supplier, { sentOn: d.sent_on, by: who(req) }))) {

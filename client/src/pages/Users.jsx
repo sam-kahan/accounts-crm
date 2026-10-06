@@ -71,6 +71,10 @@ function UserModal({ initial, options, onClose, onSaved }) {
           name: initial.name || '',
           email: initial.email,
           job_title: initial.job_title || '',
+          post_nominals: initial.post_nominals || '',
+          direct_line: initial.direct_line || '',
+          office_phone: initial.office_phone || '',
+          mobile: initial.mobile || '',
           role: initial.role,
           permissions: { ...(initial.access_permissions || initial.effective_permissions) },
           active: initial.active,
@@ -106,6 +110,10 @@ function UserModal({ initial, options, onClose, onSaved }) {
         ? await api.users.update(initial.id, {
             name: form.name,
             job_title: form.job_title || null,
+            post_nominals: form.post_nominals || null,
+            direct_line: form.direct_line || null,
+            office_phone: form.office_phone || null,
+            mobile: form.mobile || null,
             role: form.role,
             permissions: form.permissions,
             active: form.active,
@@ -152,6 +160,30 @@ function UserModal({ initial, options, onClose, onSaved }) {
               placeholder="e.g. Accounts assistant"
             />
           </label>
+          {initial && (
+            <>
+              <div className="field full muted" style={{ fontSize: 12 }}>
+                Their email signature (every email they send from here is signed with it). Each person can also set
+                their own under My signature.
+              </div>
+              <label className="field">
+                <span className="lbl">Letters after their name</span>
+                <input value={form.post_nominals} onChange={(e) => set('post_nominals', e.target.value)} placeholder="e.g. MAAT" />
+              </label>
+              <label className="field">
+                <span className="lbl">Direct line</span>
+                <input type="tel" value={form.direct_line} onChange={(e) => set('direct_line', e.target.value)} placeholder="e.g. 0161 850 8687" />
+              </label>
+              <label className="field">
+                <span className="lbl">Office</span>
+                <input type="tel" value={form.office_phone} onChange={(e) => set('office_phone', e.target.value)} placeholder="e.g. 0161 708 8629" />
+              </label>
+              <label className="field">
+                <span className="lbl">Mobile</span>
+                <input type="tel" value={form.mobile} onChange={(e) => set('mobile', e.target.value)} />
+              </label>
+            </>
+          )}
         </div>
 
         <div className="section-title" style={{ marginTop: 4 }}>What they can do</div>

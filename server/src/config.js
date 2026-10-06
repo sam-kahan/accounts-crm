@@ -26,6 +26,20 @@ export const config = {
     },
   },
 
+  // The full signature on emails to people outside Greenco
+  // (lib/emailSignature.js). Each social icon shows only with its link set.
+  signature: {
+    enabled: process.env.EMAIL_SIGNATURE !== 'off',
+    links: {
+      website: process.env.SIGNATURE_WEBSITE_URL || 'https://greenco.co.uk',
+      trustpilot: process.env.SIGNATURE_TRUSTPILOT_URL || '',
+      twitter: process.env.SIGNATURE_TWITTER_URL || '',
+      facebook: process.env.SIGNATURE_FACEBOOK_URL || '',
+      linkedin: process.env.SIGNATURE_LINKEDIN_URL || '',
+      rightmove: process.env.SIGNATURE_RIGHTMOVE_URL || '',
+      zoopla: process.env.SIGNATURE_ZOOPLA_URL || '',
+    },
+  },
   smtp: {
     host: process.env.SMTP_HOST || 'mail.smtp2go.com',
     port: Number(process.env.SMTP_PORT) || 2525,

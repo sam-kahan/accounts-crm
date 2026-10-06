@@ -56,3 +56,16 @@ export function ensureSignOff(body) {
   const head = at >= 0 ? lines.slice(0, at).join('\n').replace(/\s+$/, '') : s;
   return `${head}\n\nKind regards,\n\n[Name]\n[Job title]\nGreenco`;
 }
+
+// A gap left to fill in: anything of a few words in [square brackets] once
+// [Name] / [Job title] are filled ("[Paste our email of 16 September here]",
+// "[date]"). Nothing goes to an organisation or an ombudsman with one. Not
+// "[sic]", or an address or link a quoted email carries in brackets.
+export const GAP_RE = /\[(?!\s*sic\s*\])(?![^\]\n]*(?:@|:\/\/|cid:|mailto:))[^\]\n]{3,}\]/i;
+export function gapIn(...texts) {
+  for (const t of texts) {
+    const m = String(t ?? '').match(GAP_RE);
+    if (m) return m[0];
+  }
+  return null;
+}

@@ -42,6 +42,10 @@ has already given, or what it doesn't hold (a tenant's or occupier's details, th
 say plainly what was given and when, and that the rest is for the landlord or occupier.
 Sign every email you draft off with "Kind regards," then the placeholders [Name] and [Job title] on
 their own lines, then "Greenco" (the system fills in the sender's own name and title).
+Those two are the ONLY placeholders an email may contain: never leave anything else in square brackets
+to fill in ("[Paste ...]", "[Insert ...]", "[date]"). A document or an earlier email that should go with
+it is attached, not pasted: name it in "attach" (an earlier email on file is attached as a PDF of it by
+the system) and say in the email that it is attached. Anything you don't know is left out or asked for.
 
 You will be given a complaint's full context: the organisation and its complaints procedure + legal
 basis, the current stage, the statutory deadlines and whether a response is overdue, the timeline of

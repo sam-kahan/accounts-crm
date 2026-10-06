@@ -3,6 +3,7 @@ import { useStackedTables } from './components/useStackedTables';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
+import SignatureModal from './components/SignatureModal.jsx';
 import GlobalSearch from './components/GlobalSearch.jsx';
 
 // `section` is the access a nav entry needs; entries without one are open to
@@ -68,6 +69,7 @@ export default function App() {
     items: area.items.filter((n) => !n.section || canView(n.section)),
   })).filter((area) => area.items.length > 0);
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showSignature, setShowSignature] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const title =
     TITLES[pathname] ||
@@ -109,6 +111,9 @@ export default function App() {
                 </div>
               )}
               <div className="user-actions">
+                <button className="linkish" onClick={() => setShowSignature(true)}>
+                  My signature
+                </button>
                 <button className="linkish" onClick={() => setShowChangePw(true)}>
                   Change password
                 </button>
@@ -143,6 +148,9 @@ export default function App() {
       </div>
       {showChangePw && (
         <ChangePasswordModal onClose={() => setShowChangePw(false)} />
+      )}
+      {showSignature && (
+        <SignatureModal onClose={() => setShowSignature(false)} />
       )}
     </div>
   );

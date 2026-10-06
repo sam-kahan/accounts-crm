@@ -26,7 +26,7 @@ export function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
   query(
-    'SELECT id, email, name, job_title, role, permissions, active FROM users WHERE id = $1',
+    'SELECT id, email, name, job_title, post_nominals, direct_line, office_phone, mobile, role, permissions, active FROM users WHERE id = $1',
     [req.session.userId],
   )
     .then(({ rows }) => {

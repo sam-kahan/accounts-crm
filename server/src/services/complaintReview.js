@@ -10,7 +10,7 @@ import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintR
 import { todayISO } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 import { withRequestedDocs } from './draftChecks.js';
-import { attachRequestedEmails } from './emailCopies.js';
+import { attachRequestedEmails, fillPasteGaps, copiesMade, hasPasteGap } from './emailCopies.js';
 import { referenceLines, withReferences } from '../lib/references.js';
 
 export { reviewSignature };
@@ -151,6 +151,9 @@ async function applyReview({ id, ctx, startedAt, signature }, raw) {
   const docList = [...(ctx.docList || [])];
   await attachRequestedEmails(id, raw?.requested, { emails: ctx.emails, docList });
   for (const e of Array.isArray(raw?.by_org) ? raw.by_org : []) await attachRequestedEmails(id, e?.requested, { emails: ctx.emails, docList });
+  for (const e of [raw, ...(Array.isArray(raw?.by_org) ? raw.by_org : [])]) {
+    if (e?.email?.body) e.email = { ...e.email, body: fillPasteGaps(e.email.body, copiesMade(e.requested)) };
+  }
   Object.assign(raw, withRequestedDocs(raw, docList));
   if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, docList));
   const headline = typeof raw.headline === 'string' && raw.headline.trim()
@@ -396,7 +399,9 @@ export async function attachEmailsToStoredReview(id) {
   const review = row?.ai_review;
   if (!review) return false;
   const steps = [review, ...(Array.isArray(review.by_org) ? review.by_org : [])];
-  if (!steps.some((s) => (s?.requested || []).some((x) => !x.attachment_id && !x.given && !x.not_ours))) return false;
+  const missing = steps.some((s) => (s?.requested || []).some((x) => !x.attachment_id && !x.given && !x.not_ours));
+  const gap = steps.some((s) => hasPasteGap(s?.email?.body));
+  if (!missing && !gap) return false;
   const { listComplaintEmails } = await import('./emailIngest.js');
   const { listAttachments } = await import('./attachments.js');
   const ctx = { emails: await listComplaintEmails(id) };
@@ -405,7 +410,13 @@ export async function attachEmailsToStoredReview(id) {
   for (const s of steps) for (const x of s?.requested || []) if (x.filename && !x.file) x.file = x.filename;
   const before = docList.length;
   for (const s of steps) await attachRequestedEmails(id, s?.requested, { emails: ctx.emails, docList });
-  if (docList.length === before && !steps.some((s) => (s?.requested || []).some((x) => x.file && !x.attachment_id))) return false;
+  let filled = false;
+  for (const s of steps) {
+    if (!s?.email?.body) continue;
+    const body = fillPasteGaps(s.email.body, copiesMade(s.requested, ctx.emails));
+    if (body !== s.email.body) { s.email = { ...s.email, body }; filled = true; }
+  }
+  if (!filled && docList.length === before && !steps.some((s) => (s?.requested || []).some((x) => x.file && !x.attachment_id))) return false;
   const next = { ...review, ...withRequestedDocs(review, docList) };
   if (Array.isArray(review.by_org)) next.by_org = review.by_org.map((e) => withRequestedDocs(e, docList));
   await query('UPDATE complaints SET ai_review = $2 WHERE id = $1', [id, next]);

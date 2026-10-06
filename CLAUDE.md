@@ -761,6 +761,38 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — full email signature; nothing sent with a [gap]
+- **Every email the CRM sends outside is signed in full by the person who
+  sent it** (`lib/emailSignature.js`, pure, tested): "Kind regards," then
+  name + letters after it (MAAT), job title, Direct Line / Mobile / Office /
+  Email (each only when set), the Trustpilot badge, the offices banner, the
+  social icons (each only with its `SIGNATURE_*_URL` set: none is guessed)
+  and the confidentiality notice, as on Greenco's Outlook signature. The
+  pictures travel in the email (`cid:` inline attachments from
+  `server/assets/signature/`), so they show without "download pictures".
+  The draft's short sign-off is replaced (`withoutSignOff`: the last closing
+  line and up to 6 short lines after it; a closing followed by more, a P.S.,
+  is kept and no second one added). Complaint sends use the person who
+  pressed Send (`complaint_outbox.sender_id`, migration `060`, looked up at
+  send: `signedForSender`); commission invoices the person sending
+  (`req.user`). The record on the complaint keeps the body as written.
+  `EMAIL_SIGNATURE=off` switches it off. Per person (migration `060`):
+  `users.post_nominals`, `direct_line`, `office_phone`, `mobile`, set by
+  each person under **My signature** (sidebar, beside Change password; `PUT
+  /auth/me/signature`, live preview `POST /auth/me/signature/preview`) or by
+  an administrator in Staff & access. Login and /me return them.
+- **Nothing goes out with a gap to fill in** (`lib/signature.js#gapIn`:
+  anything of a few words in [square brackets] once [Name]/[Job title] are
+  filled; not [sic] or a bracketed address/link): refused at Send, the
+  formal complaint, the supplier complaint and the referral, and checked
+  again by `deliverOutbox` before it goes. The E.ON reply went with
+  "[Paste our email of 16 September 2026 here]" at the bottom. The AI is
+  told [Name]/[Job title] are the only placeholders, and an earlier email
+  is attached (as a PDF), never pasted; a "[Paste/insert … email …]" gap is
+  filled with "A copy of our email of <date> is attached." when that copy
+  was made (`emailCopies.js#fillPasteGaps`), including in reviews already
+  written (start-up, `app_settings.email_copies_1006b`).
+
 ### 2026-10-06 — an email they ask a copy of goes as a PDF
 - **"Copy of our 16 September email" is never "Not on file"** when the
   email is on the complaint (`services/emailCopies.js`, no AI): the review's

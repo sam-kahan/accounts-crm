@@ -142,6 +142,7 @@ export async function attachRequestedEmails(complaintId, requested, { emails = [
         { description: `Copy of the email${found.length > 1 ? 's' : ''} of ${ukDay(day)} (${subject}), made from the email on file` },
       );
       x.file = saved.filename;
+      x.copy_of = { day, ours: found.every((em) => em.direction === 'outbound' || isOurOwnEmail(em, em.analysis, ourDomain)) };
       if (!docList.some((d) => d.id === saved.id)) {
         docList.push({ id: saved.id, filename: saved.filename, uploaded_at: new Date().toISOString(), description: null });
       }
@@ -150,3 +151,33 @@ export async function attachRequestedEmails(complaintId, requested, { emails = [
     }
   }
 }
+
+// A gap left in a draft for pasting in an email ("[Paste our email of 16
+// September 2026 here]") once that email is attached as a PDF: the line
+// becomes "A copy of our email of 16 September 2026 is attached." Only a gap
+// that asks to paste, insert, attach or include an email, and only when one
+// copy was made (with two, which is which is not for a rule to guess).
+const PASTE_GAP = /\[[^\]\n]*\b(?:paste|insert|attach|include|copy)\b[^\]\n]*\be-?mail\b[^\]\n]*\]/gi;
+const longDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+export function fillPasteGaps(body, copies = []) {
+  if (typeof body !== 'string' || copies.length !== 1) return body;
+  const { day, ours } = copies[0];
+  const sentence = `A copy of ${ours ? 'our' : 'the'} email of ${longDay(day)} is attached.`;
+  return body.replace(PASTE_GAP, sentence);
+}
+
+// The copies made for a step's "requested" (attachRequestedEmails marks
+// them). With `emails`, also an item already on file from an earlier pass:
+// its email worked out again by the same rule.
+export function copiesMade(requested, emails = null, { today = todayISO() } = {}) {
+  const ourDomain = String(config.complaintEmail?.domain || '').toLowerCase();
+  const ours = (em) => em.direction === 'outbound' || isOurOwnEmail(em, em.analysis, ourDomain);
+  return (Array.isArray(requested) ? requested : []).map((x) => {
+    if (x?.copy_of) return x.copy_of;
+    if (!emails || !(x?.attachment_id || x?.file)) return null;
+    const found = emailsRequested(x, emails, { today, ourDomain });
+    return found.length ? { day: sentDay(found[0]), ours: found.every(ours) } : null;
+  }).filter(Boolean);
+}
+
+export const hasPasteGap = (body) => typeof body === 'string' && new RegExp(PASTE_GAP.source, 'i').test(body);

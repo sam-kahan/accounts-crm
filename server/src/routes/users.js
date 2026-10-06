@@ -34,7 +34,7 @@ const router = Router();
 router.param('id', requireUuidParam);
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
-const COLS = `id, email, name, job_title, role, permissions, active,
+const COLS = `id, email, name, job_title, post_nominals, direct_line, office_phone, mobile, role, permissions, active,
   invited_at, last_login_at, created_at, updated_at, created_by_invite, password_set_at`;
 
 const permissionsInput = z.record(z.enum(SECTION_KEYS), z.enum(LEVELS)).optional();
@@ -50,10 +50,16 @@ const createInput = z.object({
 const updateInput = z.object({
   name: z.string().min(1).max(200).optional(),
   job_title: z.string().max(200).optional().nullable(),
+  // Their email signature's details (lib/emailSignature.js); blank clears.
+  post_nominals: z.string().max(60).optional().nullable(),
+  direct_line: z.string().max(120).optional().nullable(),
+  office_phone: z.string().max(120).optional().nullable(),
+  mobile: z.string().max(120).optional().nullable(),
   role: z.enum(ROLES).optional(),
   permissions: permissionsInput,
   active: z.boolean().optional(),
 });
+const sigLine = (v) => (v === undefined ? undefined : (String(v ?? '').replace(/\s+/g, ' ').trim() || null));
 
 function decorate(row) {
   if (!row) return row;
@@ -208,6 +214,10 @@ router.put(
     const { clause, values } = buildUpdateSet({
       name: d.name?.trim(),
       job_title: d.job_title === null ? null : d.job_title?.trim(),
+      post_nominals: sigLine(d.post_nominals),
+      direct_line: sigLine(d.direct_line),
+      office_phone: sigLine(d.office_phone),
+      mobile: sigLine(d.mobile),
       role: d.role,
       permissions:
         d.permissions || d.role

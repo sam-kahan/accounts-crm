@@ -4,6 +4,10 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
 import { emailListProblem, splitEmails } from '../lib/emailList.js';
 import { config } from '../config.js';
+import { buildSignature, signatureImages } from '../lib/emailSignature.js';
+
+// The sender's full signature under the invoice email.
+const signatureFor = (user) => (user ? buildSignature(user, { links: config.signature.links }) : null);
 import { todayISO, monthRange, monthOf } from '../lib/dates.js';
 import { withNumbers, fromPence } from '../lib/money.js';
 import {
@@ -418,7 +422,14 @@ router.post(
       invoicing: invoicingStatus(),
     });
 
-    await sendMail({ to, subject: mail.subject, text: mail.text, html: mail.html });
+    // Signed in full by the person sending it (lib/emailSignature.js).
+    const sig = config.signature.enabled ? signatureFor(req.user) : null;
+    await sendMail({
+      to, subject: mail.subject,
+      text: sig ? `${mail.text}\n\n${sig.text}` : mail.text,
+      html: sig ? `${mail.html}\n${sig.html}` : mail.html,
+      attachments: sig ? signatureImages(config.signature.links) : undefined,
+    });
 
     // Only a draft advances to 'sent' — re-sending a paid invoice as a chaser
     // must not walk its status backwards.

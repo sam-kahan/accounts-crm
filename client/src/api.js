@@ -61,6 +61,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ current_password, new_password }),
       }),
+    saveSignature: (details) =>
+      request('/auth/me/signature', { method: 'PUT', body: JSON.stringify(details) }),
+    previewSignature: (details) =>
+      request('/auth/me/signature/preview', { method: 'POST', body: JSON.stringify(details) }),
   },
   dashboard: (days = 30) => request(`/dashboard?days=${days}`),
   sendReminders: (days = 14) =>
