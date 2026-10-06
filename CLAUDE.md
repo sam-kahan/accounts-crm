@@ -761,6 +761,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — an authority request never waits for a person
+- Utility Warehouse's 3 Oct email ("can't see you are authorised…") sat
+  under "New email to review" (medium confidence; its summary and subject
+  mention "Stage 2", which `couldChangeDate` read as a possible date), and
+  kept the complaint under Needs attention after the authority had gone.
+  `emailAnalysis.js#couldChangeDate` now says an email asking for authority
+  (`authority.js#asksForAuthority`) with no response wording is a request
+  that sets no date, so it files itself as correspondence; the start-up
+  `settleRoutineEmails` files the ones already waiting (no AI).
+
 ### 2026-10-06 — "you're not authorised on the account": send the authority on file, or ask the landlord
 - Utility Warehouse (GC-C-BLV2WK) wrote that it couldn't see Greenco was
   authorised on Mr Lau's account; the letter of authority was already on

@@ -5,6 +5,7 @@ import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
 import { trackOpen, awaitingFirstEmail } from './complaintRules.js';
 import { cachedSystem, track } from './aiUsage.js';
+import { asksForAuthority } from './authority.js';
 
 // ---------------------------------------------------------------------------
 // Reads an email that arrived for a complaint — usually one a colleague has
@@ -244,7 +245,15 @@ export function planOurStep(complaint, a, today = todayISO()) {
 const DATE_KINDS = new Set(['acknowledgement', 'stage1_response', 'final_response']);
 const DATE_WORDS = /\b(?:acknowledg\w*|stage\s*(?:1|2|one|two)\b|final\s+(?:response|decision|position|viewpoint)|deadlock|(?:complaint|investigation)\s+(?:response|outcome|decision|findings)|outcome\s+of\s+(?:your|the|our)\s+complaint|(?:not\s+)?upheld)/i;
 export function couldChangeDate(a, text = '') {
-  return DATE_KINDS.has(a?.kind) || DATE_WORDS.test(`${a?.summary || ''}\n${text || ''}`);
+  if (DATE_KINDS.has(a?.kind)) return true;
+  const words = `${a?.summary || ''}\n${text || ''}`;
+  if (!DATE_WORDS.test(words)) return false;
+  // "We can't see you are authorised: the account holder must contact us"
+  // is a request, not their response, however often the thread's subject
+  // says "Stage 2": it sets no date (authority.js handles what to do).
+  // Utility Warehouse's of 3 Oct waited for a person because of it.
+  if (asksForAuthority(words) && !RESPONSE_WORDS.test(words)) return false;
+  return true;
 }
 
 // Words only a complaint RESPONSE uses (not "Stage 2", which every reply to

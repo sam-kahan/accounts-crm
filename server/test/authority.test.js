@@ -98,3 +98,20 @@ test('a request from before the complaint was made is history', () => {
   const old = { ...UW, id: 'e9', received_at: '2026-03-10T09:00:00Z' };
   assert.equal(authorityState({ complaint: C, emails: [old], docs: [], ourDomain: OURS }), null);
 });
+
+import { couldChangeDate, planFromAnalysis } from '../src/services/emailAnalysis.js';
+
+test('an authority request is not their response: it files itself, whatever stage the subject says', () => {
+  const a = { kind: 'request_info', confidence: 'medium', from_organisation: true, sent_on: '2026-10-03',
+    summary: "Utility Warehouse apologises for the delay but says it cannot see that Imogen is authorised on Mr Lau's account. It asks the account holder to contact them to arrange authorisation before it will deal with the query. It does not address the Stage 2 request or the billing points." };
+  const text = 'Re: 2186700 - Our complaint of 17 August 2026 (ref GC-C-BLV2WK) - request for Stage 2 review\nWe cannot see that Imogen is authorised on the account.';
+  assert.equal(couldChangeDate(a, text), false);
+  // A response that also mentions authority still waits for a person.
+  assert.equal(couldChangeDate({ ...a, summary: `${a.summary} This is our final response.` }, text), true);
+  // And a plain mention of Stage 2 with no authority in it still waits, as before.
+  assert.equal(couldChangeDate({ kind: 'request_info', summary: 'They ask about the Stage 2 request.' }, ''), true);
+  const track = { stage: 'stage_2', raised_on: '2026-08-17', stage_started_on: '2026-09-28', acknowledged_on: '2026-08-22', state: 'open' };
+  const plan = planFromAnalysis(track, a, { today: '2026-10-06', text });
+  assert.equal(plan.auto, true);
+  assert.equal(plan.reviewedAs, 'correspondence');
+});
