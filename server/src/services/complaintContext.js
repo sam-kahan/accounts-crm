@@ -1,5 +1,5 @@
 import { query } from '../db/pool.js';
-import { todayISO } from '../lib/dates.js';
+import { todayISO, londonDateOf } from '../lib/dates.js';
 import { HttpError } from '../lib/http.js';
 import { complaintEmailAddress, config } from '../config.js';
 import {
@@ -249,7 +249,7 @@ function withParties(c, parties) {
     // (by_org); one written before that is out of date.
     ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all) &&
       (!parties.length || Array.isArray(c.ai_review.by_org)) &&
-      !reviewOutrun(c.ai_review, [all, ...(all.parties || [])], todayISO()),
+      !reviewOutrun(c.ai_review, [all, ...(all.parties || [])], todayISO(), c.ai_reviewed_at ? londonDateOf(new Date(c.ai_reviewed_at)) : null),
   };
 }
 

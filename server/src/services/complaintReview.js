@@ -7,7 +7,7 @@ import { assistComplaint, prepareAssist, finishAssist, anthropicClient } from '.
 import { getSetting, setSetting } from './settings.js';
 import { recordUsage } from './aiUsage.js';
 import { reviewSignature, normaliseNextAction, reviewOutrun } from './complaintRules.js';
-import { todayISO } from '../lib/dates.js';
+import { todayISO, londonDateOf } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 import { withRequestedDocs } from './draftChecks.js';
 import { attachRequestedEmails, fillPasteGaps, copiesMade, hasPasteGap } from './emailCopies.js';
@@ -290,7 +290,7 @@ async function staleReviewIds(limit) {
     // Current, and (with more than one organisation) giving each its own step.
     if (row.ai_review && row.ai_review_status === reviewSignature(c) &&
       (!(c.parties || []).length || Array.isArray(row.ai_review.by_org)) &&
-      !reviewOutrun(row.ai_review, [c, ...(c.parties || [])], todayISO())) continue;
+      !reviewOutrun(row.ai_review, [c, ...(c.parties || [])], todayISO(), row.ai_reviewed_at ? londonDateOf(new Date(row.ai_reviewed_at)) : null)) continue;
     ids.push(row.id);
   }
   return ids;

@@ -862,9 +862,14 @@ export const REVIEW_ACTIONS = [
 // its organisations), or a referral has opened or closed since it was
 // written (it was told whether one could go). The signature can't see
 // either: the dates alone didn't change.
-export function reviewOutrun(review, tracks = [], today) {
+// A wait ends ON its date: "wait until 6 Oct" means act on the 6th (the
+// chase hold, reviewGuard.js#chaseHeldUntil, ends that day too), so on the
+// 6th the review is out of date. Not one written on its own wait date
+// (`reviewedOn`): that would be rewritten on every look.
+export function reviewOutrun(review, tracks = [], today, reviewedOn = null) {
   if (!review) return false;
-  const passed = (na) => na?.type === 'wait' && na.by && na.by < today;
+  const passed = (na) => na?.type === 'wait' && na.by &&
+    (na.by < today || (na.by === today && Boolean(reviewedOn) && reviewedOn < today));
   if (passed(review.next_action)) return true;
   if (Array.isArray(review.by_org) && review.by_org.some((e) => passed(e?.next_action))) return true;
   if (Array.isArray(review.referral_open) && review.referral_open.length === tracks.length &&

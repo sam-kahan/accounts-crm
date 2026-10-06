@@ -1783,6 +1783,18 @@ router.get(
     const decorated = await decorate({ ...rows[0], recheck_progress: recheckProgressOf(rows[0]) });
     decorated.stage2_missed = (await stage2MissedFor([rows[0].id])).get(rows[0].id) || [];
     decorated.same_account = await sameAccountComplaints(rows[0]);
+    // A review written on an earlier day that the calendar has overtaken (its
+    // "wait until" date has come) is written again now, while someone is
+    // looking at it, instead of the next morning: the page says it is being
+    // updated, and it is. Once a day at most (a review written today never
+    // qualifies), and never while one is already asked for.
+    {
+      const r = rows[0];
+      const reviewedOn = r.ai_reviewed_at ? londonDateOf(new Date(r.ai_reviewed_at)) : null;
+      const wanted = r.review_wanted_at && (!r.ai_reviewed_at || new Date(r.review_wanted_at) > new Date(r.ai_reviewed_at));
+      if (config.anthropic.enabled && r.state === 'open' && r.ai_review && !decorated.ai_review_current &&
+        !wanted && reviewedOn && reviewedOn < todayISO()) scheduleReview(r.id, 3000);
+    }
     const events = await listEvents(req.params.id);
     const emails = await listComplaintEmails(req.params.id);
     const attachments = await listAttachments(req.params.id);

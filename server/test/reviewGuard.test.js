@@ -458,3 +458,15 @@ test('responseNeedsDecision: a response on an open part needs deciding unless a 
   assert.equal(responseNeedsDecision({ status: 'awaiting_response' }, null, TODAY), false);
   assert.equal(responseNeedsDecision({ status: 'with_ombudsman' }, null, TODAY), false);
 });
+
+test('a wait ends ON its date: on the day, a review written earlier is out of date', () => {
+  const wait = { next_action: { type: 'wait', by: '2026-10-06' } };
+  // British Gas: "Wait until 6 October", written 29 Sep, read on 6 Oct.
+  assert.equal(reviewOutrun(wait, [], '2026-10-06', '2026-09-29'), true);
+  // Written on the 6th itself: current, so it isn't rewritten on every look.
+  assert.equal(reviewOutrun(wait, [], '2026-10-06', '2026-10-06'), false);
+  assert.equal(reviewOutrun(wait, [], '2026-10-05', '2026-09-29'), false);
+  // The chase hold the wait came from ends the same day.
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', lastTheirsOn: null, nextDue: null, today: '2026-10-05' }), '2026-10-06');
+  assert.equal(chaseHeldUntil({ lastSentOn: '2026-09-29', lastTheirsOn: null, nextDue: null, today: '2026-10-06' }), null);
+});

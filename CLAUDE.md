@@ -761,6 +761,19 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — "wait until <date>" ends on that date
+- British Gas (GC-C-B5WFT5) read "Wait until 6 October" on 6 October, under
+  Needs attention with nothing to press: the chase hold
+  (`chaseHeldUntil`) ends ON its date, but `reviewOutrun` only counted a
+  wait as over the day AFTER, so the old review stayed "current". Now a
+  wait is over on its date (`reviewOutrun(..., reviewedOn)`), except for a
+  review written that same day (so it can't be rewritten on every look).
+- **Opening a complaint whose review was written on an earlier day and is
+  out of date asks for a new one at once** (`GET /complaints/:id` →
+  `scheduleReview`, unless one is already wanted), instead of the page
+  saying "being updated…" until the next morning's batch. Once a day at
+  most per complaint. Until it arrives the page shows the dates' step.
+
 ### 2026-10-06 — full email signature; nothing sent with a [gap]
 - **Every email the CRM sends outside is signed in full by the person who
   sent it** (`lib/emailSignature.js`, pure, tested): "Kind regards," then
