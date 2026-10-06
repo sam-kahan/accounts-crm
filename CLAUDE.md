@@ -761,6 +761,14 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — filing an email: complaints listed by company and account number
+- **Emails to file** (Complaints page) offers each open complaint as
+  "British Gas · Account 850123456 · 10 Dale St, L2 2BT" (`fileChoiceLabel`
+  in `pages/Complaints.jsx`), sorted by company: the company and account
+  number lead because that is what the email quotes; "No account number"
+  when there is none, and the property (or subject) tells apart two on one
+  company. It was "Company: subject".
+
 ### 2026-10-06 — insurance commission invoiced with no VAT
 - **"Is their commission exempt from VAT?"** on the contractor form (an
   insurance broker): their commission is invoiced at its total, 0% VAT. See

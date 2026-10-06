@@ -538,6 +538,17 @@ function nextStepOf(c) {
   return c.nextAction || null;
 }
 
+// "British Gas · Account 850123456 · 10 Dale St, L2 2BT"
+function fileChoiceLabel(c) {
+  const company = (c.org_names?.length ? c.org_names : [c.org_name || 'No organisation']).join(' + ');
+  const accounts = (c.account_numbers || []).filter(Boolean);
+  const account = accounts.length
+    ? `${accounts.length === 1 ? 'Account' : 'Accounts'} ${accounts.join(', ')}`
+    : 'No account number';
+  const what = c.property || c.subject;
+  return [company, account, what].filter(Boolean).join(' · ');
+}
+
 export default function Complaints() {
   const [items, setItems] = useState(null);
   const [orgs, setOrgs] = useState([]);
@@ -635,6 +646,12 @@ export default function Complaints() {
     setTimeout(() => setCopiedAccount((x) => (x === a ? null : x)), 1500);
   }
   const open = items.filter((c) => c.state === 'open');
+  // Filing an email: each complaint offered by its company and account
+  // number (what the email will quote), then the property or subject to tell
+  // apart two on the same company with no number. Sorted by company.
+  const fileChoices = [...open].sort((a, b) =>
+    fileChoiceLabel(a).localeCompare(fileChoiceLabel(b), 'en-GB', { sensitivity: 'base' }));
+
   const byFilter =
     filter === 'attention' ? attention :
     filter === 'looks_resolved' ? items.filter((c) => c.state === 'open' && c.resolution_suggested) :
@@ -683,8 +700,8 @@ export default function Complaints() {
                 <div className="btn-row" style={{ marginTop: 8 }}>
                   <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}>
                     <option value="">Choose the complaint…</option>
-                    {open.map((c) => (
-                      <option key={c.id} value={c.id}>{(c.org_names || [c.org_name]).join(' + ')}: {c.subject}</option>
+                    {fileChoices.map((c) => (
+                      <option key={c.id} value={c.id}>{fileChoiceLabel(c)}</option>
                     ))}
                   </select>
                   <button className="btn-primary btn-sm"
