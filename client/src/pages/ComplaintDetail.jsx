@@ -575,8 +575,10 @@ export default function ComplaintDetail() {
       setChoosingDocs(false);
     }
   }
-  function openSend(draft, then = null, t = null) {
-    const chosen = (draft?.attachment_ids || []).filter((x) => (c.attachments || []).some((d) => d.id === x));
+  // `docs`: the complaint's documents when the page's are behind (one just
+  // copied onto it, e.g. the landlord's authority from another complaint).
+  function openSend(draft, then = null, t = null, docs = null) {
+    const chosen = (draft?.attachment_ids || []).filter((x) => (docs || c.attachments || []).some((d) => d.id === x));
     // With more than one organisation, every email carries each one's
     // reference, labelled ("Your reference" for the one it goes to), even a
     // draft written before that rule or a blank one.
@@ -629,7 +631,9 @@ export default function ComplaintDetail() {
       // the mail server. The banner below follows it until it has gone.
       const r = send.then === 'refer'
         ? await api.complaints.sendReferral(id, { party_id: send.party_id || null, to: send.to, cc: send.cc, subject: send.subject, body: send.body })
-        : await api.complaints.sendEmail(id, send);
+        : send.then === 'landlord'
+          ? await api.complaints.sendToLandlord(id, { landlord_name: send.landlord_name, to: send.to, cc: send.cc, subject: send.subject, body: send.body })
+          : await api.complaints.sendEmail(id, send);
       setSend(null);
       await load();
       setMsg(send.then === 'refer'
@@ -752,6 +756,96 @@ export default function ComplaintDetail() {
           <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
             Upload what isn’t on file and the email is drafted again with it. Something that isn’t a
             document (meter readings, say) can be typed into the email before sending.
+          </div>
+        )}
+      </div>
+    );
+  }
+  // The organisation said Greenco isn't authorised on the account: send the
+  // landlord's authority on file, or ask the landlord for it (no AI; server
+  // services/authority.js decides which, and drafts both).
+  const [authBusy, setAuthBusy] = useState(null);
+  async function sendAuthority() {
+    setAuthBusy('reply');
+    setMsg(null);
+    try {
+      const d = await api.complaints.authorityReply(id);
+      const fresh = await api.complaints.get(id);
+      setC(fresh);
+      const t = d.party_id ? tracks.find((x) => x.id === d.party_id) : null;
+      openSend(d, null, t, fresh.attachments);
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setAuthBusy(null);
+    }
+  }
+  async function askLandlord() {
+    setAuthBusy('landlord');
+    setMsg(null);
+    try {
+      const d = await api.complaints.landlordDraft(id, c.landlord_name || '');
+      setSend({
+        to: d.to, cc: '', subject: signEmail(d.subject, me), body: signEmail(d.body, me),
+        landlord_name: d.landlord_name, then: 'landlord', attachment_ids: [],
+      });
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setAuthBusy(null);
+    }
+  }
+  async function authoritySorted() {
+    const note = prompt('How was it sorted? (e.g. "the landlord phoned them on 7 Oct")', '');
+    if (note === null) return;
+    setAuthBusy('done');
+    try {
+      setC(await api.complaints.authorityDone(id, note));
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setAuthBusy(null);
+    }
+  }
+  function authorityBox() {
+    const a = c.authority;
+    if (!a || c.state !== 'open') return null;
+    if (a.state === 'sent') {
+      return <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>{a.text}</div>;
+    }
+    const act = a.state === 'on_file' || a.state === 'missing';
+    return (
+      <div className={`inline-note ${act ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 15 }}>
+          {act && <span className="badge amber" style={{ marginRight: 6 }}><strong>Action needed</strong></span>}
+          <strong>Authority:</strong> {a.text}
+        </div>
+        <div className="btn-row" style={{ marginTop: 8 }}>
+          {a.state === 'on_file' && (
+            <button className="btn-primary btn-sm" disabled={Boolean(authBusy)} onClick={sendAuthority}>
+              {authBusy === 'reply' ? 'Drafting…' : `Send ${a.org_name} the authority…`}
+            </button>
+          )}
+          {a.state === 'missing' && (
+            <button className="btn-primary btn-sm" disabled={Boolean(authBusy)} onClick={askLandlord}>
+              {authBusy === 'landlord' ? 'Drafting…' : 'Email the landlord for it…'}
+            </button>
+          )}
+          {a.state !== 'on_file' && (
+            <label className="btn btn-sm" style={{ cursor: uploading ? 'default' : 'pointer', margin: 0 }}>
+              {uploading ? 'Uploading…' : 'Upload the authority…'}
+              <input type="file" multiple style={{ display: 'none' }} disabled={uploading}
+                onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+            </label>
+          )}
+          <button className="btn-ghost btn-sm" disabled={Boolean(authBusy)} onClick={authoritySorted}>
+            {authBusy === 'done' ? 'Saving…' : 'Already sorted…'}
+          </button>
+        </div>
+        {a.state !== 'on_file' && (
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            An authority uploaded here (or sent back by the landlord to this complaint’s address) is found by itself,
+            and the next step becomes sending it to {a.org_name}.
           </div>
         )}
       </div>
@@ -1501,12 +1595,17 @@ export default function ComplaintDetail() {
             </div>
           )}
 
+          {authorityBox()}
+
           {/* One next step: the AI's when its review is up to date, otherwise
               the one worked out from the deadlines. */}
           {!multi && !c.awaiting_first_email && (() => {
-            const aiStep = c.ai_review_current && headlineOf(c.ai_review);
+            // Sending the authority, or asking the landlord for it, comes
+            // before anything the review says (it can't move without it).
+            const authFirst = c.authority?.action && c.state === 'open' && !c.authority.party_id;
+            const aiStep = !authFirst && c.ai_review_current && headlineOf(c.ai_review);
             // Without the AI's view, each organisation's own next step, named.
-            const text = aiStep || (multi
+            const text = authFirst ? (c.authority.state === 'on_file' ? `Send ${c.authority.org_name} the landlord's authority (above).` : 'Ask the landlord for their authority (above).') : aiStep || (multi
               ? tracks.filter((t) => t.nextAction).map((t) => `${t.org_name}: ${t.nextAction}`).join(' ')
               : c.nextAction);
             if (!text) return null;
@@ -1526,7 +1625,7 @@ export default function ComplaintDetail() {
                   {c.action_now && <span className="badge amber" style={{ marginRight: 6 }}><strong>Action needed</strong></span>}
                   <strong>Next step:</strong> {text}
                 </div>
-                {c.action_why && c.action_why !== text && <div style={{ marginTop: 4 }}><strong>Still to decide:</strong> {c.action_why}</div>}
+                {c.action_why && c.action_why !== text && c.action_why !== c.authority?.text && <div style={{ marginTop: 4 }}><strong>Still to decide:</strong> {c.action_why}</div>}
                 {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                 {askedForList(c)}
                 {(draft || btn) && (
@@ -2412,6 +2511,7 @@ export default function ComplaintDetail() {
         <Modal
           title={send.then === 'refer'
             ? `Refer the complaint${send.org_name ? ` against ${send.org_name}` : ''} to ${send.ombudsman} by email`
+            : send.then === 'landlord' ? 'Email the landlord for their authority'
             : `${send.then === 'escalate' ? 'Send the Stage 2 request' : 'Send email'}${send.org_name ? ` to ${send.org_name}` : ''}`}
           onClose={() => setSend(null)}
           footer={
@@ -2420,7 +2520,7 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]{3,}\]/.test(send.body))}
+                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]{3,}\]/.test(send.body)) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
               >
                 {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
@@ -2435,6 +2535,27 @@ export default function ComplaintDetail() {
               upload {send.missing.length === 1 ? 'it' : 'them'} on the complaint first (the email is drafted again with {send.missing.length === 1 ? 'it' : 'them'}),
               or add {send.missing.length === 1 ? 'it' : 'them'} to the message yourself.
             </div>
+          )}
+          {send.then === 'landlord' && (
+            <>
+              <div className="inline-note" style={{ marginBottom: 12, fontSize: 13 }}>
+                Their reply comes back to this complaint (it is copied in). It is kept as correspondence with the
+                landlord, never as contact with the organisation, and an authority they send is found by itself.
+              </div>
+              <label className="field">
+                <span className="lbl">Landlord’s name *</span>
+                <input value={send.landlord_name || ''} placeholder="e.g. Mr Lau"
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setSend({
+                      ...send,
+                      landlord_name: name,
+                      // The greeting follows the name typed.
+                      body: send.body.replace(/^Dear [^,\n]*,/, `Dear ${name.trim() || '[Landlord name]'},`),
+                    });
+                  }} />
+              </label>
+            </>
           )}
           {send.then === 'refer' && (
             <div className="inline-note" style={{ marginBottom: 12 }}>
@@ -2487,7 +2608,7 @@ export default function ComplaintDetail() {
             <textarea rows={12} value={send.body}
               onChange={(e) => setSend({ ...send, body: e.target.value })} />
           </label>
-          {send.then !== 'refer' && (
+          {!['refer', 'landlord'].includes(send.then) && (
             <>
               {send.attach_why && (
                 <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}><strong>Documents chosen by the AI:</strong> {send.attach_why}</div>

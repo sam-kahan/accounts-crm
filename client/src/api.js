@@ -355,6 +355,14 @@ export const api = {
     undoEmail: (id, emailId) =>
       request(`/complaints/${id}/emails/${emailId}/undo`, { method: 'POST' }),
     refreshReview: (id) => request(`/complaints/${id}/review`, { method: 'POST' }),
+    // The landlord's authority (server services/authority.js).
+    authorityReply: (id) => request(`/complaints/${id}/authority/reply`, { method: 'POST' }),
+    landlordDraft: (id, landlord_name) =>
+      request(`/complaints/${id}/authority/landlord-draft`, { method: 'POST', body: JSON.stringify({ landlord_name }) }),
+    sendToLandlord: (id, data) =>
+      request(`/complaints/${id}/authority/landlord`, { method: 'POST', body: JSON.stringify(data) }),
+    authorityDone: (id, note) =>
+      request(`/complaints/${id}/authority/done`, { method: 'POST', body: JSON.stringify({ note }) }),
     // The documents a message relies on, chosen by the AI from their labels.
     chooseAttachments: (id, subject, body) =>
       request(`/complaints/${id}/choose-attachments`, { method: 'POST', body: JSON.stringify({ subject, body }) }),

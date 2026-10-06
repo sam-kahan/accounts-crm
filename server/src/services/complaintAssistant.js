@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { LANDLORD } from './authority.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
@@ -142,6 +143,20 @@ function contextBlock(input) {
   } else {
     lines.push('DOCUMENTS ON FILE: none, so nothing can be attached.');
   }
+  // The organisation has said Greenco isn't authorised (authority.js): what
+  // the system found. Facts, worked out by rule, not for the model to guess.
+  const auth = complaint.authority;
+  if (auth && ['on_file', 'missing', 'asked_landlord'].includes(auth.state)) {
+    const who = auth.org_name || complaint.org_name;
+    lines.push(
+      auth.state === 'on_file'
+        ? `AUTHORITY: ${who} said on ${auth.asked_on} that Greenco is not authorised on the account. The landlord's authority IS ON FILE: "${auth.doc.filename}". ` +
+          `The step to take NOW is the email to ${who} sending it: name that file in "email.attach", say it is attached, and ask them to add Greenco as authorised and deal with the complaint. Never tell Greenco to wait for ${who} while this has not been sent, and never ask the landlord for what is already on file.`
+        : auth.state === 'missing'
+          ? `AUTHORITY: ${who} said on ${auth.asked_on} that Greenco is not authorised on the account, and NO authority from the landlord is on file. The next step is for Greenco to ask the landlord for it (the system drafts that email to the landlord): say so first in the "headline" (e.g. "Ask the landlord for their authority, then send it to ${who}."). Do not draft an email to ${who} claiming authority Greenco doesn't have, and don't say to wait for ${who}.`
+          : `AUTHORITY: ${who} said on ${auth.asked_on} that Greenco is not authorised on the account. No authority is on file yet; the landlord was asked for it on ${auth.landlord_asked_on}. The step is to send it to ${who} as soon as it arrives.`,
+    );
+  }
   // The complaint already exists: a draft that "raises a formal complaint",
   // asks them to log one, or threatens one "if unresolved" reads as if it
   // hadn't been made, and confuses everyone who reads it.
@@ -274,7 +289,8 @@ function contextBlock(input) {
   }
   if (events?.length) {
     for (const e of events) {
-      const whose = e.removed_org ? ` (${e.removed_org}, since taken off this complaint)` : e.party_name ? ` (${e.party_name})` : '';
+      const whose = e.removed_org === LANDLORD ? ' (with the landlord, not the organisation)'
+        : e.removed_org ? ` (${e.removed_org}, since taken off this complaint)` : e.party_name ? ` (${e.party_name})` : '';
       lines.push(`- ${e.event_date} [${e.type}]${whose} ${e.note || ''}`.trim());
     }
   } else {
@@ -291,7 +307,7 @@ function contextBlock(input) {
       const when = em.received_at ? londonDateOf(new Date(em.received_at)) : '';
       lines.push(
         `- ${when} from ${em.sender_name || em.sender_email || 'unknown'}` +
-          `${em.removed_org ? ` (${em.removed_org}, since taken off this complaint: history only)` : ''} — ` +
+          `${em.removed_org === LANDLORD ? ' (with the landlord, not the organisation)' : em.removed_org ? ` (${em.removed_org}, since taken off this complaint: history only)` : ''} — ` +
           `"${em.subject || '(no subject)'}": ${(em.body_text || em.body_preview || '').slice(0, 4000)}`,
       );
     }

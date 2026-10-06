@@ -7,6 +7,7 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { signedEmail } from '../lib/emailSignature.js';
+import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere } from '../services/authority.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
@@ -417,6 +418,101 @@ router.post(
   }),
 );
 
+// --- The landlord's authority (services/authority.js) -----------------------
+// The organisation said Greenco isn't authorised. With the authority on file
+// (here, or on another complaint about the same account), the reply sending
+// it; without, the email asking the landlord for it. Both no AI.
+async function authorityOf(id) {
+  const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [id]);
+  if (!rows[0]) throw new HttpError(404, 'Complaint not found');
+  const c = await decorate(rows[0]);
+  if (!c.authority) throw new HttpError(409, 'Nobody has said Greenco isn’t authorised on this complaint.');
+  return c;
+}
+
+router.post(
+  '/:id/authority/reply',
+  asyncHandler(async (req, res) => {
+    const c = await authorityOf(req.params.id);
+    const a = c.authority;
+    if (a.state !== 'on_file') throw new HttpError(409, 'There is no authority on file to send: ask the landlord for it.');
+    const doc = await authorityDocHere(c.id, a.doc);
+    if (!doc) throw new HttpError(409, 'The authority document couldn’t be found. Upload it to this complaint.');
+    const track = a.party_id ? c.parties.find((p) => p.id === a.party_id) : c;
+    const asked = (await query('SELECT subject, sender_email FROM complaint_emails WHERE id = $1', [a.asked_email_id])).rows[0];
+    const draft = authorityReplyDraft(c, track, a);
+    // In their thread: "Re:" the email that asked.
+    const subject = asked?.subject ? `Re: ${String(asked.subject).replace(/^\s*(re|fw|fwd)\s*:\s*/i, '')}` : draft.subject;
+    res.json({ ...draft, subject, attachment_ids: [doc.id], party_id: a.party_id || null });
+  }),
+);
+
+router.post(
+  '/:id/authority/landlord-draft',
+  asyncHandler(async (req, res) => {
+    const c = await authorityOf(req.params.id);
+    const track = c.authority.party_id ? c.parties.find((p) => p.id === c.authority.party_id) : c;
+    const name = String(req.body?.landlord_name || c.landlord_name || '').trim() || null;
+    res.json({ ...landlordRequestDraft(c, track, c.authority, name), to: c.landlord_email || '', landlord_name: name || '' });
+  }),
+);
+
+const landlordInput = z.object({
+  landlord_name: z.string().trim().min(1, 'The landlord’s name is needed.').max(200),
+  to: z.string().min(3),
+  cc: z.string().optional().nullable(),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().trim().min(1).max(20000),
+});
+router.post(
+  '/:id/authority/landlord',
+  asyncHandler(async (req, res) => {
+    const d = parse(landlordInput, req.body);
+    if (!config.smtp.enabled) throw new HttpError(503, 'Email sending isn’t configured — set SMTP_USER / SMTP_PASS.');
+    const c = await authorityOf(req.params.id);
+    const to = parseRecipients(d.to);
+    if (to.length !== 1) throw new HttpError(400, 'Give the landlord’s one email address.');
+    const cc = parseRecipients(d.cc);
+    const subject = signEmail(d.subject, req.user);
+    const body = signEmail(d.body.replace(/\[\s*landlord(?:['’]s)?\s+name\s*\]/gi, () => d.landlord_name), req.user);
+    refuseGaps(subject, body);
+    // Their reply comes back to the complaint's own address, and is known
+    // as the landlord's by this address.
+    if (c.email_address && !cc.includes(c.email_address)) cc.push(c.email_address);
+    await query('UPDATE complaints SET landlord_name = $2, landlord_email = $3 WHERE id = $1', [c.id, d.landlord_name, to[0].toLowerCase()]);
+    const out = await queueOutbox(c.id, {
+      guard: {
+        sql: `SELECT 1 FROM complaint_outbox WHERE complaint_id = $1 AND to_landlord AND status IN ('pending', 'sending')`,
+        params: [c.id],
+      },
+      refusal: 'An email to the landlord is already being sent from this complaint.',
+    },
+    `INSERT INTO complaint_outbox (complaint_id, to_addresses, cc_addresses, subject, body, sent_by, to_landlord, sender_id)
+     VALUES ($1,$2,$3,$4,$5,$6,true,$7) RETURNING id`,
+    [c.id, to, cc, subject, body, who(req), req.user?.id || null]);
+    res.status(202).json({ queued: true, outbox_id: out.id });
+  }),
+);
+
+// "Already sorted" (they confirmed by phone, the landlord called them…):
+// the request is settled, with a note on the timeline. A later email from
+// them saying it again opens it again.
+router.post(
+  '/:id/authority/done',
+  asyncHandler(async (req, res) => {
+    const c = await authorityOf(req.params.id);
+    const how = String(req.body?.note || '').trim().slice(0, 500);
+    await query('UPDATE complaints SET authority_done_on = $2 WHERE id = $1', [c.id, todayISO()]);
+    await query(
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by) VALUES ($1,$2,$3,'note',$4,$5)`,
+      [c.id, c.authority.party_id || null, todayISO(),
+        `Authority on the account sorted${how ? `: ${how}` : '.'}`, who(req)],
+    );
+    scheduleReview(c.id);
+    res.json(await decoratedById(c.id));
+  }),
+);
+
 // Documents of the complaint chosen to go with an email. Checked when it is
 // queued (they are this complaint's, and fit in one email), so a person hears
 // at once rather than from a failed send; read from disk when it goes.
@@ -654,7 +750,15 @@ async function afterSent(o, messageId, { sentAt = null } = {}) {
       messageId,
       partyId: o.party_id,
       sentAt,
+      tag: o.to_landlord ? LANDLORD : null,
     });
+    if (o.to_landlord) {
+      // To the landlord (their authority): recorded as landlord
+      // correspondence (tagged above), never as Greenco writing to the
+      // organisation, and it takes no step.
+      scheduleReview(o.complaint_id);
+      return;
+    }
     const cur = (await query('SELECT * FROM complaints WHERE id = $1', [o.complaint_id])).rows[0];
     if (o.then_supplier) {
       // Already joined some other way while this waited (added by hand, say):
@@ -1860,7 +1964,9 @@ router.post(
     // An email of an organisation taken off the complaint never sets another's
     // dates (a person who knows better records the step with its own button).
     if (em.removed_org && d.as !== 'correspondence') {
-      throw new HttpError(409, `This email is from ${em.removed_org}, which was taken off this complaint, so it can’t set anyone else’s dates. ` +
+      throw new HttpError(409, (em.removed_org === LANDLORD
+        ? 'This email is with the landlord, not the organisation, so it can’t set the complaint’s dates. '
+        : `This email is from ${em.removed_org}, which was taken off this complaint, so it can’t set anyone else’s dates. `) +
         'Mark it as correspondence. If a date really needs recording, use the step buttons (Record acknowledgement…, Record their response…).');
     }
     const track = await loadTrack(req.params.id, d.as === 'correspondence' ? null : d.party_id);

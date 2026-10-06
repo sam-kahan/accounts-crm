@@ -761,6 +761,42 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-06 — "you're not authorised on the account": send the authority on file, or ask the landlord
+- Utility Warehouse (GC-C-BLV2WK) wrote that it couldn't see Greenco was
+  authorised on Mr Lau's account; the letter of authority was already on
+  the complaint, but the review said to wait. **`services/authority.js`**
+  (rules, no AI; pure parts tested): `asksForAuthority` reads their emails
+  (theirs, or a colleague's forward: the summary and the email's own text,
+  never a quoted earlier email); `isAuthorityDoc` finds a letter of
+  authority by its label or name (never a "local authority" bill), on this
+  complaint or on another with the same account number or property
+  (`authorityDocsFor`, copied across when used: `authorityDocHere`).
+  `authorityState`: `sent` (an email of ours to someone outside, since
+  their request, carried one; or a send from here attached one), `on_file`
+  (send it), `asked_landlord`, `missing`. A later email of theirs saying
+  nothing about it doesn't settle it; **Already sorted…** does
+  (`complaints.authority_done_on`, a timeline note).
+- `decorateMany` puts `authority` (state + `text`) on each complaint and,
+  for `on_file` / `missing`, makes that organisation's part **Action
+  needed** (list, dashboard, morning email). The page shows an Authority box
+  above the next step: **Send <org> the authority…** (`POST
+  /:id/authority/reply`: a reply in their thread, from the facts on file,
+  the letter ticked) or **Email the landlord for it…** (`POST
+  /:id/authority/landlord-draft`, then `/authority/landlord`: the
+  landlord's name and email are kept on the complaint, migration `061`).
+  The review is told what was found (`complaintAssistant.js` AUTHORITY
+  line), copies one from another complaint before drafting, and the letter
+  is put on its email to that organisation whatever it named.
+- **Correspondence with the landlord is never contact with the
+  organisation**: tagged `removed_org = 'the landlord'`
+  (`authority.js#LANDLORD`) on the email and its "sent" entry
+  (`recordOutboundEmail({ tag })`, `complaint_outbox.to_landlord`), and an
+  email from (or only to) `complaints.landlord_email` is filed the same way
+  (`complaintEmailProcessor.js`), so no "last wrote / last heard" reader
+  counts it and no step is taken from it. The landlord's reply comes to the
+  complaint's address (copied in); an authority attached to it is found by
+  itself and the step becomes sending it.
+
 ### 2026-10-06 — "wait until <date>" ends on that date
 - British Gas (GC-C-B5WFT5) read "Wait until 6 October" on 6 October, under
   Needs attention with nothing to press: the chase hold

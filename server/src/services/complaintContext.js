@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { todayISO, londonDateOf } from '../lib/dates.js';
+import { authorityForMany, authorityStep } from './authority.js';
 import { HttpError } from '../lib/http.js';
 import { complaintEmailAddress, config } from '../config.js';
 import {
@@ -110,6 +111,10 @@ export async function decorateMany(rows) {
       ) x GROUP BY complaint_id`,
     [rows.map((r) => r.id), String(config.complaintEmail.domain || '').toLowerCase()],
   )).rows.map((x) => [x.complaint_id, x.d]));
+  // The landlord's authority, where an organisation has said Greenco isn't
+  // authorised (authority.js): sending the one on file, or asking the
+  // landlord for it, is a step to take now whatever the review says.
+  const authority = await authorityForMany(rows);
   // With more than one organisation, each one's own correspondence.
   const partiesOf = (id) => parties.filter((p) => p.complaint_id === id);
   const contact = await contactFor(
@@ -207,6 +212,16 @@ export async function decorateMany(rows) {
       const k = c.parties.length ? contact.get(r.id)?.get(t.key) || {} : { lastSentOn: ourLatest.get(r.id) || null, lastTheirsOn: lastTheirs.get(r.id) || null };
       t.asked_for = asked ? answeredSince(asked, k) : null;
     });
+    const a = authority.get(r.id);
+    if (a) {
+      const t = (a.party_id && c.parties.find((p) => p.id === a.party_id)) || c;
+      const step = authorityStep(a, t.org_name);
+      c.authority = { ...a, ...step, party_id: t === c ? null : t.id, org_name: t.org_name };
+      if (step.action && c.state === 'open' && trackOpen(t)) {
+        t.action_now = true;
+        t.action_why = step.text;
+      }
+    }
     c.any_action_now = [c, ...c.parties].some((t) => t.action_now);
     return c;
   });

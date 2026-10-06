@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { LANDLORD } from './authority.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
@@ -333,7 +334,19 @@ async function applyEmail(em, analysis, skipped = []) {
   // part. When the signs point at both them and one still on it, a person
   // decides.
   let off = null;
-  if ((complaint.removed_orgs || []).length && analysis) {
+  // To or from the landlord (asked for their authority): landlord
+  // correspondence, kept on the complaint, never a step with the
+  // organisation and never "they wrote" or "we wrote to them".
+  const landlord = String(complaint.landlord_email || '').toLowerCase();
+  if (landlord) {
+    const ours = String(config.complaintEmail.domain || '').toLowerCase();
+    const outside = (em.to_addresses || []).map((a) => String(a).toLowerCase()).filter((a) => !a.endsWith(`@${ours}`));
+    const sender = String(em.sender_email || '').toLowerCase();
+    if (sender === landlord || (ownEmail && outside.length && outside.every((a) => a === landlord))) {
+      off = { org: { name: LANDLORD } };
+    }
+  }
+  if (!off && (complaint.removed_orgs || []).length && analysis) {
     const orgIds = [complaint, ...parties].map((t) => t.organisation_id).filter(Boolean);
     const orgs = orgIds.length
       ? (await query('SELECT id, name, complaints_email FROM organisations WHERE id = ANY($1::uuid[])', [orgIds])).rows
@@ -504,7 +517,9 @@ async function applyEmail(em, analysis, skipped = []) {
   }
   const type = plan.event?.type || (sentStep ? 'chased' : 'note');
   const offOrg = off && !off.conflict ? off.org.name : null;
-  const recorded = offOrg
+  const recorded = offOrg === LANDLORD
+    ? ' Correspondence with the landlord: kept here, not a step with the organisation.'
+    : offOrg
     ? ` ${offOrg} was taken off this complaint, so this is kept as history only.`
     : returnedClose
     ? ` ${plan.step}, dated ${ukDate(plan.event.date)} (Undo on the email if that's wrong).`

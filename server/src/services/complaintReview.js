@@ -11,6 +11,7 @@ import { todayISO, londonDateOf } from '../lib/dates.js';
 import { guardReview, nextDueFromThem, guardByOrg, normaliseByOrg, composeByOrg } from './reviewGuard.js';
 import { withRequestedDocs } from './draftChecks.js';
 import { attachRequestedEmails, fillPasteGaps, copiesMade, hasPasteGap } from './emailCopies.js';
+import { authorityDocHere } from './authority.js';
 import { referenceLines, withReferences } from '../lib/references.js';
 
 export { reviewSignature };
@@ -130,6 +131,22 @@ async function prepareReview(id, feature) {
   // paid for again on every refresh (attachments.js#attachmentBlocks).
   const last = (await query('SELECT ai_reviewed_at FROM complaints WHERE id = $1', [id])).rows[0]?.ai_reviewed_at || null;
   const ctx = await gatherContext(id, undefined, { files: 2, since: last });
+  // The landlord's authority they asked for, found on another complaint
+  // about the same account: copied here first, so the draft can attach it.
+  const auth = ctx.complaint.authority;
+  if (auth?.state === 'on_file' && auth.elsewhere) {
+    try {
+      const here = await authorityDocHere(id, auth.doc);
+      if (here) {
+        ctx.complaint.authority = { ...auth, doc: here, elsewhere: false };
+        if (!ctx.docList.some((d) => d.id === here.id)) {
+          ctx.docList = [...ctx.docList, { id: here.id, filename: here.filename, uploaded_at: new Date().toISOString(), description: "Landlord's authority" }];
+        }
+      }
+    } catch (err) {
+      console.warn(`[authority] ${id}: ${err.message}`);
+    }
+  }
   const multi = (ctx.complaint.parties || []).length > 0;
   const input = { ...ctx, feature, instruction: REVIEW_INSTRUCTION + (multi ? BY_ORG_INSTRUCTION : '') };
   return { id, ctx, input, startedAt, signature: reviewSignature(ctx.complaint) };
@@ -156,6 +173,16 @@ async function applyReview({ id, ctx, startedAt, signature }, raw) {
   }
   Object.assign(raw, withRequestedDocs(raw, docList));
   if (Array.isArray(raw.by_org)) raw.by_org = raw.by_org.map((e) => withRequestedDocs(e, docList));
+  // The landlord's authority on file goes with the email to whoever asked
+  // for it, whatever the draft named (authority.js).
+  const auth = ctx.complaint.authority;
+  if (auth?.state === 'on_file' && !auth.elsewhere && auth.doc?.id) {
+    const i = auth.party_id ? 1 + (ctx.complaint.parties || []).findIndex((p) => p.id === auth.party_id) : 0;
+    const target = Array.isArray(raw.by_org) && (ctx.complaint.parties || []).length ? raw.by_org[i] : raw;
+    if (target?.email?.body) {
+      target.email = { ...target.email, attachment_ids: [...new Set([...(target.email.attachment_ids || []), auth.doc.id])] };
+    }
+  }
   const headline = typeof raw.headline === 'string' && raw.headline.trim()
     ? raw.headline.trim().replace(/\s+/g, ' ').slice(0, 200)
     : null;

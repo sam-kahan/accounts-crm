@@ -143,7 +143,9 @@ export function listComplaintEmails(complaintId) {
 // `sentAt` is when it went, when that isn't now (an email confirmed as gone
 // after a restart cut its send short): the record and its "sent" entry are
 // dated then, never the day someone confirmed it.
-export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null, partyId = null, sentAt = null }) {
+// `tag`: written to removed_org on the email and its "sent" entry (an email
+// to the landlord, authority.js#LANDLORD: never contact with the organisation).
+export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subject, body, sentBy, messageId = null, partyId = null, sentAt = null, tag = null }) {
   const recipients = [...(to || []), ...(cc || [])].filter(Boolean);
   const graphId = `out-${globalThis.crypto.randomUUID()}`;
   const client = await pool.connect();
@@ -153,8 +155,8 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
       `INSERT INTO complaint_emails
          (complaint_id, graph_id, message_id, subject, sender_name, sender_email,
           to_addresses, body_preview, received_at, direction, match_method,
-          reviewed_at, reviewed_as, reviewed_by, party_id, body_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($11::timestamptz, now()),'outbound','sent',now(),'sent',$9,$10,$12)
+          reviewed_at, reviewed_as, reviewed_by, party_id, body_text, removed_org)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($11::timestamptz, now()),'outbound','sent',now(),'sent',$9,$10,$12,$13)
        RETURNING id`,
       [
         complaintId, graphId, messageId || graphId, subject, 'You (sent from CRM)', fromEmail,
@@ -162,15 +164,16 @@ export async function recordOutboundEmail({ complaintId, fromEmail, to, cc, subj
         // The whole email as sent (the preview stops at 2,000 characters), so
         // a copy of it can be made later (emailCopies.js).
         body || null,
+        tag,
       ],
     )).rows[0];
     await client.query(
-      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by)
-       VALUES ($1, $5, $2, 'chased', $3, $4)`,
+      `INSERT INTO complaint_events (complaint_id, party_id, event_date, type, note, created_by, removed_org)
+       VALUES ($1, $5, $2, 'chased', $3, $4, $6)`,
       [
         complaintId, sentAt ? londonDateOf(new Date(sentAt)) : todayISO(),
         `Email sent: ${subject || '(no subject)'}, to ${recipients.join(', ')}`,
-        sentBy || null, partyId,
+        sentBy || null, partyId, tag,
       ],
     );
     await client.query('COMMIT');
