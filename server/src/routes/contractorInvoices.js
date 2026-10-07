@@ -4,7 +4,7 @@ import { query } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
 import { config } from '../config.js';
 import { monthRange, monthOf, monthLabel } from '../lib/dates.js';
-import { withNumbers, toPence, fromPence } from '../lib/money.js';
+import { withNumbers, toPence, fromPence, formatPence } from '../lib/money.js';
 import { toCsv } from '../lib/csv.js';
 import {
   COMMISSION_TYPES,
@@ -172,9 +172,9 @@ function resolveCommission(contractor, d, amounts, commissionable = null) {
     if (toPence(commissionable) > toPence(ceiling)) {
       throw new HttpError(
         400,
-        `The part carrying commission (${commissionable}) is more than the invoice ${
+        `The part carrying commission (${formatPence(toPence(commissionable))}) is more than the invoice ${
           deal.commission_on === 'gross' ? 'total' : 'net'
-        } of ${ceiling}.`,
+        } of ${formatPence(toPence(ceiling))}.`,
       );
     }
   }
