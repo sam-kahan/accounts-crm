@@ -28,6 +28,7 @@ import {
   contractorSuggestionFrom,
   resolveContractor,
   findDuplicates,
+  exemptVat,
 } from '../src/services/commission.js';
 import {
   buildInvoicePayload,
@@ -1265,7 +1266,17 @@ test('a mixed invoice pushes the exempt line at 0% and the rest at 20%', () => {
     asSent: false,
   });
   assert.deepEqual(payload.lines.map((l) => [l.unitPrice, l.vatRate]), [[150, 0], [9, 20]]);
-  assert.doesNotMatch(payload.notes, /exempt/);
+  // The notes say why one line has no VAT, and that line is marked.
+  assert.match(payload.notes, /Lines marked "exempt from VAT"/);
+  assert.match(payload.lines[0].description, /\(exempt from VAT\)$/);
+  assert.doesNotMatch(payload.lines[1].description, /exempt/);
+});
+
+test('a note given at raise keeps the VAT explanation; a £0 line does not make an exempt invoice "mixed"', () => {
+  const lines = [{ invoice_number: 'P-1', commission_amount: 150, commission_vat_exempt: true }, { invoice_number: 'P-2', commission_amount: 0 }];
+  const payload = buildInvoicePayload({ invoice: { ...PUSH_INVOICE, vat_rate: 0, notes: 'September jobs.' }, contractor: PUSH_CONTRACTOR, lines, companyId: 1, asSent: false });
+  assert.match(payload.notes, /^September jobs\. No VAT is charged/);
+  assert.equal(exemptVat(lines).mixed, false);
 });
 
 test('the emailed invoice says why there is no VAT', () => {

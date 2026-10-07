@@ -761,6 +761,38 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — dates that can't be right are refused; fourth review
+- **Complaint dates** (`routes/complaints.js#stepDatesProblem`, on Log and
+  Edit details, and `POST /:id/events`): a complaint made in the future, a
+  step in the future, or an acknowledgement / response / Stage 2 start
+  before the complaint was made is refused with the reason. An edit is held
+  to it only when it changes one of those dates (an import's dates are never
+  a reason to refuse an unrelated fix). Every date field in the complaint
+  and commission routes uses `lib/http.js#isoDate` (a real day: "31 Sep" was
+  a 500), and a date Postgres can't read is a 400, never a 500 (`index.js`).
+- **Authority requests**: a request word earlier in the sentence ("Regarding
+  the refund, you are not authorised…") no longer hides it: only a THING
+  that is itself the subject is vetoed (`PERSON_SUBJECT` straight before the
+  verb); the text is read with "St." / "No." both ending and not ending a
+  sentence ("St. Helens Road account").
+- **Copies of an email**: the one-organisation rule applies only on a
+  complaint with more than one organisation (by `party_id`, then outside
+  domains leaving out webmail and the landlord), so a landlord copied in, or
+  an organisation writing from two domains, still gets its copy; with the
+  review's own date, "a copy of our complaint/letter of …" counts, a
+  document word (proof, bill, agreement…) never does.
+- **The landlord's documents go to the ombudsman** (evidence checklist, zip,
+  referral): only an organisation taken off the complaint has its
+  attachments left out, never the landlord's authority. A landlord-reply PDF
+  copied to another complaint keeps its label and source email, so sending
+  it there settles that complaint too.
+- **Commission VAT wording** (`commission.js#exemptVat`, shared by the email,
+  the push and the invoice page): counted over billed lines (a £0 line never
+  makes an exempt invoice "mixed"); a note given at raise keeps the "no VAT"
+  explanation in Greenco Invoicing, and a mixed invoice's exempt lines are
+  marked there. The email to a contractor who isn't VAT registered shows each
+  line as "£7.50 of £9.00 collected" with a sentence on why.
+
 ### 2026-10-08 — phone numbers checked; a refused form says which field
 - **Signature phone numbers** (direct line, office, mobile; My signature and
   Staff & access) must be a phone number (`lib/http.js#phoneLine`: figures,

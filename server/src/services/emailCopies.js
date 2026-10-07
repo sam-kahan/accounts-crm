@@ -20,6 +20,11 @@ import { londonDateOf, todayISO } from '../lib/dates.js';
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 // What a person writing "a copy of our email" calls it.
 const ABOUT_EMAIL = /\b(?:e-?mails?|correspondence|chasers?|repl(?:y|ies))\b/i;
+// With the review's own date: a complaint, letter or request we sent is a
+// copy of that day's email; a document never is.
+const ABOUT_SENT = /\b(?:complaint|letter|request|chaser|reply|message)\b/i;
+const A_DOCUMENT = /\b(?:proof|bill|agreement|statement|photos?|invoice|tenancy|readings?|certificate|passport|lease|deeds?|identification|id)\b/i;
+const WEBMAIL = /^(?:gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|btinternet|sky|virginmedia|talktalk|protonmail|proton|gmx|mail)\./;
 const OURS = /\b(?:our|greenco(?:['’]s)?|we\s+sent)\b/i;
 // The organisation's own email ("their email", "the email they sent").
 const THEIRS = /\b(?:their|they\s+sent|from\s+them)\b/i;
@@ -50,12 +55,13 @@ export function sentDay(em) {
 // The emails on file that one requested item is a copy of, oldest first;
 // [] when the item isn't a copy of an email, names no date, or none matches.
 // Pure. `item`: { item, email_date? } from the review's "requested".
-export function emailsRequested(item, emails, { today = todayISO(), ourDomain = '' } = {}) {
+export function emailsRequested(item, emails, { today = todayISO(), ourDomain = '', multiOrg = false, landlordEmail = null } = {}) {
   const text = String(item?.item || '');
   const named = ISO.test(item?.email_date || '') ? item.email_date : null;
   // Only an item that IS an email: "Proof of ownership" with a date the
-  // review gave it is not a copy of that day's email.
-  if (!ABOUT_EMAIL.test(text)) return [];
+  // review gave it is not a copy of that day's email. With the review's own
+  // date, "a copy of our complaint of 16 September" is one too.
+  if (!ABOUT_EMAIL.test(text) && !(named && ABOUT_SENT.test(text) && !A_DOCUMENT.test(text))) return [];
   const days = named ? [named] : [...new Set(datesIn(text, today))];
   if (days.length !== 1) return []; // no date, or two: not for a rule to pick
   // "Our emails of 16 and 20 September" reads as one date (the 20th): a day
@@ -73,17 +79,25 @@ export function emailsRequested(item, emails, { today = todayISO(), ourDomain = 
   // Who they are not sure of, with both sides writing that day: not for a
   // rule to pick.
   if (!want && found.some(ours) && found.some((em) => !ours(em))) return [];
-  // Never one organisation's correspondence in another's copy: the emails
-  // must all be with ONE outside organisation (by its email domain).
-  const outside = new Set();
-  for (const em of found) {
-    const addrs = ours(em) ? (em.to_addresses || []) : [em.sender_email];
-    for (const a of addrs) {
-      const dom = String(a || '').toLowerCase().replace(/.*@/, '').replace(/[>\s].*$/, '');
-      if (dom && dom !== ourDomain) outside.add(orgDomain(dom));
+  // Never one organisation's correspondence in another's copy. Only a
+  // complaint with more than one organisation can mix them: there, the
+  // emails must all be one organisation's part (party_id, where recorded)
+  // and with one outside domain, leaving out webmail (a landlord or tenant
+  // copied in) and the landlord's own address.
+  if (multiOrg) {
+    if (new Set(found.map((em) => em.party_id || null)).size > 1) return [];
+    const landlordDom = String(landlordEmail || '').toLowerCase().replace(/.*@/, '');
+    const outside = new Set();
+    for (const em of found) {
+      const addrs = ours(em) ? (em.to_addresses || []) : [em.sender_email];
+      for (const a of addrs) {
+        const dom = String(a || '').toLowerCase().replace(/.*@/, '').replace(/[>\s].*$/, '');
+        if (!dom || dom === ourDomain || dom === landlordDom || WEBMAIL.test(dom)) continue;
+        outside.add(orgDomain(dom));
+      }
     }
+    if (outside.size > 1) return [];
   }
-  if (outside.size > 1) return [];
   // One email in two copies (sent from here, and the copy that came back to
   // a mailbox before Message-IDs were kept) goes in once.
   const seen = new Set();
@@ -149,11 +163,16 @@ export function copyText(emails, bodies) {
 export async function attachRequestedEmails(complaintId, requested, { emails = [], docList = [], today = todayISO() } = {}) {
   if (!Array.isArray(requested)) return;
   const ourDomain = String(config.complaintEmail?.domain || '').toLowerCase();
+  const c = (await query(
+    `SELECT landlord_email, (SELECT count(*) FROM complaint_parties p WHERE p.complaint_id = c.id)::int AS parties
+       FROM complaints c WHERE c.id = $1`, [complaintId],
+  )).rows[0] || {};
+  const scope = { multiOrg: c.parties > 0, landlordEmail: c.landlord_email };
   for (const x of requested) {
     if (!x || typeof x !== 'object' || x.given || x.not_ours) continue;
     if (x.file && docList.some((d) => d.filename === x.file)) continue;
     try {
-      const found = emailsRequested(x, emails, { today, ourDomain });
+      const found = emailsRequested(x, emails, { today, ourDomain, ...scope });
       if (!found.length) continue;
       const bodies = await Promise.all(found.map(fullBody));
       if (bodies.some((b) => b == null)) continue;

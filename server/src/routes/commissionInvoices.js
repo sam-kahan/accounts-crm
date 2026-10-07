@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, isoDate } from '../lib/http.js';
 import { emailListProblem, splitEmails } from '../lib/emailList.js';
 import { config } from '../config.js';
 import { buildSignature, signatureImages } from '../lib/emailSignature.js';
@@ -237,9 +237,9 @@ router.get(
 const raiseInput = z.object({
   contractor_id: z.string().uuid(),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
-  period_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  period_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  period_start: isoDate.optional(),
+  period_end: isoDate.optional(),
+  issue_date: isoDate.optional(),
   // Optional: bill only these lines. Omitted = everything pending in the period.
   invoice_ids: z.array(z.string().uuid()).max(500).optional(),
   vat_rate: z.number().min(0).max(100).optional(),
@@ -421,6 +421,8 @@ router.post(
       lines: lines.map((l) => ({
         ...withNumbers(l, LINE_MONEY_COLS),
         commission_amount: fromPence(commissionNetPence(l, invoice.vat_rate)),
+        // What they collected, shown beside the net when VAT came out of it.
+        collected: Number(l.commission_amount),
       })),
       billing,
       invoicing: invoicingStatus(),
@@ -572,7 +574,7 @@ router.post(
 
 const statusInput = z.object({
   status: z.enum(['draft', 'sent', 'paid', 'void']),
-  paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  paid_on: isoDate.optional().nullable(),
   // Why it is being withdrawn. Travels to Greenco Invoicing and is written onto
   // the invoice there, where whoever opens it next is looking at the document
   // rather than at this system.

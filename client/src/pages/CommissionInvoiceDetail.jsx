@@ -111,10 +111,12 @@ export default function CommissionInvoiceDetail() {
   // Insurance commission is exempt from VAT; the invoice says so rather than
   // leave a VAT-registered company's 0% looking like an oversight. The same
   // wording as the emailed copy (services/commission.js).
-  const exemptLines = (inv.lines || []).filter((l) => l.commission_vat_exempt).length;
+  // Counted over the lines billed (a £0 line isn't), as the server does.
+  const billedLines = (inv.lines || []).filter((l) => Number(l.commission_amount) !== 0);
+  const exemptLines = billedLines.filter((l) => l.commission_vat_exempt).length;
   const exemptNote = !exemptLines
     ? null
-    : exemptLines < (inv.lines || []).length
+    : exemptLines < billedLines.length
     ? 'Lines marked "exempt from VAT" are commission on arranging insurance, which is exempt from VAT; no VAT is charged on them.'
     : 'No VAT is charged: commission on arranging insurance is exempt from VAT.';
   const anyRoundedDown = (inv.lines || []).some((l) => roundedDown(l, inv.vat_rate));

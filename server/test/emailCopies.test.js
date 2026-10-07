@@ -111,9 +111,18 @@ test('only a gap about pasting THIS email is filled', () => {
 test('review of 7 Oct: one organisation only, an item that is an email, a whole email of theirs', () => {
   const bg = { id: 'x1', direction: 'outbound', sender_email: 'sam@greenco.co.uk', to_addresses: ['complaints@britishgas.co.uk'], subject: 'Stage 2', received_at: '2026-09-16T09:00:00Z' };
   const lcs = { id: 'x2', direction: 'outbound', sender_email: 'sam@greenco.co.uk', to_addresses: ['disputes@lcs.co.uk'], subject: 'Formal complaint', received_at: '2026-09-16T11:00:00Z' };
-  assert.deepEqual(emailsRequested({ item: 'A copy of our email of 16 September', email_date: '2026-09-16' }, [bg, lcs], opts), []);
+  assert.deepEqual(emailsRequested({ item: 'A copy of our email of 16 September', email_date: '2026-09-16' }, [bg, lcs], { ...opts, multiOrg: true }), []);
   assert.deepEqual(emailsRequested({ item: 'Proof of ownership', email_date: '2026-09-16' }, [bg], opts), []);
   assert.deepEqual(emailsRequested({ item: 'A copy of our Stage 2 request email of 16 September 2026' }, [bg], opts).map((e) => e.id), ['x1']);
   assert.equal(fillPasteGaps('Hi\n[Insert copy of the bill and our email here]', [{ day: '2026-09-16', ours: true }]), 'Hi\n[Insert copy of the bill and our email here]');
   assert.equal(fillPasteGaps('Hi\n[Paste a copy of our email to the landlord here]', [{ day: '2026-09-16', ours: true }]), 'Hi\n[Paste a copy of our email to the landlord here]');
+});
+
+test('third review: a landlord copied in, an organisation with two domains, a complaint letter', () => {
+  const toUw = { id: 'u1', direction: 'outbound', sender_email: 'sam@greenco.co.uk', to_addresses: ['complaints@uw.co.uk', 'landlord@gmail.com'], subject: 'Complaint', received_at: '2026-09-16T09:00:00Z' };
+  assert.deepEqual(emailsRequested({ item: 'A copy of our email of 16 September' }, [toUw], { ...opts, multiOrg: true }).map((e) => e.id), ['u1']);
+  const two = { ...toUw, id: 'u2', to_addresses: ['complaints@uw.co.uk', 'help@utilitywarehouse.co.uk'] };
+  assert.deepEqual(emailsRequested({ item: 'A copy of our email of 16 September' }, [two], opts).map((e) => e.id), ['u2']);
+  assert.deepEqual(emailsRequested({ item: 'A copy of our complaint of 16 September 2026', email_date: '2026-09-16' }, [toUw], opts).map((e) => e.id), ['u1']);
+  assert.deepEqual(emailsRequested({ item: 'Proof of ownership', email_date: '2026-09-16' }, [toUw], opts), []);
 });

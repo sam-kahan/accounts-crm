@@ -347,6 +347,22 @@ function fmtDate(iso) {
 // Build the commission invoice email (subject + text + HTML). `billing` is our
 // own name/address/bank details from config; `lines` are the logged contractor
 // invoices being claimed.
+// Why an invoice carries no VAT, or less: worked out from the lines that are
+// billed (a £0 line isn't, as invoiceVatRate counts them), so an invoice of
+// exempt commission and a £0 line says "No VAT is charged" like its 0% rate.
+// Shared by the email and the notes pushed to Greenco Invoicing.
+export function exemptVat(lines) {
+  const billed = (lines || []).filter((l) => (toPence(l.commission_amount) ?? 0) !== 0);
+  const exempt = billed.filter((l) => l.commission_vat_exempt);
+  const mixed = exempt.length > 0 && exempt.length < billed.length;
+  const note = exempt.length
+    ? mixed
+      ? 'Lines marked "exempt from VAT" are commission on arranging insurance, which is exempt from VAT; no VAT is charged on them.'
+      : 'No VAT is charged: commission on arranging insurance is exempt from VAT.'
+    : '';
+  return { exempt: exempt.length > 0, mixed, note };
+}
+
 export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billing = {}, signature = null }) {
   const period = `${fmtDate(invoice.period_start)} - ${fmtDate(invoice.period_end)}`;
   const subject = `${billing.name || 'Greenco'} commission invoice ${invoice.invoice_number} - ${monthLabel(
@@ -357,12 +373,17 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
   // a VAT-registered business invoicing without VAT should never leave the
   // reader wondering whether it was forgotten. On an invoice that mixes the
   // two, the exempt lines are marked.
-  const exempt = lines.filter((l) => l.commission_vat_exempt);
-  const mixed = exempt.length > 0 && exempt.length < lines.length;
-  const exemptNote = exempt.length
-    ? mixed
-      ? 'Lines marked "exempt from VAT" are commission on arranging insurance, which is exempt from VAT; no VAT is charged on them.'
-      : 'No VAT is charged: commission on arranging insurance is exempt from VAT.'
+  const { mixed, note: exemptNote } = exemptVat(lines);
+  // A contractor who isn't VAT registered collected the commission with our
+  // VAT inside it: each line says so ("£7.50 of £9.00 collected"), so the
+  // net on the page isn't read as a mistake.
+  const ofCollected = (l) => {
+    const c = toPence(l.collected);
+    return c !== null && c !== undefined && c !== (toPence(l.commission_amount) ?? 0) ? ` of ${formatPence(c)} collected` : '';
+  };
+  const netted = lines.some((l) => ofCollected(l));
+  const nettedNote = netted
+    ? 'As you are not VAT registered, the commission you collected includes our VAT, so the commission shown is that amount less VAT and the total due is what you collected (a penny less on a line that cannot be split exactly).'
     : '';
 
   const textLines = lines.map(
@@ -371,7 +392,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
         l.property || l.description || 'Works'
       }  invoice ${formatPence(toPence(l.total_amount) ?? 0)}  commission ${formatPence(
         toPence(l.commission_amount) ?? 0,
-      )}${mixed && l.commission_vat_exempt ? ' (exempt from VAT)' : ''}`,
+      )}${ofCollected(l)}${mixed && l.commission_vat_exempt ? ' (exempt from VAT)' : ''}`,
   );
 
   const text = [
@@ -394,6 +415,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
         ]
       : []),
     ...(exemptNote ? ['', exemptNote] : []),
+    ...(nettedNote ? ['', nettedNote] : []),
     '',
     ...(billing.bank_details ? ['Payment details:', billing.bank_details, ''] : []),
     ...(invoice.notes ? [invoice.notes, ''] : []),
@@ -424,7 +446,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
         )}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap;font-weight:600;">${formatPence(
           toPence(l.commission_amount) ?? 0,
-        )}${mixed && l.commission_vat_exempt ? ' <span style="font-weight:400;color:#6b7280;">(exempt from VAT)</span>' : ''}</td>
+        )}${ofCollected(l) ? `<span style="font-weight:400;color:#6b7280;">${escapeHtml(ofCollected(l))}</span>` : ''}${mixed && l.commission_vat_exempt ? ' <span style="font-weight:400;color:#6b7280;">(exempt from VAT)</span>' : ''}</td>
       </tr>`,
     )
     .join('');
@@ -484,6 +506,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
       </tfoot>
     </table>
     ${exemptNote ? `<p style="font-size:13px;">${escapeHtml(exemptNote)}</p>` : ''}
+    ${nettedNote ? `<p style="font-size:13px;">${escapeHtml(nettedNote)}</p>` : ''}
     ${invoice.notes ? `<p style="font-size:13px;color:#6b7280;">${escapeHtml(invoice.notes)}</p>` : ''}
     ${
       billing.bank_details

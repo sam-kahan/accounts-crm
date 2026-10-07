@@ -197,6 +197,11 @@ app.use((err, _req, res, _next) => {
   if (err?.code === '23505') {
     return res.status(409).json({ error: 'That is already on file.' });
   }
+  // A date Postgres can't read (31 September) that got past a form's own
+  // check: the person's mistake, said plainly.
+  if (err?.code === '22008' || err?.code === '22007') {
+    return res.status(400).json({ error: 'That date isn’t a real date. Check the day and month.' });
+  }
   // eslint-disable-next-line no-console
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });

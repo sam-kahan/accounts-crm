@@ -91,22 +91,38 @@ export function copyOfEmail(body) {
     .filter((para) => !NOTICE.test(para.trim())).join('\n\n').trim();
 }
 
-export function asksForAuthority(text) {
+// Who "is not authorised" can be about Greenco: a person or Greenco itself.
+// The person must be the one who "is not": straight before the verb ("you
+// are not", "Greenco is not", "Imogen isn't"), never "the reading you sent
+// isn't".
+const PERSON_SUBJECT = /\b(?:you|greenco|we|they|your\s+(?:company|organisation|firm|agency)|(?:a\s+|the\s+)?third\s+part(?:y|ies)|(?:the\s+)?(?:managing\s+)?agents?|representatives?|[A-Z][a-z]+)\s*(?:(?:are|is|were|was|has|have|had)\s+)?(?:been\s+)?$|\byou['’]re\s*$/;
+function sentencesOf(text, joinBeforeCapital) {
   // A full stop inside a sentence is not its end: "Mr. Lau", "E.ON Next".
+  // "St." or "No." may end a sentence or sit inside one ("St. Helens Road"),
+  // so the text is read both ways (joinBeforeCapital) and either counts.
   const s = String(text || '').replace(/\s+/g, ' ')
-    // A title always comes before a name; "St." or "No." may end a sentence,
-    // so only before a small letter or a figure.
     .replace(/\b(Mr|Mrs|Ms|Miss|Dr)\./g, '$1')
-    .replace(/\b([Ss]t|[Nn]o|[Rr]ef|[Cc]o|e\.g|i\.e|etc)\.(?=\s+[a-z0-9])/g, '$1')
+    .replace(joinBeforeCapital
+      ? /\b([Ss]t|[Nn]o|[Rr]ef|[Cc]o|e\.g|i\.e|etc)\.(?=\s+[A-Za-z0-9])/g
+      : /\b([Ss]t|[Nn]o|[Rr]ef|[Cc]o|e\.g|i\.e|etc)\.(?=\s+[a-z0-9])/g, '$1')
     .replace(/\.(?=\S)/g, '');
-  const sentences = s.split(/(?<=[.!?])\s+/);
+  return s.split(/(?<=[.!?])\s+/);
+}
+export function asksForAuthority(text) {
+  const sentences = [...new Set([...sentencesOf(text, false), ...sentencesOf(text, true)])];
   return sentences.some((x) => !NOT_ABOUT_US.test(x) && AUTH_PATTERNS.some((re, i) => {
     const m = re.exec(x);
     if (!m) return false;
+    if (i !== 0) return true;
     // "Not authorised / registered on the account" said of a THING ("the
     // refund has not been authorised for the account", "the meter reading
-    // isn't registered on the account yet") is not about Greenco.
-    return i !== 0 || !THING.test(x.slice(Math.max(0, m.index - 60), m.index));
+    // isn't registered on the account yet") is not about Greenco; it is when
+    // a person comes after the last such word ("Regarding the refund, you
+    // are not authorised on this account").
+    const before = x.slice(0, m.index);
+    let last = -1;
+    for (const t of before.matchAll(new RegExp(THING.source, 'gi'))) last = t.index + t[0].length;
+    return last < 0 || PERSON_SUBJECT.test(before.slice(last));
   }));
 }
 
@@ -354,13 +370,17 @@ export async function authorityDocHere(complaintId, doc) {
   if (doc.complaint_id === complaintId) return doc;
   const { saveAttachmentBuffer } = await import('./attachments.js');
   const fs = await import('node:fs/promises');
-  const row = (await query('SELECT filename, mimetype, storage_path, description FROM complaint_attachments WHERE id = $1', [doc.id])).rows[0];
+  const row = (await query('SELECT filename, mimetype, storage_path, description, source_email_id FROM complaint_attachments WHERE id = $1', [doc.id])).rows[0];
   if (!row) return null;
+  // The PDF of a landlord's reply keeps its label and the email it came
+  // from, so the copy is still known as that reply here (sent_reply /
+  // replyDocIds) and sending it settles this complaint too.
+  const reply = (row.description || '').startsWith("The landlord's email of ") && (row.description || '').endsWith('as a PDF to send on as their reply');
   const saved = await saveAttachmentBuffer(
     complaintId,
     { filename: row.filename, mimetype: row.mimetype, buffer: await fs.readFile(row.storage_path) },
-    null,
-    { description: `${row.description || "Landlord's authority"} (copied from ${doc.ref_code || 'another complaint'})` },
+    reply ? row.source_email_id : null,
+    { description: reply ? row.description : `${row.description || "Landlord's authority"} (copied from ${doc.ref_code || 'another complaint'})` },
   );
   return { ...doc, id: saved.id, filename: saved.filename, complaint_id: complaintId };
 }

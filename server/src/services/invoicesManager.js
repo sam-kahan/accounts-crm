@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { toPence, fromPence } from '../lib/money.js';
-import { commissionNetPence, lineVatRate } from './commission.js';
+import { commissionNetPence, lineVatRate, exemptVat } from './commission.js';
 import { REGIONS, REGION_LABEL, isRegion } from './regions.js';
 
 // ---------------------------------------------------------------------------
@@ -72,7 +72,8 @@ export function lineFor(row, vatRate = 0) {
   const head = parts.length ? parts.join(', ') : 'works';
   const works = row.description ? ` (${row.description})` : '';
   return {
-    description: `Commission - ${head}${works}`.slice(0, 500),
+    // Marked, so the note's "Lines marked exempt from VAT" points somewhere.
+    description: `Commission - ${head}${works}${row.commission_vat_exempt ? ' (exempt from VAT)' : ''}`.slice(0, 500),
     quantity: 1,
     // The NET commission: the invoicing system adds VAT to the unit price it
     // is given. For a contractor who isn't VAT registered that is the amount
@@ -112,12 +113,12 @@ export function buildInvoicePayload({ invoice, contractor, lines, companyId, asS
     invoiceDate: invoice.issue_date,
     dueDate: invoice.due_date,
     status: asSent ? 'sent' : 'draft',
-    notes:
-      invoice.notes ||
-      `Commission included in your invoices between ${ukLong(invoice.period_start)} and ${ukLong(invoice.period_end)}.` +
-        (billable.every((l) => l.commission_vat_exempt)
-          ? ' No VAT is charged: commission on arranging insurance is exempt from VAT.'
-          : ''),
+    // Any note given at raise, then why there is no VAT (or less) whatever
+    // the note says: the invoice must explain itself over there too.
+    notes: [
+      invoice.notes || `Commission included in your invoices between ${ukLong(invoice.period_start)} and ${ukLong(invoice.period_end)}.`,
+      exemptVat(billable).note,
+    ].filter(Boolean).join(' '),
     // Per line: exempt commission (insurance) goes across at 0% even on an
     // invoice whose other lines carry VAT.
     lines: billable.map((l) => ({ ...lineFor(l, vatRate), vatRate: lineVatRate(l, vatRate) })),

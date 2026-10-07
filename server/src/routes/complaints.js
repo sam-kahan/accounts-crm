@@ -4,7 +4,7 @@ import { saysAttached, staleNoReply } from '../services/draftChecks.js';
 import { chooseAttachments } from '../services/docChoice.js';
 import { z } from 'zod';
 import { query, pool } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType, isoDate } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { signedEmail } from '../lib/emailSignature.js';
 import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, copyOfEmail, replyPdfDescription } from '../services/authority.js';
@@ -137,7 +137,6 @@ const ORG_TYPES = [
 
 // A calendar date as the app stores it. Checked here so a malformed value is a
 // clean 400 rather than a Postgres error.
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date');
 
 const input = z.object({
   organisation_id: z.string().uuid().optional().nullable(),
@@ -978,7 +977,8 @@ async function evidenceFor(c, { events, emails, attachments }) {
     })),
     // Documents that came with an email of an organisation taken off the
     // complaint are that organisation's history, like the email itself.
-    docs: attachments.filter((a) => !a.source_email_id || !emails.some((e) => e.id === a.source_email_id && e.removed_org)),
+    // The landlord's documents (their authority) are evidence, not history.
+    docs: attachments.filter((a) => !a.source_email_id || !emails.some((e) => e.id === a.source_email_id && e.removed_org && e.removed_org !== LANDLORD)),
     events: events.filter((e) => !e.removed_org),
     forwardTo: c.email_address,
     today: todayISO(),
@@ -1108,7 +1108,7 @@ async function packText(ctx, grounds, { outward = false, track = null } = {}) {
       lines.push(
         `${em.received_at ? readable(londonDateOf(new Date(em.received_at))) : ''}  ${em.direction === 'outbound' || em.analysis?.kind === 'our_email' ? 'SENT' : 'RECEIVED'}  ` +
           `${em.subject || '(no subject)'}, ${em.sender_name || em.sender_email || ''}` +
-          `${em.removed_org ? ` (${em.removed_org}, since taken off this complaint)` : ''}`,
+          `${em.removed_org === LANDLORD ? ' (with the landlord)' : em.removed_org ? ` (${em.removed_org}, since taken off this complaint)` : ''}`,
       );
     }
   } else {
@@ -1158,7 +1158,10 @@ async function evidenceFiles(ctx, { grounds = null, outward = false, track = nul
   // them) are its history, left out of what goes to the ombudsman.
   // Outward, an email only between our own people is ours, and what came
   // with it (an internal spreadsheet) stays with it.
-  const offIds = new Set(ctx.emails.filter((e) => e.removed_org || (outward && internalOnly(e))).map((e) => e.id));
+  // What the landlord sent (their authority for Greenco) is evidence the
+  // ombudsman asks for, so it goes, though their emails aren't the
+  // organisation's correspondence.
+  const offIds = new Set(ctx.emails.filter((e) => (e.removed_org && e.removed_org !== LANDLORD) || (outward && internalOnly(e))).map((e) => e.id));
   const emails = ctx.emails.filter((e) => !e.removed_org && !(outward && internalOnly(e)))
     .sort((a, b) => sentDay(a).localeCompare(sentDay(b)) || new Date(a.received_at) - new Date(b.received_at));
   emails.forEach((e, i) => {
@@ -1973,10 +1976,31 @@ router.get(
   }),
 );
 
+
+// A date typed on a complaint that can't be right: in the future, or a step
+// (acknowledged, answered, Stage 2 asked for) before the complaint was made.
+// Each moves deadlines, so it is refused with the reason, never kept.
+const STEP_LABEL = {
+  acknowledged_on: 'acknowledged', responded_on: 'their response', final_response_on: 'their final response',
+  stage_started_on: 'the current stage started',
+};
+export function stepDatesProblem(c, today = todayISO()) {
+  if (c.raised_on && c.raised_on > today) return `The date it was made (${readable(c.raised_on)}) is in the future.`;
+  for (const [k, label] of Object.entries(STEP_LABEL)) {
+    const v = c[k];
+    if (!v) continue;
+    if (v > today) return `The date ${label} (${readable(v)}) is in the future.`;
+    if (c.raised_on && v < c.raised_on) return `The date ${label} (${readable(v)}) is before the complaint was made (${readable(c.raised_on)}).`;
+  }
+  return null;
+}
+
 router.post(
   '/',
   asyncHandler(async (req, res) => {
     const d = parse(input, req.body);
+    const bad = stepDatesProblem(d);
+    if (bad) throw new HttpError(400, bad);
     const created = await createComplaint(d, { by: who(req) });
     scheduleReview(created.id);
     res.status(201).json(await decorate(created));
@@ -2226,6 +2250,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const d = parse(eventInput, req.body);
     const track = await loadTrack(req.params.id, d.party_id);
+    if (d.event_date > todayISO()) throw new HttpError(400, `${readable(d.event_date)} is in the future: record a step on the day it happened.`);
+    const madeOn = track.row.raised_on;
+    if (['acknowledged', 'response_received', 'escalated', 'resolved'].includes(d.type) && madeOn && d.event_date < madeOn) {
+      throw new HttpError(400, `${readable(d.event_date)} is before the complaint was made (${readable(madeOn)}).`);
+    }
     const partyId = track.party?.id || null;
 
     await query(
@@ -2500,6 +2529,15 @@ router.put(
     const existing = (await query('SELECT * FROM complaints WHERE id = $1', [req.params.id]))
       .rows[0];
     if (!existing) throw new HttpError(404, 'Complaint not found');
+    {
+      const merged = { ...existing };
+      for (const k of ['raised_on', ...Object.keys(STEP_LABEL)]) if (d[k] !== undefined) merged[k] = d[k];
+      // Only what this edit changes is held to the rule: a date already on
+      // file (an import's) is never a reason to refuse an unrelated fix.
+      const touched = ['raised_on', ...Object.keys(STEP_LABEL)].some((k) => d[k] !== undefined);
+      const bad = touched ? stepDatesProblem(merged) : null;
+      if (bad) throw new HttpError(400, bad);
+    }
 
     // Linking an organisation brings its type with it: the type decides the
     // default for anything its procedure doesn't state.

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, isoDate } from '../lib/http.js';
 import { config } from '../config.js';
 import { monthRange, monthOf, monthLabel } from '../lib/dates.js';
 import { withNumbers, toPence, fromPence, formatPence } from '../lib/money.js';
@@ -120,7 +120,7 @@ const input = z.object({
   // nothing else: " INV-1" and "INV-1" would otherwise be two invoices to the
   // index and one invoice to everybody else.
   invoice_number: z.string().trim().max(60).optional().nullable(),
-  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  invoice_date: isoDate,
   property: z.string().max(300).optional().nullable(),
   landlord_ref: z.string().max(120).optional().nullable(),
   description: z.string().max(1000).optional().nullable(),
@@ -140,7 +140,7 @@ const input = z.object({
   // Which Greenco office bills this job. Worked out from the property address
   // when it isn't stated; see resolveRegion below.
   region: z.enum(REGION_KEYS).optional(),
-  paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  paid_on: isoDate.optional().nullable(),
   notes: z.string().max(4000).optional().nullable(),
   extracted: boolish.optional(),
 });
@@ -373,7 +373,7 @@ router.get(
 const duplicateQuery = z.object({
   contractor_id: z.string().uuid(),
   invoice_number: z.string().trim().max(60).optional(),
-  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  invoice_date: isoDate.optional(),
   net_amount: money.optional(),
   vat_amount: money.optional(),
   total_amount: money.optional(),

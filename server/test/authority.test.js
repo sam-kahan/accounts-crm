@@ -249,3 +249,11 @@ test('second review of 7 Oct: replies keep their tags; blanks in letters; things
     assert.equal(asksForAuthority(s), false, s);
   assert.ok(asksForAuthority('We can only speak to the account holder at 10 Dale St. Your direct debit will continue as normal.'));
 });
+
+test('fourth review: a request mentioned before "you are not authorised" still counts; St. Helens is one sentence', () => {
+  for (const s of ['Regarding the refund, you are not authorised on this account.', 'We have received your request, however you are not authorised on the account.',
+    'In relation to the credit on the account, Greenco is not authorised on the account.', 'Greenco is not authorised on the St. Helens Road account.',
+    'We can only speak to the account holder at 10 Dale St. Your direct debit will continue as normal.'])
+    assert.ok(asksForAuthority(s), s);
+  assert.equal(asksForAuthority("The meter reading you sent isn't registered on the account yet."), false);
+});
