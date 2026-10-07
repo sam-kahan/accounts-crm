@@ -660,8 +660,8 @@ export function deriveStatus(complaint, rule) {
       label: `Not acknowledged, ${plural(late(ackWd), 'overdue')}`,
       nextAction:
         `They should have acknowledged it by ${ukDate(ackDue)} (${rule.ackDays} working days, ` +
-        `${basisOf(rule, 'ackDays')}). Chase for an acknowledgement; the Stage 1 outcome is still ` +
-        `due by ${due ? ukDate(due) : 'the date shown'}.`,
+        `${basisOf(rule, 'ackDays')}). Chase for an acknowledgement` +
+        (due ? `; the Stage 1 outcome is still due by ${ukDate(due)}.` : '.'),
       ack_overdue: true,
       needs_chasing: true,
     };
