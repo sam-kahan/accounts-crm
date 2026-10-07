@@ -1282,3 +1282,20 @@ test('the emailed invoice says why there is no VAT', () => {
   assert.doesNotMatch(mail.text, /VAT \(/);
   assert.match(mail.html, /exempt from VAT/);
 });
+
+test('a £0 line does not make an exempt invoice charge VAT', () => {
+  assert.equal(invoiceVatRate([{ commission_amount: 150, commission_vat_exempt: true }, { commission_amount: 0 }], 20), 0);
+  assert.equal(invoiceVatRate([{ commission_amount: 0 }], 20), 20);
+});
+
+test('the sender’s signature goes above the company footer on a commission invoice', () => {
+  const mail = buildCommissionInvoiceEmail({
+    invoice: { invoice_number: 'GC-COM-00009', period_start: '2026-09-01', period_end: '2026-09-30', issue_date: '2026-10-01', due_date: '2026-10-31', net_amount: 10, vat_rate: 20, vat_amount: 2, total_amount: 12 },
+    contractor: { name: 'Bob' },
+    lines: [{ invoice_number: 'A', commission_amount: 10, total_amount: 100 }],
+    billing: { name: 'Greenco Group Limited', vat_number: 'GB123' },
+    signature: { text: 'Kind regards,\n\nSam Kahan', html: '<p>SIGNATURE</p>' },
+  });
+  assert.ok(mail.text.indexOf('Sam Kahan') < mail.text.indexOf('VAT registration: GB123'));
+  assert.ok(mail.html.indexOf('SIGNATURE') < mail.html.indexOf('VAT registration GB123'));
+});

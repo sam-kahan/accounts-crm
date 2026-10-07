@@ -650,8 +650,11 @@ function refuseGaps(...texts) {
 export async function signedForSender(body, senderId) {
   if (!config.signature.enabled || !senderId) return { text: body, html: undefined, attachments: [] };
   const user = (await query(
-    'SELECT name, email, job_title, post_nominals, direct_line, office_phone, mobile FROM users WHERE id = $1', [senderId],
+    'SELECT name, email, job_title, post_nominals, direct_line, office_phone, mobile FROM users WHERE id = $1 AND active', [senderId],
   )).rows[0];
+  // Deactivated (or deleted) since pressing Send: their numbers and address
+  // are no longer Greenco's to give out, so it goes as written.
+  if (!user) return { text: body, html: undefined, attachments: [] };
   return signedEmail(body, user || null, { links: config.signature.links });
 }
 

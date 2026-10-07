@@ -761,6 +761,25 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — fixes from a review of the signature and the VAT exemption
+- **The full signature only replaces a real sign-off**
+  (`emailSignature.js#withoutSignOff`): after the last closing line, only
+  sign-off lines (a name, a title, "Greenco", a [placeholder]: short, no
+  sentence punctuation) are removed. Anything else after it (a sentence, a
+  P.S., a quoted email) keeps the whole body; a closing word that opens the
+  email ("Many thanks for your reply") is the message. An "Attached: …"
+  line is kept in what is sent. Before, "Thanks" mid-email, a P.S. or a
+  short quoted thread were cut from the email that went.
+- A sender deactivated before their queued email goes: it goes as written,
+  without their numbers (`signedForSender` needs `active`).
+- On a commission invoice the signature sits above the company footer
+  (`buildCommissionInvoiceEmail({ signature })`).
+- **Deleting a draft commission invoice releases its lines like a void**
+  (`releaseLinesOf`, in the same transaction), taking the contractor's
+  current "exempt from VAT"; the database's ON DELETE SET NULL left the old
+  setting, so a re-raise charged VAT the broker had just been marked exempt
+  from. `invoiceVatRate` ignores £0 lines (they aren't billed).
+
 ### 2026-10-06 — an authority request never waits for a person
 - Utility Warehouse's 3 Oct email ("can't see you are authorised…") sat
   under "New email to review" (medium confidence; its summary and subject

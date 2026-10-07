@@ -65,3 +65,16 @@ test('every picture the signature uses is on disk', () => {
     assert.ok(fs.existsSync(a.path), a.path);
   }
 });
+
+test('only a real sign-off is replaced: the message, a P.S., a quoted email and "Attached:" are kept', () => {
+  const keep = (b) => assert.equal(withoutSignOff(b).kept, true, b);
+  keep('Dear Sir,\n\nThanks\n\nPlease confirm the refund by Friday.\nWe hold the meter readings.');
+  keep('Hi\n\nBody\n\nThanks,\nSam\n\nP.S. one more thing');
+  keep('Hi\n\nBody\n\nKind regards,\nSam\n\n-----Original Message-----\nFrom: x\nSent: y');
+  // A closing word as the email's first words is the message.
+  assert.equal(withoutSignOff('Many thanks\nfor your reply.').kept, true);
+  assert.equal(signedEmail('Many thanks\nfor your reply.', SAM).text.startsWith('Many thanks\nfor your reply.'), true);
+  // The attached line stays in what is sent, above the signature.
+  const s = signedEmail('Hi\n\nBody\n\nThanks,\nSam\nFinance Director\n\nAttached: bill.pdf; letter.pdf.', SAM).text;
+  assert.match(s, /^Hi\n\nBody\n\nAttached: bill\.pdf; letter\.pdf\.\n\nThanks,\n\nSam Kahan MAAT/);
+});

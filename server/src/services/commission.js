@@ -199,7 +199,11 @@ export function lineVatRate(line, vatRate) {
 // charges no VAT, and must not read "VAT (20%): £0.00"), otherwise Greenco's
 // rate, applied line by line to the lines that aren't exempt.
 export function invoiceVatRate(lines, vatRate) {
-  return lines.length && lines.every((l) => l.commission_vat_exempt) ? 0 : Number(vatRate || 0);
+  // A £0 line isn't billed (the push leaves it off), so it doesn't decide
+  // whether the invoice charges VAT.
+  const billed = lines.filter((l) => (toPence(l.commission_amount) ?? 0) > 0);
+  const set = billed.length ? billed : lines;
+  return set.length && set.every((l) => l.commission_vat_exempt) ? 0 : Number(vatRate || 0);
 }
 
 // The invoice totals, with VAT worked out per line and then summed — which is
@@ -343,7 +347,7 @@ function fmtDate(iso) {
 // Build the commission invoice email (subject + text + HTML). `billing` is our
 // own name/address/bank details from config; `lines` are the logged contractor
 // invoices being claimed.
-export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billing = {} }) {
+export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billing = {}, signature = null }) {
   const period = `${fmtDate(invoice.period_start)} - ${fmtDate(invoice.period_end)}`;
   const subject = `${billing.name || 'Greenco'} commission invoice ${invoice.invoice_number} - ${monthLabel(
     String(invoice.period_end).slice(0, 7),
@@ -393,6 +397,8 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
     '',
     ...(billing.bank_details ? ['Payment details:', billing.bank_details, ''] : []),
     ...(invoice.notes ? [invoice.notes, ''] : []),
+    // The sender's signature, above the company footer.
+    ...(signature?.text ? [signature.text, ''] : []),
     billing.name || 'Greenco',
     billing.address || '',
     billing.vat_number ? `VAT registration: ${billing.vat_number}` : '',
@@ -486,6 +492,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
            </div>`
         : ''
     }
+    ${signature?.html ? `<div style="margin-top:20px;">${signature.html}</div>` : ''}
     <p style="margin-top:20px;font-size:12px;color:#6b7280;">
       ${escapeHtml(billing.name || 'Greenco')}${billing.address ? ` · ${escapeHtml(billing.address)}` : ''}
       ${billing.vat_number ? `<br>VAT registration ${escapeHtml(billing.vat_number)}` : ''}

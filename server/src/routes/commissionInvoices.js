@@ -411,7 +411,11 @@ router.post(
       [req.params.id],
     );
 
+    // Signed in full by the person sending it (lib/emailSignature.js),
+    // above the company's own footer.
+    const sig = config.signature.enabled ? signatureFor(req.user) : null;
     const mail = buildCommissionInvoiceEmail({
+      signature: sig,
       invoice: { ...invoice, notes: d.message || invoice.notes },
       contractor: { name: invoice.contractor_name },
       lines: lines.map((l) => ({
@@ -423,11 +427,8 @@ router.post(
     });
 
     // Signed in full by the person sending it (lib/emailSignature.js).
-    const sig = config.signature.enabled ? signatureFor(req.user) : null;
     await sendMail({
-      to, subject: mail.subject,
-      text: sig ? `${mail.text}\n\n${sig.text}` : mail.text,
-      html: sig ? `${mail.html}\n${sig.html}` : mail.html,
+      to, subject: mail.subject, text: mail.text, html: mail.html,
       attachments: sig ? signatureImages(config.signature.links) : undefined,
     });
 
@@ -704,14 +705,34 @@ router.post(
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
-    const { rows } = await query(
+    // Its lines are released first, as a void releases them (taking the
+    // contractor's CURRENT "exempt from VAT" setting): the database's own
+    // ON DELETE SET NULL would hand them back with the old one, and a
+    // re-raise would charge VAT the contractor was just marked exempt from.
+    const client = await pool.connect();
+    let rows;
+    try {
+      await client.query('BEGIN');
       // Never one that went across to Greenco Invoicing: it is numbered and
       // sent there, and deleting it here would leave it standing over there.
       // Nor one whose push failed: it may have landed there without our
       // learning its id, and deleting it loses the reference to find it by.
-      "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL AND external_error IS NULL RETURNING id",
-      [req.params.id],
-    );
+      const ok = (await client.query(
+        "SELECT id FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL AND external_error IS NULL FOR UPDATE",
+        [req.params.id],
+      )).rows[0];
+      if (ok) await releaseLinesOf(req.params.id, client);
+      rows = (await client.query(
+        "DELETE FROM commission_invoices WHERE id = $1 AND status IN ('draft', 'void') AND external_id IS NULL AND external_error IS NULL RETURNING id",
+        [req.params.id],
+      )).rows;
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     if (!rows[0]) {
       const { rows: exists } = await query('SELECT status, external_id FROM commission_invoices WHERE id = $1', [
         req.params.id,

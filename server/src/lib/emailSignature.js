@@ -96,17 +96,35 @@ export const signatureAssetPath = (file) => (/^[a-z]+\.(png|jpg)$/.test(file) ? 
 const CLOSING = /^[ \t]*(?:kind regards|best regards|warm regards|regards|best wishes|many thanks|thanks|thank you|yours sincerely|yours faithfully),?[ \t]*$/i;
 
 // The email without its short sign-off, so the full signature replaces it:
-// the last closing line ("Kind regards,") and the few short lines after it
-// (the name, title and "Greenco" the draft was signed with). A closing
-// followed by anything longer (a P.S., a quoted email) is left alone, and
-// the signature then goes under it without a second "Kind regards".
+// the last closing line ("Kind regards,") and ONLY what a sign-off is after
+// it: a name, a job title, "Greenco", a [Name]/[Job title] placeholder.
+// Anything else there (a sentence, a P.S., a quoted email) means it isn't
+// the sign-off, or more follows it: nothing is removed (`kept`), and the
+// signature goes under it without a second closing. An "Attached: …" line
+// (withAttachedLine) is kept in the body, never removed with the sign-off.
+const ATTACHED = /^\s*Attached:/i;
+const SIGN_LINE = (l) => {
+  const t = l.trim();
+  if (!t) return true;
+  if (/^\[[^\]]{1,30}\]$/.test(t)) return true; // [Name], [Job title]
+  if (t.length > 60 || t.split(/\s+/).length > 7) return false;
+  if (/[.?!:;]$/.test(t) && !/\b(?:ltd|plc|co)\.$/i.test(t)) return false;
+  if (/^(?:p\.?s\b|-{2,}|_{2,}|>|from\b|sent\b|to\b|subject\b|on\s.+wrote)/i.test(t)) return false;
+  return true;
+};
 export function withoutSignOff(body) {
   const lines = String(body ?? '').replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (!CLOSING.test(lines[i])) continue;
-    const tail = lines.slice(i + 1).filter((l) => l.trim());
-    if (tail.length <= 6 && tail.every((l) => l.trim().length <= 80)) {
-      return { head: lines.slice(0, i).join('\n').replace(/\s+$/, ''), closing: lines[i].trim().replace(/,?$/, ','), kept: false };
+    // A closing with nothing before it is the message itself ("Many thanks
+    // for your reply" as an email's first words), not a sign-off.
+    const before = lines.slice(0, i).join('\n').trim();
+    const tail = lines.slice(i + 1);
+    const attached = tail.filter((l) => ATTACHED.test(l));
+    const rest = tail.filter((l) => !ATTACHED.test(l));
+    if (before && rest.every(SIGN_LINE)) {
+      const head = [before, ...attached.map((l) => l.trim())].join('\n\n');
+      return { head, closing: lines[i].trim().replace(/,?$/, ','), kept: false };
     }
     return { head: lines.join('\n'), closing: null, kept: true };
   }
