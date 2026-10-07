@@ -761,6 +761,13 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — the gap check no longer blocks our own reference in a subject
+- `lib/signature.js#gapIn(subject, body)`: "[GC-C-BLV2WK]" (in every Send's
+  default subject, so replies file themselves), mail-system tags
+  ("[EXTERNAL]", "[Ticket #123]", "[850123456]") and "[image: …]" are not
+  gaps; in a subject only a clear placeholder ("[insert date]") is. Since
+  6 Oct every send with the default subject was refused.
+
 ### 2026-10-07 — fixes from a review of the signature and the VAT exemption
 - **The full signature only replaces a real sign-off**
   (`emailSignature.js#withoutSignOff`): after the last closing line, only

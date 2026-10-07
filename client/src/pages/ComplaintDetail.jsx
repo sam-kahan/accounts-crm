@@ -2520,7 +2520,7 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]{3,}\]/.test(send.body)) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
+                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]*[a-z][^\]\n]*\]/.test(send.body)) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
               >
                 {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
@@ -2563,7 +2563,7 @@ export default function ComplaintDetail() {
               file, and each document on this complaint (as many as an email can carry; any left over are named in
               the email). It is recorded as referred, dated the day it goes.
               {send.note && <div style={{ marginTop: 6 }}><strong>{send.scheme || send.ombudsman} says:</strong> {send.note}</div>}
-              {/\[[^\]\n]{3,}\]/.test(send.body) && (
+              {/\[[^\]\n]*[a-z][^\]\n]*\]/.test(send.body) && (
                 <div className="login-error" style={{ marginTop: 6 }}>Fill in the parts in [square brackets] before sending.</div>
               )}
             </div>

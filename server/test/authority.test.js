@@ -90,7 +90,7 @@ test('the drafts: no gap in the reply; the landlord email needs their name', () 
   assert.match(reply.body, /Thank you for your email of 3 October 2026\. As requested, please find attached the landlord's authority for Greenco to act on account 2186700/);
   assert.equal(gapIn(reply.subject, reply.body.replace('[Name]', 'Sam').replace('[Job title]', 'FD')), null);
   const ask = landlordRequestDraft(C, C, a, null);
-  assert.equal(gapIn(ask.body.replace('[Name]', 'Sam').replace('[Job title]', 'FD')), '[Landlord name]');
+  assert.equal(gapIn('', ask.body.replace('[Name]', 'Sam').replace('[Job title]', 'FD')), '[Landlord name]');
   assert.match(landlordRequestDraft(C, C, a, 'Mr Lau').body, /^Dear Mr Lau,/);
 });
 

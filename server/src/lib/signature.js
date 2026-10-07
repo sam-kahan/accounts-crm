@@ -57,15 +57,27 @@ export function ensureSignOff(body) {
   return `${head}\n\nKind regards,\n\n[Name]\n[Job title]\nGreenco`;
 }
 
-// A gap left to fill in: anything of a few words in [square brackets] once
-// [Name] / [Job title] are filled ("[Paste our email of 16 September here]",
-// "[date]"). Nothing goes to an organisation or an ombudsman with one. Not
-// "[sic]", or an address or link a quoted email carries in brackets.
-export const GAP_RE = /\[(?!\s*sic\s*\])(?![^\]\n]*(?:@|:\/\/|cid:|mailto:))[^\]\n]{3,}\]/i;
-export function gapIn(...texts) {
-  for (const t of texts) {
-    const m = String(t ?? '').match(GAP_RE);
-    if (m) return m[0];
+// A gap left to fill in, once [Name] / [Job title] are filled: "[Paste our
+// email of 16 September here]", "[date]", "[Landlord name]". Nothing goes to
+// an organisation or an ombudsman with one. NOT a gap: our own reference in
+// a subject ("[GC-C-BLV2WK]", put there so replies file themselves), a tag a
+// mail system adds ("[EXTERNAL]", "[Ticket #12345]", "[850123456]"), an
+// image or address a quoted email carries ("[image: logo]", "[mailto:…]"),
+// "[sic]". A subject counts only a clear placeholder: its tags vary too much.
+const notGap = (c) => /^\s*sic\s*$/i.test(c) ||
+  /@|:\/\/|cid:|mailto:|^\s*image\s*:/i.test(c) ||
+  !/[a-z]/.test(c) || // capitals, numbers, codes
+  /^\s*(?:ticket|ref|our\s+ref|your\s+ref|case|ext|external|secure|spam|encrypt\w*|fwd?|re)\b/i.test(c);
+const PLACEHOLDER = /\b(?:name|date|amount|address|insert|paste|add|enter|fill|details?|title|number|here|tbc|xx+)\b/i;
+const BRACKETS = /\[([^\]\n]{3,})\]/g;
+export const GAP_RE = /\[[^\]\n]{3,}\]/; // the shape only; gapIn decides
+export function gapIn(subject, body = '') {
+  for (const [text, isSubject] of [[subject, true], [body, false]]) {
+    for (const m of String(text ?? '').matchAll(BRACKETS)) {
+      if (notGap(m[1])) continue;
+      if (isSubject && !PLACEHOLDER.test(m[1])) continue;
+      return m[0];
+    }
   }
   return null;
 }

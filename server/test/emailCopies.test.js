@@ -84,9 +84,17 @@ test('an item already on file from an earlier pass is worked out again', () => {
 
 test('a gap in square brackets is found; [Name] once filled, [sic] and bracketed addresses are not gaps', () => {
   assert.equal(gapIn('Hello', '[Paste our email of 16 September 2026 here]'), '[Paste our email of 16 September 2026 here]');
-  assert.equal(gapIn('The amount was [amount].'), '[amount]');
-  assert.equal(gapIn('They wrote "recieved" [sic].'), null);
-  assert.equal(gapIn('From: Jo [mailto:jo@eon.com]'), null);
-  assert.equal(gapIn('See [https://eon.com/complaints]'), null);
-  assert.equal(gapIn('Kind regards,\nSam Kahan'), null);
+  assert.equal(gapIn('', 'The amount was [amount].'), '[amount]');
+  assert.equal(gapIn('', 'They wrote "recieved" [sic].'), null);
+  assert.equal(gapIn('', 'From: Jo [mailto:jo@eon.com]'), null);
+  assert.equal(gapIn('', 'See [https://eon.com/complaints]'), null);
+  assert.equal(gapIn('', 'Kind regards,\nSam Kahan'), null);
+  // Our own reference and mail-system tags are never gaps (every Send's
+  // default subject carries "[GC-C-…]").
+  for (const subj of ['Re: Final bill [GC-C-BLV2WK]', 'Complaint referral: E.ON, account 123 [GC-C-3NXGAW]', 'Re: [EXTERNAL] Your account', '[Ticket #12345] Re: bill', '[SPAM] x', '[Secure] statement', '[850123456] billing', '[Our ref: GC-C-ABC123] reply']) {
+    assert.equal(gapIn(subj, 'Body.'), null, subj);
+  }
+  assert.equal(gapIn('', 'Logo below [image: logo]'), null);
+  assert.equal(gapIn('Re: bill [insert date]', ''), '[insert date]');
+  assert.equal(gapIn('', 'Dear [Landlord name],'), '[Landlord name]');
 });
