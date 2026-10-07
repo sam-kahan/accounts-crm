@@ -813,7 +813,7 @@ export default function ComplaintDetail() {
     if (a.state === 'sent') {
       return <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>{a.text}</div>;
     }
-    const act = a.state === 'on_file' || a.state === 'missing';
+    const act = a.state === 'on_file' || a.state === 'missing' || a.state === 'landlord_replied';
     return (
       <div className={`inline-note ${act ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 15 }}>
@@ -821,9 +821,9 @@ export default function ComplaintDetail() {
           <strong>Authority:</strong> {a.text}
         </div>
         <div className="btn-row" style={{ marginTop: 8 }}>
-          {a.state === 'on_file' && (
+          {(a.state === 'on_file' || a.state === 'landlord_replied') && (
             <button className="btn-primary btn-sm" disabled={Boolean(authBusy)} onClick={sendAuthority}>
-              {authBusy === 'reply' ? 'Drafting…' : `Send ${a.org_name} the authority…`}
+              {authBusy === 'reply' ? 'Drafting…' : a.state === 'landlord_replied' ? `Send ${a.org_name} the landlord’s reply…` : `Send ${a.org_name} the authority…`}
             </button>
           )}
           {a.state === 'missing' && (
@@ -1605,7 +1605,7 @@ export default function ComplaintDetail() {
             const authFirst = c.authority?.action && c.state === 'open' && !c.authority.party_id;
             const aiStep = !authFirst && c.ai_review_current && headlineOf(c.ai_review);
             // Without the AI's view, each organisation's own next step, named.
-            const text = authFirst ? (c.authority.state === 'on_file' ? `Send ${c.authority.org_name} the landlord's authority (above).` : 'Ask the landlord for their authority (above).') : aiStep || (multi
+            const text = authFirst ? (c.authority.state === 'missing' ? 'Ask the landlord for their authority (above).' : `Send ${c.authority.org_name} the landlord's authority (above).`) : aiStep || (multi
               ? tracks.filter((t) => t.nextAction).map((t) => `${t.org_name}: ${t.nextAction}`).join(' ')
               : c.nextAction);
             if (!text) return null;

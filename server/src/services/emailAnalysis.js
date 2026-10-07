@@ -5,7 +5,7 @@ import { todayISO } from '../lib/dates.js';
 import { contentFor } from './invoiceExtract.js';
 import { trackOpen, awaitingFirstEmail } from './complaintRules.js';
 import { cachedSystem, track } from './aiUsage.js';
-import { asksForAuthority } from './authority.js';
+import { asksForAuthority, ownText } from './authority.js';
 
 // ---------------------------------------------------------------------------
 // Reads an email that arrived for a complaint — usually one a colleague has
@@ -252,9 +252,15 @@ export function couldChangeDate(a, text = '') {
   // is a request, not their response, however often the thread's subject
   // says "Stage 2": it sets no date (authority.js handles what to do).
   // Utility Warehouse's of 3 Oct waited for a person because of it.
-  if (asksForAuthority(words) && !RESPONSE_WORDS.test(words)) return false;
+  // Only when nothing in it reads as an acknowledgement or an answer.
+  if (asksForAuthority(words) && !RESPONSE_WORDS.test(words) && !ANSWER_WORDS.test(`${a?.summary || ''}\n${ownText(String(text || '').replace(/^[^\n]*\n/, ''))}`)) return false;
   return true;
 }
+
+// An acknowledgement or answer in other words ("we have reviewed your
+// complaint", "our Stage 1 response"); read without the subject line, which
+// on every reply to a Stage 2 request says "Stage 2 review".
+const ANSWER_WORDS = /\b(?:acknowledg\w*|received\s+your\s+complaint|reviewed\s+(?:your|the)\s+complaint|(?:stage\s*(?:1|2|one|two)|our|final)\s+(?:response|decision|outcome)|investigat(?:ed|ion)\s+(?:your|the)\s+complaint|(?:not\s+)?upheld|unable\s+to\s+offer|(?:refund|credit|compensation|goodwill)\s+(?:of|has\s+been|will\s+be))\b/i;
 
 // Words only a complaint RESPONSE uses (not "Stage 2", which every reply to
 // a Stage 2 request quotes in its subject).

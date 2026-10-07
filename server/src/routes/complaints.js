@@ -57,7 +57,10 @@ import {
   attachmentUpload,
   attachmentBlocks,
   procedureMemoryUpload,
+  saveAttachmentBuffer,
 } from '../services/attachments.js';
+import { textPdf } from '../lib/pdf.js';
+import { copyText } from '../services/emailCopies.js';
 import { contentFor } from '../services/invoiceExtract.js';
 
 const router = Router();
@@ -422,6 +425,12 @@ router.post(
 // The organisation said Greenco isn't authorised. With the authority on file
 // (here, or on another complaint about the same account), the reply sending
 // it; without, the email asking the landlord for it. Both no AI.
+// "support.uw.co.uk" and "uw.co.uk" are one organisation's.
+const baseDomain = (d) => {
+  const parts = String(d || '').toLowerCase().split('.').filter(Boolean);
+  const n = parts.length >= 3 && /^(?:co|org|ac|gov|ltd|plc|me|net|sch|nhs)$/.test(parts[parts.length - 2]) ? 3 : 2;
+  return parts.slice(-n).join('.');
+};
 async function authorityOf(id) {
   const { rows } = await query('SELECT * FROM complaints WHERE id = $1', [id]);
   if (!rows[0]) throw new HttpError(404, 'Complaint not found');
@@ -435,8 +444,24 @@ router.post(
   asyncHandler(async (req, res) => {
     const c = await authorityOf(req.params.id);
     const a = c.authority;
-    if (a.state !== 'on_file') throw new HttpError(409, 'There is no authority on file to send: ask the landlord for it.');
-    const doc = await authorityDocHere(c.id, a.doc);
+    let doc;
+    if (a.state === 'landlord_replied') {
+      // Their reply IS the authority (the draft asked for "a reply saying
+      // so"): a PDF of their email, kept as a document, goes with it.
+      const em = (await query('SELECT * FROM complaint_emails WHERE id = $1 AND complaint_id = $2', [a.reply_email_id, c.id])).rows[0];
+      if (!em) throw new HttpError(409, 'The landlord’s reply couldn’t be found.');
+      const body = em.body_text || em.body_preview || '';
+      const day = ukDate(londonDateOf(new Date(em.received_at)));
+      doc = await saveAttachmentBuffer(c.id, {
+        filename: `Landlord authority - email of ${day.slice(4)}.pdf`,
+        mimetype: 'application/pdf',
+        buffer: textPdf({ title: `The landlord's email of ${day}`, text: copyText([em], [body]) }),
+      }, em.id, { description: `Letter of authority: the landlord's email of ${day} authorising Greenco to act on the account` });
+    } else if (a.state === 'on_file') {
+      doc = await authorityDocHere(c.id, a.doc);
+    } else {
+      throw new HttpError(409, 'There is no authority on file to send: ask the landlord for it.');
+    }
     if (!doc) throw new HttpError(409, 'The authority document couldn’t be found. Upload it to this complaint.');
     const track = a.party_id ? c.parties.find((p) => p.id === a.party_id) : c;
     const asked = (await query('SELECT subject, sender_email FROM complaint_emails WHERE id = $1', [a.asked_email_id])).rows[0];
@@ -472,6 +497,22 @@ router.post(
     const c = await authorityOf(req.params.id);
     const to = parseRecipients(d.to);
     if (to.length !== 1) throw new HttpError(400, 'Give the landlord’s one email address.');
+    // The landlord's address files everything to and from it as landlord
+    // correspondence: never one of ours, or the organisation's (their
+    // emails would stop being read as theirs).
+    const addr = to[0].toLowerCase();
+    const dom = addr.split('@')[1] || '';
+    const ours = String(config.complaintEmail.domain || '').toLowerCase();
+    const orgAddrs = [c, ...(c.parties || [])].map((t) => String(t.org_email || '').toLowerCase()).filter(Boolean);
+    const theirs = (await query(
+      `SELECT DISTINCT lower(sender_email) AS a FROM complaint_emails
+        WHERE complaint_id = $1 AND direction <> 'outbound' AND removed_org IS NULL AND sender_email IS NOT NULL`, [c.id],
+    )).rows.map((x) => x.a).filter((x) => !x.endsWith(`@${ours}`));
+    const PUBLIC = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|btinternet|sky|virginmedia|talktalk|protonmail|proton|gmx|mail)\./;
+    if ((ours && dom === ours) || orgAddrs.includes(addr) || theirs.includes(addr) ||
+      (!PUBLIC.test(dom) && [...orgAddrs, ...theirs].some((x) => baseDomain(x.split('@')[1]) === baseDomain(dom)))) {
+      throw new HttpError(400, `${addr} is ${ours && dom === ours ? 'a Greenco address' : 'the organisation’s address'}, not the landlord’s.`);
+    }
     const cc = parseRecipients(d.cc);
     const subject = signEmail(d.subject, req.user);
     const body = signEmail(d.body.replace(/\[\s*landlord(?:['’]s)?\s+name\s*\]/gi, () => d.landlord_name), req.user);
@@ -1899,7 +1940,8 @@ router.get(
       const r = rows[0];
       const reviewedOn = r.ai_reviewed_at ? londonDateOf(new Date(r.ai_reviewed_at)) : null;
       const wanted = r.review_wanted_at && (!r.ai_reviewed_at || new Date(r.review_wanted_at) > new Date(r.ai_reviewed_at));
-      if (config.anthropic.enabled && r.state === 'open' && r.ai_review && !decorated.ai_review_current &&
+      // Only for someone who may change the complaint: it is a paid call.
+      if (config.anthropic.enabled && can(req.user, 'complaints', 'edit') && r.state === 'open' && r.ai_review && !decorated.ai_review_current &&
         !wanted && reviewedOn && reviewedOn < todayISO()) scheduleReview(r.id, 3000);
     }
     const events = await listEvents(req.params.id);

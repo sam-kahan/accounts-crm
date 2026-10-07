@@ -115,3 +115,34 @@ test('an authority request is not their response: it files itself, whatever stag
   assert.equal(plan.auto, true);
   assert.equal(plan.reviewedAs, 'correspondence');
 });
+
+test('a disclaimer, a direct debit or a "you are now authorised" is never an authority request', () => {
+  for (const t of [
+    'If you are not the intended recipient you are not authorised to use, copy or disclose it',
+    'This message has not been authorised by the company',
+    'No further action is required, you are now authorised on the account.',
+    'We have not received authorisation for the direct debit.',
+    'If you have any questions, the account holder should contact us.',
+    'There is no need for a letter of authority, we have it.',
+    'If you are not happy the bill payer can contact the Ombudsman.',
+  ]) assert.equal(asksForAuthority(t), false, t);
+  assert.ok(asksForAuthority('You are not registered as a third party on this account.'));
+  // The disclaimer under a reply is cut off before it is read.
+  const e = { ...UW, analysis: { kind: 'other', from_organisation: true, summary: 'Your final bill is attached.' }, body_text: 'Your final bill is attached.\n\nThis email is confidential and intended solely for the addressee. If you are not the intended recipient you are not authorised to read it.' };
+  assert.equal(authorityState({ complaint: C, emails: [e], docs: [], ourDomain: OURS }), null);
+});
+
+test('payment and other consents are not a landlord’s authority', () => {
+  for (const f of ['Direct Debit mandate.pdf', 'Payment authorisation receipt.pdf', 'Card payment authorization.png', 'Planning authorisation.pdf', 'Consent form - smart meter install.pdf', 'Local authority letter of authority council tax.pdf']) {
+    assert.equal(isAuthorityDoc({ filename: f }), false, f);
+  }
+});
+
+test('the landlord replied: send their reply on', () => {
+  const asked = { id: 'e3', direction: 'outbound', removed_org: LANDLORD, to_addresses: ['lau@gmail.com'], received_at: '2026-10-06T11:00:00Z' };
+  const reply = { id: 'e6', direction: 'inbound', removed_org: LANDLORD, sender_email: 'lau@gmail.com', received_at: '2026-10-06T15:00:00Z', analysis: {} };
+  const a = authorityState({ complaint: C, emails: [UW, asked, reply], docs: [], ourDomain: OURS });
+  assert.equal(a.state, 'landlord_replied');
+  assert.equal(a.reply_email_id, 'e6');
+  assert.equal(authorityStep(a, 'UW').action, true);
+});

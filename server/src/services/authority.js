@@ -21,7 +21,6 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { londonDateOf } from '../lib/dates.js';
 import { ukDate } from './complaintRules.js';
-import { sameProperty } from './orgMatch.js';
 
 // The tag on emails to or from the landlord (complaint_emails.removed_org,
 // complaint_events.removed_org): correspondence with the landlord is never
@@ -30,31 +29,44 @@ import { sameProperty } from './orgMatch.js';
 // out, exactly as it does an organisation taken off the complaint.
 export const LANDLORD = 'the landlord';
 
-// What a supplier writes when it won't deal with Greenco without authority.
-// A negative before "authorised/authority/permission/consent", a named
-// authority document, or the account holder being asked to get in touch.
+// What a supplier writes when it won't deal with Greenco without authority:
+// that it can't see Greenco is authorised, that Greenco isn't authorised ON
+// THE ACCOUNT (never "you are not authorised to read this email"), that it
+// can't discuss it without the account holder's say-so, a positive ask for
+// a letter of authority, or the account holder being asked to get in touch
+// to authorise. Read on the email's own text with any disclaimer cut off.
 const NOT_AUTHORISED = new RegExp([
-  String.raw`\b(?:not|no|cannot|can['’]?t|unable\s+to|isn['’]?t|aren['’]?t|haven['’]?t|hasn['’]?t|without)\b[^.\n]{0,80}?\b(?:authori[sz]ed|authori[sz]ation|authority|permission|consent)\b`,
-  String.raw`\b(?:letter|form)\s+of\s+authority\b|\bauthority\s+form\b|\bthird[-\s]party\s+(?:authority|authori[sz]ation|consent|access)\b`,
-  String.raw`\b(?:account\s*holder|bill\s*payer|named\s+customer)\b[^.\n]{0,80}?\b(?:contact|call|get\s+in\s+touch|authori[sz]e|add\s+you|give\s+(?:us\s+)?(?:permission|consent))\b`,
+  String.raw`\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.\n]{0,60}?\b(?:authori[sz]ed|authority|permission|consent)\b`,
+  String.raw`\b(?:is|are|isn['’]t|aren['’]t)\s+(?:not\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:third\s+party\s+)?on\s+(?:the|this|their|his|her|mr|mrs|ms|miss)\b|to\s+(?:discuss|deal|act|speak|manage)\b|(?:as\s+)?(?:an?\s+)?(?:third\s+party|representative))`,
+  String.raw`\b(?:unable|cannot|can['’]t|not\s+able)\s+to\s+(?:discuss|disclose|deal\s+with|speak|share|act|go\s+into)\b[^.\n]{0,80}?\b(?:without|unless|until)\b[^.\n]{0,60}?\b(?:authori[sz]|permission|consent|account\s*holder|bill\s*payer|named\s+customer)`,
+  String.raw`\b(?:please\s+(?:send|provide|supply|forward)|we\s+(?:will\s+)?(?:need|require)|(?:you\s+)?will\s+need\s+to\s+(?:send|provide))\b[^.\n]{0,60}?\b(?:letter\s+of\s+authority|authority\s+form|written\s+(?:authority|consent|permission)|third[-\s]party\s+(?:authority|authori[sz]ation|consent))`,
+  String.raw`\b(?:account\s*holder|bill\s*payer|named\s+customer)\b[^.\n]{0,40}?\b(?:to|will\s+need\s+to|needs?\s+to|must|should)\s+(?:contact|call|get\s+in\s+touch\s+with)\b[^.\n]{0,60}?\b(?:authori[sz]|add\s+(?:you|greenco|them)|permission|consent)`,
 ].join('|'), 'i');
+
+// A disclaimer or signature block is not what the email says.
+const DISCLAIMER = /\n[^\n]*\b(?:this\s+(?:e-?mail|message)\b[^\n]{0,80}\b(?:confidential|intended\s+(?:solely|only)?\s*for)|if\s+you\s+are\s+not\s+the\s+intended\s+recipient|disclaimer|confidentiality\s+notice|registered\s+(?:office|in\s+england))/i;
 
 // Text earlier in a thread, quoted under a reply, is not what this email says.
 export function ownText(body) {
-  const s = String(body || '');
+  let s = String(body || '');
   const cut = s.search(/\n\s*(?:-{2,}\s*Original Message|From:\s|On .{5,120}wrote:|Sent from my|_{5,})/i);
-  return (cut > 0 ? s.slice(0, cut) : s).slice(0, 3000);
+  if (cut > 0) s = s.slice(0, cut);
+  const d = s.search(DISCLAIMER);
+  if (d > 0) s = s.slice(0, d);
+  return s.slice(0, 3000);
 }
 
-export const asksForAuthority = (text) => NOT_AUTHORISED.test(String(text || ''));
+export const asksForAuthority = (text) => NOT_AUTHORISED.test(String(text || '').replace(/\s+/g, ' '));
 
-// A document that IS an authority: its label or name says so. "Local
-// authority" (a council tax bill) is not; the words have to be about
-// authorising someone to act.
-const AUTH_DOC = /\b(?:letter\s+of\s+authority|authority\s+(?:letter|form|to\s+(?:act|deal|discuss|speak|manage))|authori[sz]ation(?:\s+(?:letter|form))?|authori[sz]es?\s+greenco|authori[sz]ing\s+greenco|authority\s+for\s+greenco|consent\s+(?:form|to\s+(?:act|share|discuss))|third[-\s]party\s+(?:authority|consent|authori[sz]ation)|mandate)\b|(?:^|[^a-z])loa(?:[^a-z]|$)/i;
+// A document that IS a landlord's authority for Greenco: a letter of
+// authority, or something authorising Greenco (or a third party) to act on
+// the account. Never a payment or Direct Debit "mandate"/"authorisation", a
+// planning or council letter, or a consent form for something else.
+const AUTH_DOC = /\b(?:letter\s+of\s+authority|authority\s+(?:letter|form|to\s+(?:act|deal|discuss|speak|manage))|authority\s+for\s+greenco|authori[sz](?:es?|ed|ing)\s+greenco|authori[sz]ation\s+(?:for\s+greenco|to\s+(?:act|deal|discuss|speak))|third[-\s]party\s+(?:authority|consent|authori[sz]ation)|consent\s+to\s+(?:act|share|discuss))\b|(?:^|[^a-z])loa(?:[^a-z]|$)/i;
+const NOT_AUTH_DOC = /\b(?:direct\s+debit|payment|card|bank|planning|council\s+tax|smart\s+meter|installation|install|local\s+authority\s+(?:bill|letter|notice))\b/i;
 export function isAuthorityDoc(doc) {
   const text = `${doc?.description || ''} ${doc?.filename || ''}`;
-  if (/\blocal\s+authority\b/i.test(text) && !/\b(?:letter\s+of\s+authority|authori[sz]ation|authority\s+to\s+act)\b/i.test(text)) return false;
+  if (NOT_AUTH_DOC.test(text) && !/\bletter\s+of\s+authority\b[^.]{0,40}\bgreenco\b|\bauthori[sz](?:es?|ed|ing)\s+greenco\b/i.test(text)) return false;
   return AUTH_DOC.test(text);
 }
 
@@ -105,6 +117,12 @@ export function authorityState({ complaint, emails = [], docs = [], outbox = [],
   }
   const asked = emails.filter((e) => e.removed_org === LANDLORD && e.direction === 'outbound' && sentOn(e) >= askedOn)
     .sort((a, b) => (sentOn(a) < sentOn(b) ? 1 : -1))[0];
+  // The landlord wrote back (the draft says a reply is enough), with nothing
+  // attached that reads as a letter of authority: a person reads it, and
+  // sends it on (as a PDF of their email) if it gives the authority.
+  const reply = emails.filter((e) => e.removed_org === LANDLORD && e.direction !== 'outbound' && sentOn(e) >= askedOn)
+    .sort((a, b) => (sentOn(a) < sentOn(b) ? 1 : -1))[0];
+  if (reply) return { ...base, state: 'landlord_replied', reply_email_id: reply.id, replied_on: sentOn(reply) };
   if (asked) return { ...base, state: 'asked_landlord', landlord_asked_on: sentOn(asked) };
   return { ...base, state: 'missing' };
 }
@@ -115,6 +133,7 @@ export function authorityStep(a, orgName) {
   const when = ukDate(a.asked_on);
   if (a.state === 'sent') return { action: false, text: `${orgName} said on ${when} that Greenco isn't authorised on the account; the landlord's authority was sent to them on ${ukDate(a.sent_on)}.` };
   if (a.state === 'on_file') return { action: true, text: `${orgName} said on ${when} that Greenco isn't authorised on the account. The landlord's authority is on file (${a.doc.filename}${a.elsewhere ? `, from ${a.doc.ref_code}` : ''}): send it to them.` };
+  if (a.state === 'landlord_replied') return { action: true, text: `${orgName} said on ${when} that Greenco isn't authorised on the account. The landlord replied on ${ukDate(a.replied_on)}: if their reply gives Greenco their authority, send it to ${orgName} (it goes as a PDF of their email).` };
   if (a.state === 'asked_landlord') return { action: false, text: `${orgName} said on ${when} that Greenco isn't authorised on the account. The landlord was asked for their authority on ${ukDate(a.landlord_asked_on)}: send it to ${orgName} when it arrives.` };
   return { action: true, text: `${orgName} said on ${when} that Greenco isn't authorised on the account, and no authority from the landlord is on file: email the landlord for it.` };
 }
@@ -123,21 +142,34 @@ export function authorityStep(a, orgName) {
 // complaint with the same account number or property. One query for all.
 export async function authorityDocsFor(rows) {
   if (!rows.length) return new Map();
+  // Only this complaint's documents, and those of complaints sharing one of
+  // its account numbers (6+ characters: the same account is the same
+  // customer) or EXACTLY its property, postcode and all. Never a looser
+  // property match: the flats in one block have different landlords, and
+  // sending a supplier another landlord's authority is a data breach.
+  const norm = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const propKey = (p) => (/[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}/i.test(String(p || '')) ? norm(p) : null);
+  const accounts = [...new Set(rows.flatMap((r) => (r.account_numbers || []).map(norm)).filter((n) => n.length >= 6))];
+  const props = [...new Set(rows.map((r) => propKey(r.property)).filter(Boolean))];
   const { rows: docs } = await query(
     `SELECT a.id, a.filename, a.description, a.complaint_id, a.source_email_id, a.uploaded_at,
             c.ref_code, c.account_numbers, c.property
        FROM complaint_attachments a JOIN complaints c ON c.id = a.complaint_id
-      WHERE COALESCE(a.description, '') || ' ' || a.filename ~* '(authori[sz]|consent|mandate|loa)'
+      WHERE (COALESCE(a.description, '') || ' ' || a.filename) ~* '(authori[sz]|authority|consent|loa)'
+        AND (a.complaint_id = ANY($1::uuid[])
+             OR EXISTS (SELECT 1 FROM unnest(c.account_numbers) n WHERE upper(regexp_replace(n, '[^A-Za-z0-9]', '', 'g')) = ANY($2::text[]))
+             OR upper(regexp_replace(COALESCE(c.property, ''), '[^A-Za-z0-9]', '', 'g')) = ANY($3::text[]))
       ORDER BY a.uploaded_at DESC`,
+    [rows.map((r) => r.id), accounts, props],
   );
   const auth = docs.filter(isAuthorityDoc);
-  const norm = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const out = new Map();
   for (const r of rows) {
     const mine = new Set((r.account_numbers || []).map(norm).filter((n) => n.length >= 6));
+    const myProp = propKey(r.property);
     const related = auth.filter((d) => d.complaint_id === r.id ||
       (d.account_numbers || []).some((n) => mine.has(norm(n))) ||
-      (r.property && d.property && sameProperty(r.property, d.property)));
+      (myProp && propKey(d.property) === myProp));
     // This complaint's own first, newest first.
     related.sort((a, b) => (a.complaint_id === r.id) === (b.complaint_id === r.id) ? 0 : a.complaint_id === r.id ? -1 : 1);
     out.set(r.id, related);
@@ -204,8 +236,11 @@ export async function authorityForMany(rows) {
   const { rows: hits } = await query(
     `SELECT DISTINCT complaint_id FROM complaint_emails
       WHERE complaint_id = ANY($1::uuid[]) AND direction <> 'outbound' AND removed_org IS NULL
-        AND (COALESCE(analysis->>'summary', '') || ' ' || COALESCE(left(body_text, 3000), body_preview, ''))
-            ~* '(authori[sz]|permission|consent|account ?holder|bill ?payer)'`,
+        -- A wide net (the rule itself decides), on the summary and the start
+        -- of the email: a disclaimer sits at the end, and would let almost
+        -- every email through to the full read.
+        AND (COALESCE(analysis->>'summary', '') || ' ' || left(COALESCE(body_text, body_preview, ''), 1500))
+            ~* '(authori[sz]|authority|permission|consent|account ?holder|bill ?payer|named customer)'`,
     [rows.map((r) => r.id)],
   );
   const want = rows.filter((r) => hits.some((h) => h.complaint_id === r.id));

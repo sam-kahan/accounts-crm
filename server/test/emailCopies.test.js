@@ -98,3 +98,12 @@ test('a gap in square brackets is found; [Name] once filled, [sic] and bracketed
   assert.equal(gapIn('Re: bill [insert date]', ''), '[insert date]');
   assert.equal(gapIn('', 'Dear [Landlord name],'), '[Landlord name]');
 });
+
+test('only a gap about pasting THIS email is filled', () => {
+  const copy = [{ day: '2026-09-16', ours: true }];
+  for (const g of ['[Insert landlord email address]', '[Include the tenant email]', '[Insert their email of 3 October]', '[Paste our email of 3 October 2026 here]']) {
+    assert.equal(fillPasteGaps(`A\n\n${g}\n\nB`, copy), `A\n\n${g}\n\nB`, g);
+  }
+  assert.equal(fillPasteGaps('[Paste our email of 16 September 2026 here]', copy), 'A copy of our email of 16 September 2026 is attached.');
+  assert.equal(fillPasteGaps('[Copy of the email]', copy), 'A copy of our email of 16 September 2026 is attached.');
+});

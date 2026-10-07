@@ -761,6 +761,36 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — fixes from a review of the authority changes
+- **An email disclaimer is never an authority request**
+  (`authority.js#asksForAuthority`): only "can't see you are authorised",
+  "not authorised/registered ON the account / TO discuss", "can't discuss
+  without the account holder's permission", a positive ask for a letter of
+  authority, or the account holder asked to get in touch to authorise; read
+  on `ownText` with any disclaimer cut off. "If you are not the intended
+  recipient you are not authorised…" put nearly every complaint under
+  Action needed ("email the landlord").
+- **`couldChangeDate`** files an authority request by itself only when the
+  email's own words (not its subject, not a quoted email) have no
+  acknowledgement or answer (`ANSWER_WORDS`).
+- **`isAuthorityDoc`**: a letter of authority, or a document authorising
+  Greenco to act; never a Direct Debit mandate, a payment or card
+  authorisation, planning, council tax or a smart-meter consent form.
+- **Another landlord's letter is never used**: `authorityDocsFor` takes
+  this complaint's documents, or those of a complaint with the same account
+  number (6+ characters) or EXACTLY the same property with its postcode (no
+  looser match: flats in one block have different landlords). Scoped in SQL.
+- **The landlord's address is checked**: never ours, the organisation's, or
+  the organisation's domain (`baseDomain`: support.uw.co.uk is uw.co.uk).
+- **The landlord replied** (state `landlord_replied`, Action needed): **Send
+  <org> the landlord's reply…** attaches a PDF of their email as the
+  authority (the draft asks for "a reply saying so").
+- Opening a complaint asks for a fresh review only for someone with edit
+  access (it is a paid call). Also: "[Paste … email …]" is filled only when
+  the gap's date and owner are the copy's (never "[Insert landlord email
+  address]"); a requested item keeps `email_date`; long PDF titles are
+  shortened to fit.
+
 ### 2026-10-07 — the gap check no longer blocks our own reference in a subject
 - `lib/signature.js#gapIn(subject, body)`: "[GC-C-BLV2WK]" (in every Send's
   default subject, so replies file themselves), mail-system tags

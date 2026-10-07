@@ -146,6 +146,9 @@ function contextBlock(input) {
   // The organisation has said Greenco isn't authorised (authority.js): what
   // the system found. Facts, worked out by rule, not for the model to guess.
   const auth = complaint.authority;
+  if (auth?.state === 'landlord_replied') {
+    lines.push(`AUTHORITY: ${auth.org_name || complaint.org_name} said on ${auth.asked_on} that Greenco is not authorised on the account. The landlord replied on ${auth.replied_on} (their email is above, marked "with the landlord"). If it gives Greenco their authority, the step NOW is to send it to ${auth.org_name || complaint.org_name} (the system attaches it as a PDF of their email); never tell Greenco to wait for them before that.`);
+  }
   if (auth && ['on_file', 'missing', 'asked_landlord'].includes(auth.state)) {
     const who = auth.org_name || complaint.org_name;
     lines.push(

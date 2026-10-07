@@ -76,7 +76,9 @@ export function textPdf({ title = '', text = '' }) {
   const lines = wrapText(text);
   const pages = [];
   for (let i = 0; i < Math.max(1, lines.length); i += LINES_PER_PAGE) pages.push(lines.slice(i, i + LINES_PER_PAGE));
-  const titleBytes = winAnsi(String(title).replace(/\s+/g, ' ').trim());
+  // Bold 13pt fits about 64 characters across the page.
+  const t = String(title).replace(/\s+/g, ' ').trim();
+  const titleBytes = winAnsi(t.length > 64 ? `${t.slice(0, 63).trimEnd()}…` : t);
 
   // Objects: 1 catalog, 2 pages, 3 Courier, 4 Helvetica-Bold, then a page and
   // its content stream for each page.

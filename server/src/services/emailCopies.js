@@ -158,12 +158,24 @@ export async function attachRequestedEmails(complaintId, requested, { emails = [
 // that asks to paste, insert, attach or include an email, and only when one
 // copy was made (with two, which is which is not for a rule to guess).
 const PASTE_GAP = /\[[^\]\n]*\b(?:paste|insert|attach|include|copy)\b[^\]\n]*\be-?mail\b[^\]\n]*\]/gi;
+// Only a gap that is about pasting THIS email: never an address ("[Insert
+// landlord email address]"), and any date or owner it names must be the
+// copy's ("[Insert their email of 3 October]" is not our 16 September one).
+function gapIsThisCopy(gap, { day, ours }) {
+  if (/\baddress\b/i.test(gap)) return false;
+  if (!/\b(?:paste|copy)\b/i.test(gap) && !/\be-?mail\s+(?:of|dated|sent)\b/i.test(gap)) return false;
+  const days = datesIn(gap, day > todayISO() ? day : todayISO());
+  if (days.length && !days.includes(day)) return false;
+  if (/\b(?:their|they)\b/i.test(gap) && ours) return false;
+  if (/\b(?:our|we)\b/i.test(gap) && !ours) return false;
+  return true;
+}
 const longDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 export function fillPasteGaps(body, copies = []) {
   if (typeof body !== 'string' || copies.length !== 1) return body;
   const { day, ours } = copies[0];
   const sentence = `A copy of ${ours ? 'our' : 'the'} email of ${longDay(day)} is attached.`;
-  return body.replace(PASTE_GAP, sentence);
+  return body.replace(PASTE_GAP, (gap) => (gapIsThisCopy(gap, copies[0]) ? sentence : gap));
 }
 
 // The copies made for a step's "requested" (attachRequestedEmails marks

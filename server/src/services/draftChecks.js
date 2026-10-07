@@ -45,6 +45,8 @@ export function normaliseRequested(list, docs = []) {
     out.push({
       item, attachment_id: d?.id || null, filename: d?.filename || null,
       given: d ? null : note(x?.given), not_ours: d ? null : note(x?.not_ours),
+      // The email it is a copy of, when it is one (emailCopies.js reads it).
+      ...(typeof x === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(x?.email_date || '') ? { email_date: x.email_date } : {}),
     });
     if (out.length >= 10) break;
   }
