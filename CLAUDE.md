@@ -761,6 +761,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — checked by sending through a local mail server
+- Sent a complaint reply (authority attached), a landlord request and a
+  commission invoice through a local SMTP sink: recipients, CC, the
+  attachment, the "Attached:" line, inline signature pictures (cid) and the
+  text/HTML parts all as intended. Fixed: the authority reply's subject
+  now carries "[GC-C-…]" like every other; commission invoice dates read
+  "01 Sep 2026" (Node's en-GB writes "Sept"); a void commission invoice
+  reads "Total (void, nothing due)", not "Total due". (A local sink shows
+  "law.." in the disclaimer: SMTP dot-stuffing it doesn't undo, not a bug.)
+
 ### 2026-10-07 — fixes from a review of the authority changes
 - **An email disclaimer is never an authority request**
   (`authority.js#asksForAuthority`): only "can't see you are authorised",

@@ -341,7 +341,7 @@ function fmtDate(iso) {
     month: 'short',
     year: 'numeric',
     timeZone: 'UTC',
-  });
+  }).replace('Sept', 'Sep'); // Node's en-GB writes "Sept"; the app writes "Sep"
 }
 
 // Build the commission invoice email (subject + text + HTML). `billing` is our

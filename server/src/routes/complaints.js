@@ -467,7 +467,10 @@ router.post(
     const asked = (await query('SELECT subject, sender_email FROM complaint_emails WHERE id = $1', [a.asked_email_id])).rows[0];
     const draft = authorityReplyDraft(c, track, a);
     // In their thread: "Re:" the email that asked.
-    const subject = asked?.subject ? `Re: ${String(asked.subject).replace(/^\s*(re|fw|fwd)\s*:\s*/i, '')}` : draft.subject;
+    const base = asked?.subject ? `Re: ${String(asked.subject).replace(/^\s*(re|fw|fwd)\s*:\s*/i, '')}` : draft.subject;
+    // Our reference too, as every email from a complaint carries, so their
+    // reply files itself even if they drop the copied-in address.
+    const subject = base.toUpperCase().includes(c.ref_code.toUpperCase()) ? base : `${base} [${c.ref_code}]`;
     res.json({ ...draft, subject, attachment_ids: [doc.id], party_id: a.party_id || null });
   }),
 );

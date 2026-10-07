@@ -468,7 +468,7 @@ export default function CommissionInvoiceDetail() {
               </tr>
             )}
             <tr className="total-row">
-              <td colSpan={5} className="num">Total due</td>
+              <td colSpan={5} className="num">{inv.status === 'void' ? 'Total (void, nothing due)' : 'Total due'}</td>
               <td className="num">{formatMoney(inv.total_amount)}</td>
             </tr>
           </tbody>
