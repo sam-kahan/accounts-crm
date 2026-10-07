@@ -619,30 +619,42 @@ export function signEmail(text, user) {
 // A gap left to fill in ("[Paste our email here]", "[DATE]"), by the same
 // rule as server/src/lib/signature.js#gapIn, which refuses the send: the
 // window says so before Send is pressed.
-const PLACEHOLDER = /\b(?:name|date|amount|address|insert|paste|add|enter|fill|details?|title|number|here|tbc|xx+)\b/i;
-// A word a mail system puts in brackets on its own ("[EXTERNAL]"), never the
-// start of a sentence ("[External link]", "[Re-attach the bill]").
-const TAG = /^\s*(?:external|ext|secure|spam|suspected\s+spam|encrypt(?:ed)?|fwd?|re|caution|warning|urgent|important|confidential)\s*$/i;
-// A reference or number: an optional label ("Ticket #", "Ref:", "Case")
-// then digits and short codes, with no word in it ("[Ticket #12345]",
-// "[850123456]", "[Ref: AB-1234]"), never "[Case notes here]".
-const CODE = (c) => {
-  const rest = c.replace(/^\s*(?:ticket|ref(?:erence)?|our\s+ref|your\s+ref|case|incident|job)\b\.?\s*(?:no\.?|number)?\s*[:#]?\s*/i, '');
-  return /\d/.test(rest) && !/[a-z]{4,}/i.test(rest) && /^[#A-Z0-9][A-Z0-9#\-\/. ]*$/i.test(rest.trim());
+const PLACEHOLDER = /\b(?:name|date|amount|address|insert|paste|add|enter|fill|details?|title|number|here|tbc|xx+|landlord|tenant|supplier|organi[sz]ation|company|reference|ref|postcode|mpan|mprn|e-?mail|phone|telephone|account|month|year|day|time|signature|figure|sum|total)\b/i;
+// What a person is told to do, never part of a reference.
+const INSTRUCTION = /\b(?:insert|paste|add|enter|fill|here|tbc|to\s+follow|complete)\b/i;
+// What a mail system or a council puts in brackets ("[EXTERNAL]", "[EXTERNAL
+// EMAIL]", "[OFFICIAL-SENSITIVE]"): the whole bracket, never the start of a
+// sentence ("[External link]", "[Re-attach the bill]").
+const TAG = /^\s*(?:external(?:\s+(?:e-?mail|sender|message|mail))?|ext|secure|spam|suspected\s+spam|encrypt(?:ed)?|fwd?|re|caution|warning|urgent|important|confidential|official(?:[-\s]sensitive)?|sensitive|not\s+protectively\s+marked)\s*$/i;
+// A blank to type a figure into: zeros, X's, underscores ("[00/00/0000]",
+// "[XX/XX/XXXX]", "[£___]", "[0.00]").
+const BLANK = (c) => /^[\s0xX\/.\-_£,:]+$/.test(c) && /[0xX_]/.test(c);
+// A reference with its label ("[Ticket #12345 - Your complaint]", "[Case Ref:
+// CAS-12345-ABCD]", "[Your reference: 12345]", "[ref:_00D4J2Ez._5008d:ref]"):
+// a label word, then something with a digit in it, and no instruction.
+const LABELLED = /^\s*(?:ticket|ref(?:erence)?|our\s+ref(?:erence)?|your\s+ref(?:erence)?|their\s+ref(?:erence)?|case(?:\s+ref(?:erence)?)?|incident|job|account(?:\s+(?:no\.?|number))?|crm|claim|policy|invoice|order|customer\s+(?:no\.?|number))\b\.?\s*(?:no\.?|number)?\s*[:#_]?/i;
+const notGap = (c) => {
+  if (/^\s*sic\s*$/i.test(c) || /@|:\/\/|cid:|mailto:|^\s*image\s*:/i.test(c)) return true;
+  if (/^\s*GC-(?:C|CI|COM)-[A-Z0-9]+\s*$/i.test(c)) return true;
+  if (BLANK(c)) return false;
+  if (TAG.test(c)) return true;
+  if (LABELLED.test(c) && /\d/.test(c) && !INSTRUCTION.test(c)) return true;
+  // Text in capitals and figures ("[PDF]", "[CRM:0012345]", "[850123456]"),
+  // unless it is a placeholder ("[NAME]", "[POSTCODE]", "[ACCOUNT NUMBER]").
+  if (!/[a-z]/.test(c) && !PLACEHOLDER.test(c)) return true;
+  // One or two small letters ("[ok]", "[a]") are not a blank to fill in.
+  if (/^\s*[a-z]{1,2}\s*$/i.test(c) && !/x/i.test(c)) return true;
+  return false;
 };
-const notGap = (c) => /^\s*sic\s*$/i.test(c) ||
-  /@|:\/\/|cid:|mailto:|^\s*image\s*:/i.test(c) ||
-  /^\s*GC-(?:C|CI|COM)-[A-Z0-9]+\s*$/i.test(c) ||
-  TAG.test(c) || CODE(c) ||
-  // Another single word in capitals ("[PDF]"), unless it is a placeholder
-  // ("[NAME]", "[DATE]", "[TBC]").
-  (/^\s*[A-Z]{2,12}\s*$/.test(c) && !PLACEHOLDER.test(c));
 const BRACKETS = /\[([^\]\n]{2,})\]/g;
 export function gapIn(subject, body = '') {
-  for (const [text, isSubject] of [[subject, true], [body, false]]) {
+  // Not the "Attached:" line: a file name can carry their own bracketed tag
+  // ("Email 16 Sep 2026 - [EXTERNAL EMAIL] RE ….pdf"), no gap anyone could fill.
+  const own = String(body ?? '').replace(/^[ \t]*Attached: .*$/gm, '');
+  for (const [text, isSubject] of [[subject, true], [own, false]]) {
     for (const m of String(text ?? '').matchAll(BRACKETS)) {
       if (notGap(m[1])) continue;
-      if (isSubject && !PLACEHOLDER.test(m[1])) continue;
+      if (isSubject && !PLACEHOLDER.test(m[1]) && !BLANK(m[1])) continue;
       return m[0];
     }
   }

@@ -85,3 +85,9 @@ test('a reference line after the closing stays in the email, above the closing',
   assert.equal(head, 'Dear team,\n\nPlease see attached.\n\nYour reference: 12345');
   assert.match(withoutSignOff('Hi,\n\nHello.\n\nRegards,\nSam\nE.ON Next reference: A-1').head, /E\.ON Next reference: A-1$/);
 });
+
+test('a P.S. or a sentence mentioning a reference is not a reference line', () => {
+  assert.equal(withoutSignOff('Hi,\n\nBody.\n\nKind regards,\n[Name]\n\nP.S. Please quote our reference on any reply.').kept, true);
+  assert.equal(withoutSignOff('Hi,\n\nB.\n\nKind regards,\nSam\nP.S. Our reference: 123').kept, true);
+  assert.equal(withoutSignOff('Hi,\n\nB.\n\nKind regards,\nSam Kahan\nGreenco Property Group\nAccount number: 850123456').head, 'Hi,\n\nB.\n\nAccount number: 850123456');
+});

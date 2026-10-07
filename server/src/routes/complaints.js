@@ -7,7 +7,7 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { signedEmail } from '../lib/emailSignature.js';
-import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, ownText } from '../services/authority.js';
+import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, copyOfEmail } from '../services/authority.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
@@ -450,9 +450,10 @@ router.post(
       // so"): a PDF of their email, kept as a document, goes with it.
       const em = (await query('SELECT * FROM complaint_emails WHERE id = $1 AND complaint_id = $2', [a.reply_email_id, c.id])).rows[0];
       if (!em) throw new HttpError(409, 'The landlord’s reply couldn’t be found.');
-      // Their own words: not the quoted request under them, or a disclaimer.
+      // All of it, our request they answered included (their "yes" means
+      // nothing without it); only a confidentiality notice is taken out.
       const full = em.body_text || em.body_preview || '';
-      const body = ownText(full).trim() || full;
+      const body = copyOfEmail(full) || full;
       const day = ukDate(londonDateOf(new Date(em.received_at)));
       doc = await saveAttachmentBuffer(c.id, {
         filename: `Landlord authority - email of ${day.slice(4)}.pdf`,

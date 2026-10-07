@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { asksForAuthority, isAuthorityDoc, authorityState, authorityStep, ownText, authorityReplyDraft, landlordRequestDraft, LANDLORD } from '../src/services/authority.js';
+import { asksForAuthority, isAuthorityDoc, authorityState, authorityStep, ownText, authorityReplyDraft, landlordRequestDraft, LANDLORD, copyOfEmail } from '../src/services/authority.js';
 import { gapIn } from '../src/lib/signature.js';
 
 const OURS = 'greenco.co.uk';
@@ -208,4 +208,32 @@ test('a gap is a gap in capitals too; a reference or mail tag is not', () => {
     assert.equal(gapIn('', `Hi ${ok}`), null, ok);
   assert.equal(gapIn('Re: your complaint [GC-C-BLV2WK]', ''), null);
   assert.equal(gapIn('Complaint about [NAME]', ''), '[NAME]');
+});
+
+test('review of 7 Oct: wordings with abbreviations, the passive and "would"; look-alikes about other things', () => {
+  for (const s of ["We're unable to discuss the E.ON Next account without the account holder's permission.",
+    "We are unable to discuss Mr. Lau's account without his consent.", 'Due to data protection, we are unable to discuss the account with you.',
+    'We would need a letter of authority before we can discuss this.', 'A signed letter of authority is required.',
+    "Imogen is not authorised on Mr Lau's account."]) assert.ok(asksForAuthority(s), s);
+  for (const s of ['We can only backdate the bill to the date the account holder moved in.', 'We can only issue the refund to the bill payer.',
+    'I do not have the authority to award compensation above £50.', "We don't have any information from the local authority about this.",
+    'The property is not registered on the Priority Services Register.', 'We are unable to confirm whether planning permission was granted.'])
+    assert.equal(asksForAuthority(s), false, s);
+});
+
+test('gaps: placeholders in capitals and blank figures are gaps; tags and labelled references are not; nor a file name', () => {
+  for (const g of ['[POSTCODE]', '[LANDLORD]', '[REFERENCE]', '[SUPPLIER]', '[MPAN]', '[EMAIL]', '[PHONE]', '[00/00/0000]', '[000000]', '[0.00]', '[Account number]'])
+    assert.equal(gapIn('', `Hi ${g}`), g, g);
+  for (const ok of ['[Case Ref: CAS-12345-ABCD]', '[ ref:_00D4J2Ez._5008d1abcde:ref ]', '[Ticket #12345 - Your complaint]', '[EXTERNAL EMAIL]',
+    '[OFFICIAL-SENSITIVE]', '[CRM:0012345]', '[Your reference: 12345]', '[Account number: 850123456]']) assert.equal(gapIn('', `Hi ${ok}`), null, ok);
+  assert.equal(gapIn('[Account number: 850123456] your complaint', ''), null);
+  assert.equal(gapIn('', 'Body\n\nAttached: Email 16 Sep 2026 - [EXTERNAL EMAIL] RE Your complaint.pdf.'), null);
+});
+
+test('the landlord’s reply goes on whole: only the confidentiality notice comes out', () => {
+  const body = 'Yes, happy for Greenco to deal with it.\n\nThis email is confidential and intended solely for the addressee.\n\nFrom: Greenco\nSubject: Your authority\n\nCould you confirm you authorise Greenco about account 99887766?';
+  const out = copyOfEmail(body);
+  assert.match(out, /^Yes, happy/);
+  assert.match(out, /account 99887766\?$/);
+  assert.doesNotMatch(out, /confidential/);
 });

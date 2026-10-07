@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural, complaintTracks, referenceLines, withReferences, gapIn } from '../api';
+
+// The gap the server would refuse the send for, checked as it checks: signed,
+// and for the landlord email with their name filled in for "[Landlord name]".
+function sendGap(send, me) {
+  let body = send.body || '';
+  if (send.then === 'landlord' && String(send.landlord_name || '').trim()) {
+    body = body.replace(/\[\s*landlord(?:['’]s)?\s+name\s*\]/gi, () => send.landlord_name.trim());
+  }
+  return gapIn(signEmail(send.subject, me), signEmail(body, me));
+}
 import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
@@ -2520,7 +2530,7 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || Boolean(gapIn(send.subject, signEmail(send.body, me))) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
+                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || Boolean(sendGap(send, me)) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
               >
                 {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
@@ -2605,9 +2615,9 @@ export default function ComplaintDetail() {
             <textarea rows={12} value={send.body}
               onChange={(e) => setSend({ ...send, body: e.target.value })} />
           </label>
-          {gapIn(send.subject, signEmail(send.body, me)) && (
+          {sendGap(send, me) && (
             <div className="login-error" style={{ marginBottom: 12 }}>
-              Fill in {gapIn(send.subject, signEmail(send.body, me))} before sending (or take it out).
+              Fill in {sendGap(send, me)} before sending (or take it out).
             </div>
           )}
           {!['refer', 'landlord'].includes(send.then) && (

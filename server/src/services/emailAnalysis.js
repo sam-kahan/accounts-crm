@@ -260,7 +260,7 @@ export function couldChangeDate(a, text = '') {
 // An acknowledgement or answer in other words ("we have reviewed your
 // complaint", "our Stage 1 response"); read without the subject line, which
 // on every reply to a Stage 2 request says "Stage 2 review".
-const ANSWER_WORDS = /\b(?:acknowledg\w*|received\s+your\s+complaint|reviewed\s+(?:your|the)\s+complaint|(?:stage\s*(?:1|2|one|two)|our|final)\s+(?:response|decision|outcome)|investigat(?:ed|ion)\s+(?:your|the)\s+complaint|(?:not\s+)?upheld|unable\s+to\s+offer|(?:refund|credit|compensation|goodwill)\s+(?:of|has\s+been|will\s+be))\b/i;
+const ANSWER_WORDS = /\b(?:acknowledg\w*|received\s+your\s+complaint|reviewed\s+(?:your|the)\s+complaint|(?:stage\s*(?:1|2|one|two)|our|final)\s+(?:response|decision|outcome)|investigat(?:ed|ion)\s+(?:your|the)\s+complaint|(?:not\s+)?upheld|unable\s+to\s+offer|(?:refund|credit|compensation|goodwill)\s+(?:of|has\s+been|will\s+be)|looked\s+(?:at|into)\s+(?:this|it|your\s+complaint|the\s+complaint)\s+again|(?:charges?|bills?|balance|decision|position)\s+(?:stands?|remains?|is\s+correct)|our\s+position)\b/i;
 
 // Words only a complaint RESPONSE uses (not "Stage 2", which every reply to
 // a Stage 2 request quotes in its subject).

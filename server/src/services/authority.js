@@ -38,17 +38,30 @@ export const LANDLORD = 'the landlord';
 // holder", a positive ask for consent or a letter of authority, or the
 // account holder asked to get in touch TO authorise. A sentence about a
 // Direct Debit, a payment or the email itself (a disclaimer) never counts.
+const ACCOUNT = String.raw`(?:the|this|their|his|her|your|(?:[\w.-]+\s+){0,2}?[\w.-]+['’]s)\s+(?:[\w.-]+\s+){0,3}?account`;
 const AUTH_PATTERNS = [
-  /\b(?:not|isn['’]t|aren['’]t|no\s+longer)\s+(?:been\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:as\s+a\s+third\s+party\s+)?on\s+(?:the|this|their|his|her)\b|to\s+(?:discuss|deal|act|speak|manage)\b|as\s+(?:an?\s+)?(?:third\s+party|representative))/i,
-  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.]{0,60}?\b(?:authori[sz]ed|authority|permission|consent)\b/i,
-  /\b(?:no\s+record\s+of|(?:don['’]t|do\s+not|doesn['’]t|does\s+not)\s+have|haven['’]t\s+got|have\s+no)\b[^.]{0,40}?\b(?:authority|authori[sz](?:ation|ed)|permission|consent)\b/i,
-  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to|won['’]t\s+be\s+able\s+to)\s+(?:discuss|disclose|deal|speak|share|go\s+into)\b[^.]{0,80}?\b(?:without|unless|until)\b[^.]{0,40}?\b(?:permission|consent|authori[sz]|authority)/i,
+  // "You are not authorised on the account", "not registered as a third party
+  // on this account", "not authorised to discuss it". Never "not registered
+  // on the Priority Services Register".
+  new RegExp(String.raw`\b(?:not|isn['’]t|aren['’]t|no\s+longer)\s+(?:been\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:as\s+an?\s+third\s+party\s+)?(?:on|for|to)\s+${ACCOUNT}|to\s+(?:discuss|deal|act|speak|manage)\b|as\s+(?:an?\s+)?(?:third\s+party|representative|authori[sz]ed))`, 'i'),
+  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.]{0,60}?\b(?:authori[sz]ed|authority\s+(?:for|from|on|to\s+(?:act|discuss|deal|speak))|(?:permission|consent)\s+(?:for|from|on|to\s+(?:discuss|deal|speak|share)))\b/i,
+  /\bno\s+record\s+of\b[^.]{0,40}?\b(?:authori[sz](?:ation|ed)|(?:a\s+)?letter\s+of\s+authority|(?:third[-\s]party\s+)?(?:permission|consent)\s+(?:for|from|on|to))/i,
+  // "We don't have authority on file for you to discuss this account": the
+  // authority FOR us / the account, never "the authority to award £50".
+  /\b(?:(?:don['’]t|do\s+not|doesn['’]t|does\s+not)\s+have|haven['’]t\s+got|have\s+no)\b[^.]{0,30}?\b(?:authority|authori[sz]ation|permission|consent)\b(?!\s+to\s+(?:award|offer|approve|make|pay|issue|refund|agree|grant|backdate|waive|change))[^.]{0,40}?\b(?:you|greenco|third\s+part(?:y|ies)|account|discuss)\b/i,
+  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to|won['’]t\s+be\s+able\s+to)\s+(?:discuss|disclose|deal|speak|share|go\s+into)\b[^.]{0,80}?\b(?:without|unless|until|before)\b[^.]{0,40}?\b(?:permission|consent|authori[sz]|authority)/i,
   /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:discuss|disclose|deal|speak|share)\b[^.]{0,80}?\b(?:as\s+you\s+are\s+not\s+the\s+(?:account\s*holder|bill\s*payer|named)|with\s+(?:a\s+)?third\s+part(?:y|ies))/i,
-  /\b(?:can\s+only|only\s+able\s+to|only\s+(?:speak|discuss))\s+(?:speak|discuss|deal)?\b[^.]{0,40}?\b(?:account\s*holder|bill\s*payer|named\s+(?:customer|person))/i,
-  /\b(?:we(?:\s+will|['’]ll)?\s+(?:need|require)|(?:please|could\s+you|can\s+you|kindly)\s+(?:send|provide|supply|forward))\b[^.]{0,60}?\b(?:letter\s+of\s+authority|authority\s+form|(?:account\s*holder|bill\s*payer)['’]s\s+(?:consent|permission|authori[sz]ation|authority)|(?:signed|written)\s+(?:authority|authori[sz]ation|consent|permission))/i,
+  // "We can only speak to the account holder": a speaking verb, never "we can
+  // only backdate the bill to the date the account holder moved in".
+  /\b(?:can\s+only|only\s+able\s+to|are\s+only\s+able\s+to)\s+(?:speak|discuss\s+(?:this|the|it|accounts?)|deal|talk)\b[^.]{0,20}?\b(?:to|with)\s+(?:the\s+)?(?:account\s*holder|bill\s*payer|named\s+(?:customer|person|account\s*holder))/i,
+  /\b(?:we(?:\s+will|\s+would|['’]ll|['’]d)?\s+(?:need|require)|(?:please|could\s+you|can\s+you|kindly)\s+(?:send|provide|supply|forward))\b[^.]{0,60}?\b(?:letter\s+of\s+authority|authority\s+form|(?:account\s*holder|bill\s*payer)['’]s\s+(?:consent|permission|authori[sz]ation|authority)|(?:signed|written)\s+(?:authority|authori[sz]ation|consent|permission))/i,
+  // "A signed letter of authority is required."
+  /\b(?:letter\s+of\s+authority|authority\s+form|(?:signed|written)\s+(?:authority|authori[sz]ation|consent))\b[^.]{0,30}?\b(?:is|are|will\s+be|would\s+be)\s+(?:required|needed)/i,
   /\b(?:account\s*holder|bill\s*payer|named\s+customer)\b[^.]{0,40}?\b(?:to|will\s+need\s+to|needs?\s+to|must|should)\s+(?:contact|call|get\s+in\s+touch\s+with)\b[^.]{0,60}?\b(?:authori[sz]|add\s+(?:you|greenco|them)|as\s+(?:a\s+)?third\s+party|(?:permission|consent)\s+for|to\s+discuss)/i,
+  // "Due to data protection, we are unable to discuss the account with you."
+  /\b(?:data\s+protection|gdpr)\b[^.]{0,40}?\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:discuss|disclose|share|deal|speak)\b[^.]{0,40}?\b(?:you|greenco|third\s+part(?:y|ies))\b/i,
 ];
-const NOT_ABOUT_US = /\b(?:direct\s+debit|payment\s+(?:plan|method|card)|card\s+payment|intended\s+recipient|this\s+(?:e-?mail|message)\b[^.]{0,40}\b(?:confidential|authori[sz]ed\s+by))/i;
+const NOT_ABOUT_US = /\b(?:direct\s+debit|payment\s+(?:plan|method|card)|card\s+payment|intended\s+recipient|local\s+authority|planning\s+permission|this\s+(?:e-?mail|message)\b[^.]{0,40}\b(?:confidential|authori[sz]ed\s+by))/i;
 
 // A disclaimer or signature block is not what the email says.
 const DISCLAIMER = /\n[^\n]*\b(?:this\s+(?:e-?mail|message)\b[^\n]{0,80}\b(?:confidential|intended\s+(?:solely|only)?\s*for)|if\s+you\s+are\s+not\s+the\s+intended\s+recipient|disclaimer|confidentiality\s+notice|registered\s+(?:office|in\s+england))/i;
@@ -63,8 +76,21 @@ export function ownText(body) {
   return s.slice(0, 3000);
 }
 
+// An email as a copy to pass on: every word of it, the earlier email it
+// quotes included ("Yes, that's fine" means nothing without what it answers),
+// with only the confidentiality-notice paragraphs taken out. Never cut short.
+const NOTICE = /^[^\n]*\b(?:this\s+(?:e-?mail|message)\b[^\n]{0,80}\b(?:confidential|intended\s+(?:solely|only)?\s*for)|if\s+you\s+are\s+not\s+the\s+intended\s+recipient|disclaimer|confidentiality\s+notice)/i;
+export function copyOfEmail(body) {
+  return String(body || '').replace(/\r\n?/g, '\n').split(/\n[ \t]*\n/)
+    .filter((para) => !NOTICE.test(para.trim())).join('\n\n').trim();
+}
+
 export function asksForAuthority(text) {
-  const sentences = String(text || '').replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/);
+  // A full stop inside a sentence is not its end: "Mr. Lau", "E.ON Next".
+  const s = String(text || '').replace(/\s+/g, ' ')
+    .replace(/\b(Mr|Mrs|Ms|Miss|Dr|St|No|Ref|Co|e\.g|i\.e|etc)\./gi, '$1')
+    .replace(/\.(?=\S)/g, '');
+  const sentences = s.split(/(?<=[.!?])\s+/);
   return sentences.some((x) => !NOT_ABOUT_US.test(x) && AUTH_PATTERNS.some((re) => re.test(x)));
 }
 
@@ -170,16 +196,23 @@ export async function authorityDocsFor(rows) {
   const props = [...new Set(rows.map((r) => propKey(r.property)).filter(Boolean))];
   const { rows: docs } = await query(
     `SELECT a.id, a.filename, a.description, a.complaint_id, a.source_email_id, a.uploaded_at,
-            c.ref_code, c.account_numbers, c.property
+            c.ref_code, c.account_numbers, c.property,
+            -- A PDF of the landlord's reply, once it has been sent on as
+            -- their authority (a person read it and chose to): an authority
+            -- for every complaint about the account from then on.
+            (EXISTS (SELECT 1 FROM complaint_emails e WHERE e.id = a.source_email_id
+                       AND e.removed_org = $4 AND e.direction <> 'outbound')
+             AND EXISTS (SELECT 1 FROM complaint_outbox o WHERE o.status = 'sent'
+                       AND NOT COALESCE(o.to_landlord, false) AND a.id = ANY(o.attachment_ids))) AS sent_reply
        FROM complaint_attachments a JOIN complaints c ON c.id = a.complaint_id
       WHERE (COALESCE(a.description, '') || ' ' || a.filename) ~* '(authori[sz]|authority|consent|loa)'
         AND (a.complaint_id = ANY($1::uuid[])
              OR EXISTS (SELECT 1 FROM unnest(c.account_numbers) n WHERE upper(regexp_replace(n, '[^A-Za-z0-9]', '', 'g')) = ANY($2::text[]))
              OR upper(regexp_replace(COALESCE(c.property, ''), '[^A-Za-z0-9]', '', 'g')) = ANY($3::text[]))
       ORDER BY a.uploaded_at DESC`,
-    [rows.map((r) => r.id), accounts, props],
+    [rows.map((r) => r.id), accounts, props, LANDLORD],
   );
-  const auth = docs.filter(isAuthorityDoc);
+  const auth = docs.filter((d) => d.sent_reply || isAuthorityDoc(d));
   const out = new Map();
   for (const r of rows) {
     const mine = new Set((r.account_numbers || []).map(norm).filter((n) => n.length >= 6));

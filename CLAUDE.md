@@ -761,6 +761,36 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — second review of the authority, gap and sign-off rules
+- **Gaps** (`signature.js#gapIn`, same rule in `client/src/api.js`): a
+  placeholder word in capitals is a gap ("[POSTCODE]", "[LANDLORD]",
+  "[MPAN]", "[EMAIL]"), and so is a blank figure ("[00/00/0000]",
+  "[0.00]", "[£___]"); a labelled reference is not ("[Case Ref:
+  CAS-12345-ABCD]", "[Ticket #12345 - Your complaint]", "[Account number:
+  850123456]", Salesforce "[ ref:_00D…:ref ]"), nor a mail or council tag
+  ("[EXTERNAL EMAIL]", "[OFFICIAL-SENSITIVE]"), nor anything on the
+  "Attached:" line (a copy's file name carries their subject's tags; the
+  background send refused those with a gap nobody could fill). The Send
+  window fills "[Landlord name]" as the server does before checking.
+- **Authority requests** (`asksForAuthority`): "Mr." and "E.ON" no longer
+  break a sentence; "we would need", "a signed letter of authority is
+  required" and "due to data protection … unable to discuss … with you"
+  count. Never "we can only backdate the bill to … the account holder",
+  "I do not have the authority to award …", the local authority, planning
+  permission or the Priority Services Register (each of these made a real
+  answer file itself as correspondence). `couldChangeDate` also keeps an
+  email waiting when it says it looked at the complaint again or the
+  charges stand.
+- **The landlord's reply PDF holds their whole email**, our quoted request
+  included, with only confidentiality notices taken out
+  (`authority.js#copyOfEmail`): "Yes, that's fine" means nothing without
+  what it answers. Once sent on, it counts as an authority for every
+  complaint on that account or property (`sent_reply` in
+  `authorityDocsFor`).
+- **Reference lines after a sign-off** are only labels ("Your reference:
+  …", capitalised names, a colon or #), never a P.S. or a sentence
+  mentioning a reference (`emailSignature.js#REF_LINE`).
+
 ### 2026-10-07 — fixes from a review of the authority and signature changes
 - **Authority requests read by sentence** (`authority.js#asksForAuthority`,
   with a test corpus of real wordings and look-alikes): "We'll need a letter
