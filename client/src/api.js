@@ -621,14 +621,19 @@ export function signEmail(text, user) {
 // window says so before Send is pressed.
 const PLACEHOLDER = /\b(?:name|date|amount|address|insert|paste|add|enter|fill|details?|title|number|here|tbc|xx+|landlord|tenant|supplier|organi[sz]ation|company|reference|ref|postcode|mpan|mprn|e-?mail|phone|telephone|account|month|year|day|time|signature|figure|sum|total)\b/i;
 // What a person is told to do, never part of a reference.
-const INSTRUCTION = /\b(?:insert|paste|add|enter|fill|here|tbc|to\s+follow|complete)\b/i;
+const INSTRUCTION = /\b(?:insert|paste|add|enter|fill|here|tbc|to\s+follow|complete|e\.?g|eg|example|or|check|which|confirm)\b/i;
+// In a subject, only a blank to fill in: a reply's subject is "Re: <their
+// subject>", and their tags name all sorts ("[External Email: Do not click
+// links]", "[Account Query]").
+const SUBJECT_PLACEHOLDER = /\b(?:name|date|amount|insert|paste|add|enter|fill|here|tbc|xx+|postcode)\b/i;
 // What a mail system or a council puts in brackets ("[EXTERNAL]", "[EXTERNAL
 // EMAIL]", "[OFFICIAL-SENSITIVE]"): the whole bracket, never the start of a
 // sentence ("[External link]", "[Re-attach the bill]").
 const TAG = /^\s*(?:external(?:\s+(?:e-?mail|sender|message|mail))?|ext|secure|spam|suspected\s+spam|encrypt(?:ed)?|fwd?|re|caution|warning|urgent|important|confidential|official(?:[-\s]sensitive)?|sensitive|not\s+protectively\s+marked)\s*$/i;
 // A blank to type a figure into: zeros, X's, underscores ("[00/00/0000]",
 // "[XX/XX/XXXX]", "[£___]", "[0.00]").
-const BLANK = (c) => /^[\s0xX\/.\-_£,:]+$/.test(c) && /[0xX_]/.test(c);
+// "[DD/MM/YYYY]" too.
+const BLANK = (c) => /^[\s0xXdDmMyY\/.\-_£,:]+$/.test(c) && /[0xX_]|[dD]{2}|[mM]{2}|[yY]{2}/.test(c);
 // A reference with its label ("[Ticket #12345 - Your complaint]", "[Case Ref:
 // CAS-12345-ABCD]", "[Your reference: 12345]", "[ref:_00D4J2Ez._5008d:ref]"):
 // a label word, then something with a digit in it, and no instruction.
@@ -638,7 +643,8 @@ const notGap = (c) => {
   if (/^\s*GC-(?:C|CI|COM)-[A-Z0-9]+\s*$/i.test(c)) return true;
   if (BLANK(c)) return false;
   if (TAG.test(c)) return true;
-  if (LABELLED.test(c) && /\d/.test(c) && !INSTRUCTION.test(c)) return true;
+  // ...but not "[Account no: 00000000]" or "[Account number, e.g. 850123456]".
+  if (LABELLED.test(c) && /\d/.test(c) && !INSTRUCTION.test(c) && !BLANK(c.replace(LABELLED, '').trim())) return true;
   // Text in capitals and figures ("[PDF]", "[CRM:0012345]", "[850123456]"),
   // unless it is a placeholder ("[NAME]", "[POSTCODE]", "[ACCOUNT NUMBER]").
   if (!/[a-z]/.test(c) && !PLACEHOLDER.test(c)) return true;
@@ -648,13 +654,15 @@ const notGap = (c) => {
 };
 const BRACKETS = /\[([^\]\n]{2,})\]/g;
 export function gapIn(subject, body = '') {
-  // Not the "Attached:" line: a file name can carry their own bracketed tag
-  // ("Email 16 Sep 2026 - [EXTERNAL EMAIL] RE ….pdf"), no gap anyone could fill.
-  const own = String(body ?? '').replace(/^[ \t]*Attached: .*$/gm, '');
+  // On an "Attached:" line, the file names (a copy's name carries their own
+  // subject's tags: "Email 16 Sep 2026 - [EXTERNAL EMAIL] RE ….pdf", no gap
+  // anyone could fill); anything else on it is checked like the rest.
+  const own = String(body ?? '').replace(/^([ \t]*Attached: )(.*)$/gm, (_, lead, list) =>
+    lead + list.replace(/\.\s*$/, '').split(/;\s*/).filter((f) => !/\.[A-Za-z0-9]{2,5}$/.test(f.trim())).join('; '));
   for (const [text, isSubject] of [[subject, true], [own, false]]) {
     for (const m of String(text ?? '').matchAll(BRACKETS)) {
       if (notGap(m[1])) continue;
-      if (isSubject && !PLACEHOLDER.test(m[1]) && !BLANK(m[1])) continue;
+      if (isSubject && !SUBJECT_PLACEHOLDER.test(m[1]) && !BLANK(m[1])) continue;
       return m[0];
     }
   }

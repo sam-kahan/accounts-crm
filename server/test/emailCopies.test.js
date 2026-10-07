@@ -13,8 +13,8 @@ const opts = { today: '2026-10-06', ourDomain: DOMAIN };
 test('a copy of our email of a date is that email', () => {
   assert.deepEqual(emailsRequested({ item: 'Copy of our 16 September 2026 email' }, all, opts).map((e) => e.id), ['a']);
   assert.deepEqual(emailsRequested({ item: 'Copy of their email of 16/09/2026' }, all, opts).map((e) => e.id), ['b']);
-  // No "our" or "their": every email of that day.
-  assert.deepEqual(emailsRequested({ item: 'The email of 16 Sep' }, all, opts).map((e) => e.id), ['a', 'b']);
+  // No "our" or "their", and both sides wrote that day: not for a rule to pick.
+  assert.deepEqual(emailsRequested({ item: 'The email of 16 Sep' }, all, opts), []);
 });
 
 test('the review’s own email_date is used when the words name none', () => {
@@ -106,4 +106,14 @@ test('only a gap about pasting THIS email is filled', () => {
   }
   assert.equal(fillPasteGaps('[Paste our email of 16 September 2026 here]', copy), 'A copy of our email of 16 September 2026 is attached.');
   assert.equal(fillPasteGaps('[Copy of the email]', copy), 'A copy of our email of 16 September 2026 is attached.');
+});
+
+test('review of 7 Oct: one organisation only, an item that is an email, a whole email of theirs', () => {
+  const bg = { id: 'x1', direction: 'outbound', sender_email: 'sam@greenco.co.uk', to_addresses: ['complaints@britishgas.co.uk'], subject: 'Stage 2', received_at: '2026-09-16T09:00:00Z' };
+  const lcs = { id: 'x2', direction: 'outbound', sender_email: 'sam@greenco.co.uk', to_addresses: ['disputes@lcs.co.uk'], subject: 'Formal complaint', received_at: '2026-09-16T11:00:00Z' };
+  assert.deepEqual(emailsRequested({ item: 'A copy of our email of 16 September', email_date: '2026-09-16' }, [bg, lcs], opts), []);
+  assert.deepEqual(emailsRequested({ item: 'Proof of ownership', email_date: '2026-09-16' }, [bg], opts), []);
+  assert.deepEqual(emailsRequested({ item: 'A copy of our Stage 2 request email of 16 September 2026' }, [bg], opts).map((e) => e.id), ['x1']);
+  assert.equal(fillPasteGaps('Hi\n[Insert copy of the bill and our email here]', [{ day: '2026-09-16', ours: true }]), 'Hi\n[Insert copy of the bill and our email here]');
+  assert.equal(fillPasteGaps('Hi\n[Paste a copy of our email to the landlord here]', [{ day: '2026-09-16', ours: true }]), 'Hi\n[Paste a copy of our email to the landlord here]');
 });

@@ -237,3 +237,15 @@ test('the landlord’s reply goes on whole: only the confidentiality notice come
   assert.match(out, /account 99887766\?$/);
   assert.doesNotMatch(out, /confidential/);
 });
+
+test('second review of 7 Oct: replies keep their tags; blanks in letters; things not authorised are not Greenco', () => {
+  for (const s of ['RE: [EXTERNAL EMAIL - CAUTION] Complaint', 'RE: [External Email: Do not click links] x', 'Re: Complaint [Account Query]', '[Secure Email] Re: x'])
+    assert.equal(gapIn(s, ''), null, s);
+  for (const g of ['[DD/MM/YYYY]', '[Account no: 00000000]', '[Account number, e.g. 850123456]']) assert.equal(gapIn('', `Hi ${g}`), g, g);
+  assert.equal(gapIn('', 'Hello\nAttached: [insert copy of bill]\nKind regards'), '[insert copy of bill]');
+  assert.equal(gapIn('', 'Hello\n\nAttached: Email 16 Sep 2026 - [EXTERNAL EMAIL] RE x.pdf; Bill [Aug].pdf.'), null);
+  for (const s of ["The meter reading you sent isn't registered on the account yet.", 'The refund has not been authorised for the account yet.',
+    "The change of tenancy isn't registered on this account yet.", "The property is not registered to the account holder's name."])
+    assert.equal(asksForAuthority(s), false, s);
+  assert.ok(asksForAuthority('We can only speak to the account holder at 10 Dale St. Your direct debit will continue as normal.'));
+});

@@ -19,7 +19,7 @@ import { londonDateOf, todayISO } from '../lib/dates.js';
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 // What a person writing "a copy of our email" calls it.
-const ABOUT_EMAIL = /\b(?:e-?mails?|correspondence)\b/i;
+const ABOUT_EMAIL = /\b(?:e-?mails?|correspondence|chasers?|repl(?:y|ies))\b/i;
 const OURS = /\b(?:our|greenco(?:['’]s)?|we\s+sent)\b/i;
 // The organisation's own email ("their email", "the email they sent").
 const THEIRS = /\b(?:their|they\s+sent|from\s+them)\b/i;
@@ -31,6 +31,13 @@ const ukDay = (iso) => {
   const d = new Date(`${iso}T00:00:00Z`);
   return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 };
+
+// "support.uw.co.uk" and "uw.co.uk" are one organisation's.
+function orgDomain(d) {
+  const parts = d.split('.').filter(Boolean);
+  const n = parts.length >= 3 && /^(?:co|org|ac|gov|ltd|plc|me|net|sch|nhs)$/.test(parts[parts.length - 2]) ? 3 : 2;
+  return parts.slice(-n).join('.');
+}
 
 // The day an email was SENT: the reading's `sent_on` (a forward's own date is
 // the day it was forwarded), else the UK day it arrived.
@@ -46,12 +53,15 @@ export function sentDay(em) {
 export function emailsRequested(item, emails, { today = todayISO(), ourDomain = '' } = {}) {
   const text = String(item?.item || '');
   const named = ISO.test(item?.email_date || '') ? item.email_date : null;
-  if (!named && !ABOUT_EMAIL.test(text)) return [];
+  // Only an item that IS an email: "Proof of ownership" with a date the
+  // review gave it is not a copy of that day's email.
+  if (!ABOUT_EMAIL.test(text)) return [];
   const days = named ? [named] : [...new Set(datesIn(text, today))];
   if (days.length !== 1) return []; // no date, or two: not for a rule to pick
   // "Our emails of 16 and 20 September" reads as one date (the 20th): a day
   // number left over once the dates are taken out means more than one.
   if (!named && /\b\d{1,2}(?:st|nd|rd|th)?\b/i.test(text
+    .replace(/\bstage\s*\d\b/gi, ' ')
     .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, ' ')
     .replace(/\b\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:,?\s+\d{4})?/gi, ' '))) return [];
   const want = OURS.test(text) ? 'ours' : THEIRS.test(text) ? 'theirs' : null;
@@ -60,6 +70,20 @@ export function emailsRequested(item, emails, { today = todayISO(), ourDomain = 
     .filter((em) => !em.removed_org && sentDay(em) === days[0])
     .filter((em) => !want || (want === 'ours' ? ours(em) : !ours(em)))
     .sort((a, b) => new Date(a.received_at) - new Date(b.received_at));
+  // Who they are not sure of, with both sides writing that day: not for a
+  // rule to pick.
+  if (!want && found.some(ours) && found.some((em) => !ours(em))) return [];
+  // Never one organisation's correspondence in another's copy: the emails
+  // must all be with ONE outside organisation (by its email domain).
+  const outside = new Set();
+  for (const em of found) {
+    const addrs = ours(em) ? (em.to_addresses || []) : [em.sender_email];
+    for (const a of addrs) {
+      const dom = String(a || '').toLowerCase().replace(/.*@/, '').replace(/[>\s].*$/, '');
+      if (dom && dom !== ourDomain) outside.add(orgDomain(dom));
+    }
+  }
+  if (outside.size > 1) return [];
   // One email in two copies (sent from here, and the copy that came back to
   // a mailbox before Message-IDs were kept) goes in once.
   const seen = new Set();
@@ -88,6 +112,9 @@ async function fullBody(em) {
     );
     if (rows[0]?.body) return rows[0].body;
   }
+  // An email of theirs without its whole text is known only from a preview
+  // (Microsoft's is 255 characters): not a copy of the email.
+  if (em.direction !== 'outbound') return null;
   const preview = em.body_preview || '';
   return preview.length >= 2000 ? null : preview;
 }
@@ -163,6 +190,9 @@ const PASTE_GAP = /\[[^\]\n]*\b(?:paste|insert|attach|include|copy)\b[^\]\n]*\be
 // copy's ("[Insert their email of 3 October]" is not our 16 September one).
 function gapIsThisCopy(gap, { day, ours }) {
   if (/\baddress\b/i.test(gap)) return false;
+  // A gap that asks for more than this email ("[Insert copy of the bill and
+  // our email here]", "[Paste our email to the landlord here]") stays a gap.
+  if (/\b(?:and|plus|also|bill|invoice|letter|statement|landlord|tenant|photos?|documents?|evidence|attachments?|readings?)\b/i.test(gap)) return false;
   if (!/\b(?:paste|copy)\b/i.test(gap) && !/\be-?mail\s+(?:of|dated|sent)\b/i.test(gap)) return false;
   const days = datesIn(gap, day > todayISO() ? day : todayISO());
   if (days.length && !days.includes(day)) return false;

@@ -28,6 +28,11 @@ import { ukDate } from './complaintRules.js';
 // every "last wrote / last heard" reader (which skips tagged rows) leaves it
 // out, exactly as it does an organisation taken off the complaint.
 export const LANDLORD = 'the landlord';
+// The label the reply route puts on the PDF of the landlord's reply, and the
+// only document from the landlord's email that counts as their authority
+// once sent on (a tenancy agreement they attached is not one).
+export const replyPdfDescription = (day) => `The landlord's email of ${day}, as a PDF to send on as their reply`;
+const REPLY_PDF_LIKE = "The landlord's email of %, as a PDF to send on as their reply";
 
 // What a supplier writes when it won't deal with Greenco without authority,
 // sentence by sentence. Each pattern needs the refusal itself: a negative
@@ -43,7 +48,7 @@ const AUTH_PATTERNS = [
   // "You are not authorised on the account", "not registered as a third party
   // on this account", "not authorised to discuss it". Never "not registered
   // on the Priority Services Register".
-  new RegExp(String.raw`\b(?:not|isn['’]t|aren['’]t|no\s+longer)\s+(?:been\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:as\s+an?\s+third\s+party\s+)?(?:on|for|to)\s+${ACCOUNT}|to\s+(?:discuss|deal|act|speak|manage)\b|as\s+(?:an?\s+)?(?:third\s+party|representative|authori[sz]ed))`, 'i'),
+  new RegExp(String.raw`\b(?:not|isn['’]t|aren['’]t|no\s+longer)\s+(?:been\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:as\s+an?\s+third\s+party\s+)?(?:on|for)\s+${ACCOUNT}(?![-\s]*holder|['’]s)|to\s+(?:discuss|deal|act|speak|manage)\b|as\s+(?:an?\s+)?(?:third\s+party|representative|authori[sz]ed))`, 'i'),
   /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.]{0,60}?\b(?:authori[sz]ed|authority\s+(?:for|from|on|to\s+(?:act|discuss|deal|speak))|(?:permission|consent)\s+(?:for|from|on|to\s+(?:discuss|deal|speak|share)))\b/i,
   /\bno\s+record\s+of\b[^.]{0,40}?\b(?:authori[sz](?:ation|ed)|(?:a\s+)?letter\s+of\s+authority|(?:third[-\s]party\s+)?(?:permission|consent)\s+(?:for|from|on|to))/i,
   // "We don't have authority on file for you to discuss this account": the
@@ -61,6 +66,7 @@ const AUTH_PATTERNS = [
   // "Due to data protection, we are unable to discuss the account with you."
   /\b(?:data\s+protection|gdpr)\b[^.]{0,40}?\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:discuss|disclose|share|deal|speak)\b[^.]{0,40}?\b(?:you|greenco|third\s+part(?:y|ies))\b/i,
 ];
+const THING = /\b(?:refund|credit|reading|meter|payment|tenancy|move|switch|transfer|application|claim|amount|balance|change|request|bill|debit|tariff|smart)\b/i;
 const NOT_ABOUT_US = /\b(?:direct\s+debit|payment\s+(?:plan|method|card)|card\s+payment|intended\s+recipient|local\s+authority|planning\s+permission|this\s+(?:e-?mail|message)\b[^.]{0,40}\b(?:confidential|authori[sz]ed\s+by))/i;
 
 // A disclaimer or signature block is not what the email says.
@@ -88,10 +94,20 @@ export function copyOfEmail(body) {
 export function asksForAuthority(text) {
   // A full stop inside a sentence is not its end: "Mr. Lau", "E.ON Next".
   const s = String(text || '').replace(/\s+/g, ' ')
-    .replace(/\b(Mr|Mrs|Ms|Miss|Dr|St|No|Ref|Co|e\.g|i\.e|etc)\./gi, '$1')
+    // A title always comes before a name; "St." or "No." may end a sentence,
+    // so only before a small letter or a figure.
+    .replace(/\b(Mr|Mrs|Ms|Miss|Dr)\./g, '$1')
+    .replace(/\b([Ss]t|[Nn]o|[Rr]ef|[Cc]o|e\.g|i\.e|etc)\.(?=\s+[a-z0-9])/g, '$1')
     .replace(/\.(?=\S)/g, '');
   const sentences = s.split(/(?<=[.!?])\s+/);
-  return sentences.some((x) => !NOT_ABOUT_US.test(x) && AUTH_PATTERNS.some((re) => re.test(x)));
+  return sentences.some((x) => !NOT_ABOUT_US.test(x) && AUTH_PATTERNS.some((re, i) => {
+    const m = re.exec(x);
+    if (!m) return false;
+    // "Not authorised / registered on the account" said of a THING ("the
+    // refund has not been authorised for the account", "the meter reading
+    // isn't registered on the account yet") is not about Greenco.
+    return i !== 0 || !THING.test(x.slice(Math.max(0, m.index - 60), m.index));
+  }));
 }
 
 // A document that IS a landlord's authority for Greenco: a letter of
@@ -200,17 +216,18 @@ export async function authorityDocsFor(rows) {
             -- A PDF of the landlord's reply, once it has been sent on as
             -- their authority (a person read it and chose to): an authority
             -- for every complaint about the account from then on.
-            (EXISTS (SELECT 1 FROM complaint_emails e WHERE e.id = a.source_email_id
+            (a.description LIKE $5
+             AND EXISTS (SELECT 1 FROM complaint_emails e WHERE e.id = a.source_email_id
                        AND e.removed_org = $4 AND e.direction <> 'outbound')
              AND EXISTS (SELECT 1 FROM complaint_outbox o WHERE o.status = 'sent'
                        AND NOT COALESCE(o.to_landlord, false) AND a.id = ANY(o.attachment_ids))) AS sent_reply
        FROM complaint_attachments a JOIN complaints c ON c.id = a.complaint_id
-      WHERE (COALESCE(a.description, '') || ' ' || a.filename) ~* '(authori[sz]|authority|consent|loa)'
+      WHERE (COALESCE(a.description, '') || ' ' || a.filename) ~* '(authori[sz]|authority|consent|(^|[^a-z])loa([^a-z]|$))'
         AND (a.complaint_id = ANY($1::uuid[])
              OR EXISTS (SELECT 1 FROM unnest(c.account_numbers) n WHERE upper(regexp_replace(n, '[^A-Za-z0-9]', '', 'g')) = ANY($2::text[]))
              OR upper(regexp_replace(COALESCE(c.property, ''), '[^A-Za-z0-9]', '', 'g')) = ANY($3::text[]))
       ORDER BY a.uploaded_at DESC`,
-    [rows.map((r) => r.id), accounts, props, LANDLORD],
+    [rows.map((r) => r.id), accounts, props, LANDLORD, REPLY_PDF_LIKE],
   );
   const auth = docs.filter((d) => d.sent_reply || isAuthorityDoc(d));
   const out = new Map();
@@ -310,8 +327,9 @@ export async function authorityForMany(rows) {
   const docs = await authorityDocsFor(want);
   const { rows: replyDocs } = await query(
     `SELECT a.id, a.complaint_id FROM complaint_attachments a JOIN complaint_emails e ON e.id = a.source_email_id
-      WHERE a.complaint_id = ANY($1::uuid[]) AND e.removed_org = $2 AND e.direction <> 'outbound'`,
-    [ids, LANDLORD],
+      WHERE a.complaint_id = ANY($1::uuid[]) AND e.removed_org = $2 AND e.direction <> 'outbound'
+        AND a.description LIKE $3`,
+    [ids, LANDLORD, REPLY_PDF_LIKE],
   );
   for (const r of want) {
     const a = authorityState({

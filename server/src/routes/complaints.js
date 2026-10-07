@@ -7,7 +7,7 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { signedEmail } from '../lib/emailSignature.js';
-import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, copyOfEmail } from '../services/authority.js';
+import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, copyOfEmail, replyPdfDescription } from '../services/authority.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
@@ -459,7 +459,7 @@ router.post(
         filename: `Landlord authority - email of ${day.slice(4)}.pdf`,
         mimetype: 'application/pdf',
         buffer: textPdf({ title: `The landlord's email of ${day}`, text: copyText([em], [body]) }),
-      }, em.id, { description: `The landlord's email of ${day}, as a PDF to send on as their reply` });
+      }, em.id, { description: replyPdfDescription(day) });
     } else if (a.state === 'on_file') {
       doc = await authorityDocHere(c.id, a.doc);
     } else {

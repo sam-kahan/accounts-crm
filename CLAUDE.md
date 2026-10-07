@@ -761,6 +761,30 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — third review: replies' subjects, blanks, things not authorised, copies of one organisation's email
+- **Gaps** (`gapIn`, both copies): a subject counts only a blank to fill
+  in (`SUBJECT_PLACEHOLDER`: name, date, insert, here, tbc…), since a
+  reply's subject is "Re: <their subject>" and their tags say anything
+  ("[External Email: Do not click links]", "[Account Query]");
+  "[DD/MM/YYYY]" is a blank; a label with an example or a blank after it
+  ("[Account no: 00000000]", "[Account number, e.g. 850123456]") is a gap;
+  on an "Attached:" line only the FILE NAMES are passed over, so
+  "Attached: [insert copy of bill]" is still caught.
+- **Authority requests**: "not authorised / registered on the account" said
+  of a thing (a refund, a meter reading, a change of tenancy: `THING`) or
+  "registered to the account holder's name" is not about Greenco; "St." or
+  "No." only joins a sentence when a small letter or figure follows.
+- **Only the PDF of the landlord's reply** counts as their authority once
+  sent on (`replyPdfDescription`, matched in `authorityDocsFor` and
+  `replyDocIds`), never a tenancy agreement or other file they attached.
+- **Copies of an email** (`emailCopies.js`): never two organisations'
+  emails in one copy (one outside domain only), never both sides' when the
+  item doesn't say whose, only an item that is an email (even with the
+  review's `email_date`), never an email of theirs known only from its
+  255-character preview; "Stage 2" no longer reads as a second date; a
+  "[Paste …]" gap that asks for more than this email (the bill, the
+  landlord's email) stays a gap.
+
 ### 2026-10-07 — second review of the authority, gap and sign-off rules
 - **Gaps** (`signature.js#gapIn`, same rule in `client/src/api.js`): a
   placeholder word in capitals is a gap ("[POSTCODE]", "[LANDLORD]",
