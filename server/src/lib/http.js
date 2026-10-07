@@ -34,7 +34,13 @@ export class HttpError extends Error {
 export const parse = (schema, data) => {
   const result = schema.safeParse(data);
   if (!result.success) {
-    throw new HttpError(400, 'Validation failed', result.error.flatten());
+    // Say which field and why ("Mobile: Give a phone number…"), not just
+    // "Validation failed": the page shows this message as it stands.
+    const flat = result.error.flatten();
+    const [field, msgs] = Object.entries(flat.fieldErrors || {}).find(([, m]) => m?.length) || [];
+    const label = field ? field.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : null;
+    const message = field ? `${label}: ${msgs[0]}` : flat.formErrors?.[0] || 'Validation failed';
+    throw new HttpError(400, message, flat);
   }
   return result.data;
 };
@@ -75,4 +81,10 @@ const realDay = (v) => {
 };
 export const isoDate = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-09-30').refine(realDay, 'Not a real date');
 // The same, for a date that may be left blank: '' and null both clear it.
+// A phone number as people write one: figures, spaces, + ( ) - . and an
+// extension ("0161 850 8687", "+44 (0)161 850 8687 ext 12"). Blank clears it.
+export const phoneLine = z.string().max(120)
+  .refine((v) => !v.trim() || (/^\+?[0-9()\-.\s]+(?:\s*(?:ext\.?|extension|x)\s*\d{1,6})?$/i.test(v.trim()) && (v.match(/\d/g) || []).length >= 6),
+    'Give a phone number (figures, spaces, + and brackets only).')
+  .optional().nullable();
 export const optionalIsoDate = z.union([isoDate, z.literal('').transform(() => null)]).optional().nullable();

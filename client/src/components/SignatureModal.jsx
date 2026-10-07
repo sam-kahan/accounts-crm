@@ -18,6 +18,7 @@ export default function SignatureModal({ onClose }) {
   const { user, refresh } = useAuth();
   const [form, setForm] = useState(() => Object.fromEntries(FIELDS.map(([k]) => [k, user?.[k] || ''])));
   const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -27,7 +28,9 @@ export default function SignatureModal({ onClose }) {
   useEffect(() => {
     let live = true;
     const t = setTimeout(() => {
-      api.auth.previewSignature(form).then((p) => live && setPreview(p)).catch(() => live && setPreview(null));
+      api.auth.previewSignature(form)
+        .then((p) => { if (live) { setPreview(p); setPreviewError(null); } })
+        .catch((err) => { if (live) setPreviewError(err.message || 'The preview could not be shown.'); });
     }, 300);
     return () => { live = false; clearTimeout(t); };
   }, [form]);
@@ -84,6 +87,9 @@ export default function SignatureModal({ onClose }) {
       <div className="section-title" style={{ marginTop: 8 }}>How it looks</div>
       {preview?.enabled === false && (
         <div className="inline-note warn" style={{ marginBottom: 8 }}>The full signature is switched off on the server (EMAIL_SIGNATURE=off).</div>
+      )}
+      {previewError && (
+        <div className="login-error" style={{ marginBottom: 8 }}>{previewError}</div>
       )}
       {preview ? (
         <div

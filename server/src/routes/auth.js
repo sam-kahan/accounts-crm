@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, phoneLine } from '../lib/http.js';
 import { config } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { describeAccess } from '../services/permissions.js';
@@ -263,14 +263,13 @@ router.get(
 // Each person sets their own; an administrator can also set them in Staff &
 // access. Name and job title are here too, since the signature is where they
 // are read. Blank clears a line.
-const line = z.string().max(120).optional().nullable();
 const signatureInput = z.object({
   name: z.string().max(200).optional().nullable(),
   job_title: z.string().max(200).optional().nullable(),
   post_nominals: z.string().max(60).optional().nullable(),
-  direct_line: line,
-  office_phone: line,
-  mobile: line,
+  direct_line: phoneLine,
+  office_phone: phoneLine,
+  mobile: phoneLine,
 });
 const tidy = (v) => (v === undefined ? undefined : (String(v ?? '').replace(/\s+/g, ' ').trim() || null));
 

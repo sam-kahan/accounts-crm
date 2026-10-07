@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { asyncHandler, HttpError, parse, requireUuidParam } from '../lib/http.js';
+import { asyncHandler, HttpError, parse, requireUuidParam, phoneLine } from '../lib/http.js';
 import { config } from '../config.js';
 import { buildUpdateSet } from '../lib/sql.js';
 import {
@@ -52,9 +52,9 @@ const updateInput = z.object({
   job_title: z.string().max(200).optional().nullable(),
   // Their email signature's details (lib/emailSignature.js); blank clears.
   post_nominals: z.string().max(60).optional().nullable(),
-  direct_line: z.string().max(120).optional().nullable(),
-  office_phone: z.string().max(120).optional().nullable(),
-  mobile: z.string().max(120).optional().nullable(),
+  direct_line: phoneLine,
+  office_phone: phoneLine,
+  mobile: phoneLine,
   role: z.enum(ROLES).optional(),
   permissions: permissionsInput,
   active: z.boolean().optional(),

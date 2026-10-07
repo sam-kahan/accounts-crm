@@ -761,6 +761,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — phone numbers checked; a refused form says which field
+- **Signature phone numbers** (direct line, office, mobile; My signature and
+  Staff & access) must be a phone number (`lib/http.js#phoneLine`: figures,
+  spaces, + ( ) - . and an extension, at least 6 figures), never "call me"
+  or markup. The My signature preview shows why it can't be drawn instead of
+  "Loading the preview…" for ever.
+- **A form the server refuses says which field and why** (`lib/http.js#parse`:
+  "Mobile: Give a phone number…"), everywhere; it said only "Validation
+  failed".
+
 ### 2026-10-07 — third review: replies' subjects, blanks, things not authorised, copies of one organisation's email
 - **Gaps** (`gapIn`, both copies): a subject counts only a blank to fill
   in (`SUBJECT_PLACEHOLDER`: name, date, insert, here, tbc…), since a
