@@ -7,7 +7,7 @@ import { query, pool } from '../db/pool.js';
 import { asyncHandler, HttpError, parse, requireUuidParam, attachmentDisposition, viewableType } from '../lib/http.js';
 import { config, complaintInboxAddress } from '../config.js';
 import { signedEmail } from '../lib/emailSignature.js';
-import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere } from '../services/authority.js';
+import { LANDLORD, authorityReplyDraft, landlordRequestDraft, authorityDocHere, ownText } from '../services/authority.js';
 import { can } from '../services/permissions.js';
 import { removalTags, emailTracks } from '../services/trackContact.js';
 import { evidenceChecklist } from '../services/complaintEvidence.js';
@@ -450,13 +450,15 @@ router.post(
       // so"): a PDF of their email, kept as a document, goes with it.
       const em = (await query('SELECT * FROM complaint_emails WHERE id = $1 AND complaint_id = $2', [a.reply_email_id, c.id])).rows[0];
       if (!em) throw new HttpError(409, 'The landlord’s reply couldn’t be found.');
-      const body = em.body_text || em.body_preview || '';
+      // Their own words: not the quoted request under them, or a disclaimer.
+      const full = em.body_text || em.body_preview || '';
+      const body = ownText(full).trim() || full;
       const day = ukDate(londonDateOf(new Date(em.received_at)));
       doc = await saveAttachmentBuffer(c.id, {
         filename: `Landlord authority - email of ${day.slice(4)}.pdf`,
         mimetype: 'application/pdf',
         buffer: textPdf({ title: `The landlord's email of ${day}`, text: copyText([em], [body]) }),
-      }, em.id, { description: `Letter of authority: the landlord's email of ${day} authorising Greenco to act on the account` });
+      }, em.id, { description: `The landlord's email of ${day}, as a PDF to send on as their reply` });
     } else if (a.state === 'on_file') {
       doc = await authorityDocHere(c.id, a.doc);
     } else {
@@ -509,7 +511,8 @@ router.post(
     const orgAddrs = [c, ...(c.parties || [])].map((t) => String(t.org_email || '').toLowerCase()).filter(Boolean);
     const theirs = (await query(
       `SELECT DISTINCT lower(sender_email) AS a FROM complaint_emails
-        WHERE complaint_id = $1 AND direction <> 'outbound' AND removed_org IS NULL AND sender_email IS NOT NULL`, [c.id],
+        WHERE complaint_id = $1 AND direction <> 'outbound' AND removed_org IS NULL AND sender_email IS NOT NULL
+          AND analysis->>'from_organisation' = 'true'`, [c.id],
     )).rows.map((x) => x.a).filter((x) => !x.endsWith(`@${ours}`));
     const PUBLIC = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|btinternet|sky|virginmedia|talktalk|protonmail|proton|gmx|mail)\./;
     if ((ours && dom === ours) || orgAddrs.includes(addr) || theirs.includes(addr) ||

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
-import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural, complaintTracks, referenceLines, withReferences } from '../api';
+import { api, formatDate, todayISO, londonDay, ORG_TYPE_LABEL, accountOrReference, signEmail, plural, complaintTracks, referenceLines, withReferences, gapIn } from '../api';
 import { useAuth } from '../auth.jsx';
 import Modal from '../components/Modal.jsx';
 import { BounceWarning } from '../components/BouncedEmails.jsx';
@@ -2520,7 +2520,7 @@ export default function ComplaintDetail() {
               <button
                 className="btn-primary"
                 onClick={doSend}
-                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || (send.then === 'refer' && /\[[^\]\n]*[a-z][^\]\n]*\]/.test(send.body)) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
+                disabled={sending || choosingDocs || !send.to || !send.subject || !send.body || Boolean(gapIn(send.subject, signEmail(send.body, me))) || (send.then === 'landlord' && !String(send.landlord_name || '').trim())}
               >
                 {sending ? 'Sending…' : send.then === 'escalate' ? 'Send and escalate to Stage 2' : send.then === 'refer' ? 'Send the referral' : 'Send'}
               </button>
@@ -2563,9 +2563,6 @@ export default function ComplaintDetail() {
               file, and each document on this complaint (as many as an email can carry; any left over are named in
               the email). It is recorded as referred, dated the day it goes.
               {send.note && <div style={{ marginTop: 6 }}><strong>{send.scheme || send.ombudsman} says:</strong> {send.note}</div>}
-              {/\[[^\]\n]*[a-z][^\]\n]*\]/.test(send.body) && (
-                <div className="login-error" style={{ marginTop: 6 }}>Fill in the parts in [square brackets] before sending.</div>
-              )}
             </div>
           )}
           <label className="field">
@@ -2608,6 +2605,11 @@ export default function ComplaintDetail() {
             <textarea rows={12} value={send.body}
               onChange={(e) => setSend({ ...send, body: e.target.value })} />
           </label>
+          {gapIn(send.subject, signEmail(send.body, me)) && (
+            <div className="login-error" style={{ marginBottom: 12 }}>
+              Fill in {gapIn(send.subject, signEmail(send.body, me))} before sending (or take it out).
+            </div>
+          )}
           {!['refer', 'landlord'].includes(send.then) && (
             <>
               {send.attach_why && (

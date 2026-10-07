@@ -78,3 +78,10 @@ test('only a real sign-off is replaced: the message, a P.S., a quoted email and 
   const s = signedEmail('Hi\n\nBody\n\nThanks,\nSam\nFinance Director\n\nAttached: bill.pdf; letter.pdf.', SAM).text;
   assert.match(s, /^Hi\n\nBody\n\nAttached: bill\.pdf; letter\.pdf\.\n\nThanks,\n\nSam Kahan MAAT/);
 });
+
+test('a reference line after the closing stays in the email, above the closing', () => {
+  const { head, closing } = withoutSignOff('Dear team,\n\nPlease see attached.\n\nKind regards,\n\n[Name]\n[Job title]\nGreenco\nYour reference: 12345');
+  assert.equal(closing, 'Kind regards,');
+  assert.equal(head, 'Dear team,\n\nPlease see attached.\n\nYour reference: 12345');
+  assert.match(withoutSignOff('Hi,\n\nHello.\n\nRegards,\nSam\nE.ON Next reference: A-1').head, /E\.ON Next reference: A-1$/);
+});

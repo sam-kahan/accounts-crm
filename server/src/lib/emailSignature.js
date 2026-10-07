@@ -102,7 +102,9 @@ const CLOSING = /^[ \t]*(?:kind regards|best regards|warm regards|regards|best w
 // the sign-off, or more follows it: nothing is removed (`kept`), and the
 // signature goes under it without a second closing. An "Attached: …" line
 // (withAttachedLine) is kept in the body, never removed with the sign-off.
-const ATTACHED = /^\s*Attached:/i;
+// A reference or account line ("Your reference: 12345") is kept the same
+// way: it belongs to the message, and goes above the closing.
+const ATTACHED = /^\s*(?:Attached:|(?:(?:your|our|their|[\w&'’.-]+(?:\s+[\w&'’.-]+){0,3})\s+ref(?:erence)?\b|ref(?:erence)?\s*(?:no\.?)?\s*[:#]|account(?:\s+(?:no\.?|number))?\s*[:#]))/i;
 const SIGN_LINE = (l) => {
   const t = l.trim();
   if (!t) return true;

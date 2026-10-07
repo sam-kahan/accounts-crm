@@ -616,6 +616,39 @@ export function signEmail(text, user) {
   return s;
 }
 
+// A gap left to fill in ("[Paste our email here]", "[DATE]"), by the same
+// rule as server/src/lib/signature.js#gapIn, which refuses the send: the
+// window says so before Send is pressed.
+const PLACEHOLDER = /\b(?:name|date|amount|address|insert|paste|add|enter|fill|details?|title|number|here|tbc|xx+)\b/i;
+// A word a mail system puts in brackets on its own ("[EXTERNAL]"), never the
+// start of a sentence ("[External link]", "[Re-attach the bill]").
+const TAG = /^\s*(?:external|ext|secure|spam|suspected\s+spam|encrypt(?:ed)?|fwd?|re|caution|warning|urgent|important|confidential)\s*$/i;
+// A reference or number: an optional label ("Ticket #", "Ref:", "Case")
+// then digits and short codes, with no word in it ("[Ticket #12345]",
+// "[850123456]", "[Ref: AB-1234]"), never "[Case notes here]".
+const CODE = (c) => {
+  const rest = c.replace(/^\s*(?:ticket|ref(?:erence)?|our\s+ref|your\s+ref|case|incident|job)\b\.?\s*(?:no\.?|number)?\s*[:#]?\s*/i, '');
+  return /\d/.test(rest) && !/[a-z]{4,}/i.test(rest) && /^[#A-Z0-9][A-Z0-9#\-\/. ]*$/i.test(rest.trim());
+};
+const notGap = (c) => /^\s*sic\s*$/i.test(c) ||
+  /@|:\/\/|cid:|mailto:|^\s*image\s*:/i.test(c) ||
+  /^\s*GC-(?:C|CI|COM)-[A-Z0-9]+\s*$/i.test(c) ||
+  TAG.test(c) || CODE(c) ||
+  // Another single word in capitals ("[PDF]"), unless it is a placeholder
+  // ("[NAME]", "[DATE]", "[TBC]").
+  (/^\s*[A-Z]{2,12}\s*$/.test(c) && !PLACEHOLDER.test(c));
+const BRACKETS = /\[([^\]\n]{2,})\]/g;
+export function gapIn(subject, body = '') {
+  for (const [text, isSubject] of [[subject, true], [body, false]]) {
+    for (const m of String(text ?? '').matchAll(BRACKETS)) {
+      if (notGap(m[1])) continue;
+      if (isSubject && !PLACEHOLDER.test(m[1])) continue;
+      return m[0];
+    }
+  }
+  return null;
+}
+
 // "1 invoice" / "3 invoices"; with two words, the one that agrees: "1 needs",
 // "3 need".
 export function plural(n, one, many) {

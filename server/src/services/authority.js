@@ -29,19 +29,26 @@ import { ukDate } from './complaintRules.js';
 // out, exactly as it does an organisation taken off the complaint.
 export const LANDLORD = 'the landlord';
 
-// What a supplier writes when it won't deal with Greenco without authority:
-// that it can't see Greenco is authorised, that Greenco isn't authorised ON
-// THE ACCOUNT (never "you are not authorised to read this email"), that it
-// can't discuss it without the account holder's say-so, a positive ask for
-// a letter of authority, or the account holder being asked to get in touch
-// to authorise. Read on the email's own text with any disclaimer cut off.
-const NOT_AUTHORISED = new RegExp([
-  String.raw`\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.\n]{0,60}?\b(?:authori[sz]ed|authority|permission|consent)\b`,
-  String.raw`\b(?:is|are|isn['’]t|aren['’]t)\s+(?:not\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:third\s+party\s+)?on\s+(?:the|this|their|his|her|mr|mrs|ms|miss)\b|to\s+(?:discuss|deal|act|speak|manage)\b|(?:as\s+)?(?:an?\s+)?(?:third\s+party|representative))`,
-  String.raw`\b(?:unable|cannot|can['’]t|not\s+able)\s+to\s+(?:discuss|disclose|deal\s+with|speak|share|act|go\s+into)\b[^.\n]{0,80}?\b(?:without|unless|until)\b[^.\n]{0,60}?\b(?:authori[sz]|permission|consent|account\s*holder|bill\s*payer|named\s+customer)`,
-  String.raw`\b(?:please\s+(?:send|provide|supply|forward)|we\s+(?:will\s+)?(?:need|require)|(?:you\s+)?will\s+need\s+to\s+(?:send|provide))\b[^.\n]{0,60}?\b(?:letter\s+of\s+authority|authority\s+form|written\s+(?:authority|consent|permission)|third[-\s]party\s+(?:authority|authori[sz]ation|consent))`,
-  String.raw`\b(?:account\s*holder|bill\s*payer|named\s+customer)\b[^.\n]{0,40}?\b(?:to|will\s+need\s+to|needs?\s+to|must|should)\s+(?:contact|call|get\s+in\s+touch\s+with)\b[^.\n]{0,60}?\b(?:authori[sz]|add\s+(?:you|greenco|them)|permission|consent)`,
-].join('|'), 'i');
+// What a supplier writes when it won't deal with Greenco without authority,
+// sentence by sentence. Each pattern needs the refusal itself: a negative
+// with "authorised ON the account / TO discuss" (never "you are authorised"
+// or "not the intended recipient"), "can't see / no record of" an
+// authority, "can only speak to the account holder", "can't discuss ...
+// without permission / with a third party / as you are not the account
+// holder", a positive ask for consent or a letter of authority, or the
+// account holder asked to get in touch TO authorise. A sentence about a
+// Direct Debit, a payment or the email itself (a disclaimer) never counts.
+const AUTH_PATTERNS = [
+  /\b(?:not|isn['’]t|aren['’]t|no\s+longer)\s+(?:been\s+)?(?:yet\s+)?(?:an?\s+)?(?:authori[sz]ed|registered)\s+(?:(?:as\s+a\s+third\s+party\s+)?on\s+(?:the|this|their|his|her)\b|to\s+(?:discuss|deal|act|speak|manage)\b|as\s+(?:an?\s+)?(?:third\s+party|representative))/i,
+  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:see|find|confirm|verify|locate)\b[^.]{0,60}?\b(?:authori[sz]ed|authority|permission|consent)\b/i,
+  /\b(?:no\s+record\s+of|(?:don['’]t|do\s+not|doesn['’]t|does\s+not)\s+have|haven['’]t\s+got|have\s+no)\b[^.]{0,40}?\b(?:authority|authori[sz](?:ation|ed)|permission|consent)\b/i,
+  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to|won['’]t\s+be\s+able\s+to)\s+(?:discuss|disclose|deal|speak|share|go\s+into)\b[^.]{0,80}?\b(?:without|unless|until)\b[^.]{0,40}?\b(?:permission|consent|authori[sz]|authority)/i,
+  /\b(?:can(?:not|['’]t)|unable\s+to|not\s+able\s+to)\s+(?:discuss|disclose|deal|speak|share)\b[^.]{0,80}?\b(?:as\s+you\s+are\s+not\s+the\s+(?:account\s*holder|bill\s*payer|named)|with\s+(?:a\s+)?third\s+part(?:y|ies))/i,
+  /\b(?:can\s+only|only\s+able\s+to|only\s+(?:speak|discuss))\s+(?:speak|discuss|deal)?\b[^.]{0,40}?\b(?:account\s*holder|bill\s*payer|named\s+(?:customer|person))/i,
+  /\b(?:we(?:\s+will|['’]ll)?\s+(?:need|require)|(?:please|could\s+you|can\s+you|kindly)\s+(?:send|provide|supply|forward))\b[^.]{0,60}?\b(?:letter\s+of\s+authority|authority\s+form|(?:account\s*holder|bill\s*payer)['’]s\s+(?:consent|permission|authori[sz]ation|authority)|(?:signed|written)\s+(?:authority|authori[sz]ation|consent|permission))/i,
+  /\b(?:account\s*holder|bill\s*payer|named\s+customer)\b[^.]{0,40}?\b(?:to|will\s+need\s+to|needs?\s+to|must|should)\s+(?:contact|call|get\s+in\s+touch\s+with)\b[^.]{0,60}?\b(?:authori[sz]|add\s+(?:you|greenco|them)|as\s+(?:a\s+)?third\s+party|(?:permission|consent)\s+for|to\s+discuss)/i,
+];
+const NOT_ABOUT_US = /\b(?:direct\s+debit|payment\s+(?:plan|method|card)|card\s+payment|intended\s+recipient|this\s+(?:e-?mail|message)\b[^.]{0,40}\b(?:confidential|authori[sz]ed\s+by))/i;
 
 // A disclaimer or signature block is not what the email says.
 const DISCLAIMER = /\n[^\n]*\b(?:this\s+(?:e-?mail|message)\b[^\n]{0,80}\b(?:confidential|intended\s+(?:solely|only)?\s*for)|if\s+you\s+are\s+not\s+the\s+intended\s+recipient|disclaimer|confidentiality\s+notice|registered\s+(?:office|in\s+england))/i;
@@ -56,7 +63,10 @@ export function ownText(body) {
   return s.slice(0, 3000);
 }
 
-export const asksForAuthority = (text) => NOT_AUTHORISED.test(String(text || '').replace(/\s+/g, ' '));
+export function asksForAuthority(text) {
+  const sentences = String(text || '').replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/);
+  return sentences.some((x) => !NOT_ABOUT_US.test(x) && AUTH_PATTERNS.some((re) => re.test(x)));
+}
 
 // A document that IS a landlord's authority for Greenco: a letter of
 // authority, or something authorising Greenco (or a third party) to act on
@@ -77,7 +87,10 @@ const sentOn = (e) => (ISO.test(e.analysis?.sent_on || '') ? e.analysis.sent_on 
 // authority documents on file (this complaint first), { id, filename,
 // complaint_id, source_email_id }; `outbox`: sent rows { finished_at,
 // attachment_ids, landlord }. Returns null when nobody asked.
-export function authorityState({ complaint, emails = [], docs = [], outbox = [], ourDomain = '' }) {
+// `replyDocIds`: documents made from the landlord's reply (a PDF of their
+// email, labelled plainly so it never reads as a letter of authority before
+// a person has read it and sent it): sending one counts as sent.
+export function authorityState({ complaint, emails = [], docs = [], outbox = [], ourDomain = '', replyDocIds = [] }) {
   const ours = String(ourDomain || '').toLowerCase();
   const fromUs = (e) => String(e.sender_email || '').toLowerCase().endsWith(`@${ours}`);
   const isTheirs = (e) => e.direction !== 'outbound' && !e.removed_org && e.analysis?.kind !== 'our_email' &&
@@ -96,7 +109,7 @@ export function authorityState({ complaint, emails = [], docs = [], outbox = [],
   const askedOn = sentOn(latest);
   if (complaint.authority_done_on && complaint.authority_done_on >= askedOn) return null;
 
-  const authIds = new Set(docs.map((d) => d.id));
+  const authIds = new Set([...docs.map((d) => d.id), ...replyDocIds]);
   const outside = (e) => (e.to_addresses || []).some((a) => ours && !String(a).toLowerCase().includes(`@${ours}`));
   // Sent since: an email of ours to someone outside (not the landlord) that
   // carried an authority document, or a send from here that attached one.
@@ -120,7 +133,11 @@ export function authorityState({ complaint, emails = [], docs = [], outbox = [],
   // The landlord wrote back (the draft says a reply is enough), with nothing
   // attached that reads as a letter of authority: a person reads it, and
   // sends it on (as a PDF of their email) if it gives the authority.
-  const reply = emails.filter((e) => e.removed_org === LANDLORD && e.direction !== 'outbound' && sentOn(e) >= askedOn)
+  // Only an email FROM the landlord: our own copy of the request coming back
+  // through a watched mailbox is tagged as landlord correspondence too.
+  const landlord = String(complaint.landlord_email || '').trim().toLowerCase();
+  const fromLandlord = (e) => (landlord ? String(e.sender_email || '').trim().toLowerCase() === landlord : !fromUs(e));
+  const reply = emails.filter((e) => e.removed_org === LANDLORD && e.direction !== 'outbound' && fromLandlord(e) && sentOn(e) >= askedOn)
     .sort((a, b) => (sentOn(a) < sentOn(b) ? 1 : -1))[0];
   if (reply) return { ...base, state: 'landlord_replied', reply_email_id: reply.id, replied_on: sentOn(reply) };
   if (asked) return { ...base, state: 'asked_landlord', landlord_asked_on: sentOn(asked) };
@@ -258,6 +275,11 @@ export async function authorityForMany(rows) {
     [ids],
   );
   const docs = await authorityDocsFor(want);
+  const { rows: replyDocs } = await query(
+    `SELECT a.id, a.complaint_id FROM complaint_attachments a JOIN complaint_emails e ON e.id = a.source_email_id
+      WHERE a.complaint_id = ANY($1::uuid[]) AND e.removed_org = $2 AND e.direction <> 'outbound'`,
+    [ids, LANDLORD],
+  );
   for (const r of want) {
     const a = authorityState({
       complaint: r,
@@ -265,6 +287,7 @@ export async function authorityForMany(rows) {
       docs: docs.get(r.id) || [],
       outbox: outbox.filter((o) => o.complaint_id === r.id),
       ourDomain: config.complaintEmail.domain,
+      replyDocIds: replyDocs.filter((d) => d.complaint_id === r.id).map((d) => d.id),
     });
     if (a) out.set(r.id, a);
   }

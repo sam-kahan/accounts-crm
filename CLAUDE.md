@@ -761,6 +761,30 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-07 — fixes from a review of the authority and signature changes
+- **Authority requests read by sentence** (`authority.js#asksForAuthority`,
+  with a test corpus of real wordings and look-alikes): "We'll need a letter
+  of authority", "we can only speak to the account holder", "can't discuss it
+  with a third party" count; a disclaimer, a Direct Debit "authorisation" or
+  "you are now authorised" never do.
+- **The landlord's reply is only an email FROM the landlord** (their
+  address when it is kept; otherwise not one of ours): our own request
+  coming back through a watched mailbox no longer read as their answer.
+  The PDF of their reply is labelled plainly (it never reads as a letter of
+  authority before a person has read and sent it), holds only their own
+  words (`ownText`), and sending it counts as sent (`replyDocIds`).
+- The landlord's address is refused as "the organisation's" only by
+  addresses read as the organisation's own emails.
+- **A gap in capitals is a gap** (`signature.js#gapIn`: "[NAME]",
+  "[DATE]", "[ACCOUNT NUMBER]", "[XX/XX/XXXX]", "[£___]"); a mail tag is
+  exempt only as the bracket's single word ("[EXTERNAL]", not "[External
+  link]"), a reference only when it is digits and codes ("[Ticket #12345]",
+  not "[Case notes here]"). The client has the same rule
+  (`client/src/api.js#gapIn`), and every Send window says which gap is left
+  and waits, not only the referral.
+- **A "Your reference: …" line after the sign-off is kept**, moved above
+  the closing like the "Attached:" line (`emailSignature.js#withoutSignOff`).
+
 ### 2026-10-07 — checked by sending through a local mail server
 - Sent a complaint reply (authority attached), a landlord request and a
   commission invoice through a local SMTP sink: recipients, CC, the

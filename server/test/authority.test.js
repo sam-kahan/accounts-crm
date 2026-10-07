@@ -146,3 +146,66 @@ test('the landlord replied: send their reply on', () => {
   assert.equal(a.reply_email_id, 'e6');
   assert.equal(authorityStep(a, 'UW').action, true);
 });
+
+test('only the landlord’s own email is their reply; sending the PDF of it settles it', () => {
+  const asked = { id: 'e3', direction: 'outbound', removed_org: LANDLORD, to_addresses: ['lau@gmail.com'], received_at: '2026-10-06T11:00:00Z' };
+  // Our own request, come back through a watched mailbox.
+  const copy = { id: 'e4', direction: 'inbound', removed_org: LANDLORD, sender_email: 'sam@greenco.co.uk', to_addresses: ['lau@gmail.com'], received_at: '2026-10-06T11:01:00Z', analysis: {} };
+  const someone = { id: 'e5', direction: 'inbound', removed_org: LANDLORD, sender_email: 'other@gmail.com', received_at: '2026-10-06T12:00:00Z', analysis: {} };
+  const withLandlord = { ...C, landlord_email: 'Lau@gmail.com' };
+  assert.equal(authorityState({ complaint: C, emails: [UW, asked, copy], ourDomain: OURS }).state, 'asked_landlord');
+  assert.equal(authorityState({ complaint: withLandlord, emails: [UW, asked, someone], ourDomain: OURS }).state, 'asked_landlord');
+  const reply = { id: 'e6', direction: 'inbound', removed_org: LANDLORD, sender_email: 'lau@gmail.com', received_at: '2026-10-06T15:00:00Z', analysis: {} };
+  assert.equal(authorityState({ complaint: withLandlord, emails: [UW, asked, reply], ourDomain: OURS }).state, 'landlord_replied');
+  // The PDF of their reply is not "a letter of authority on file" until sent.
+  assert.equal(isAuthorityDoc({ filename: 'Landlord authority - email of 6 Oct 2026.pdf', description: "The landlord's email of Tue 6 Oct 2026, as a PDF to send on as their reply" }), false);
+  const sent = { finished_at: '2026-10-07T09:00:00Z', attachment_ids: ['p1'] };
+  assert.equal(authorityState({ complaint: withLandlord, emails: [UW, asked, reply], outbox: [sent], replyDocIds: ['p1'], ourDomain: OURS }).state, 'sent');
+});
+
+// How organisations actually word it, and the sentences that only look like it.
+const AUTH_YES = [
+ "Utility Warehouse apologises for the delay but says it cannot see that Imogen is authorised on Mr Lau's account. It asks the account holder to contact them to arrange authorisation.",
+ "Hi, sorry for the delay. We cannot see that Imogen is authorised on Mr Lau's account.",
+ "We are unable to discuss the account without the account holder's permission.",
+ "Please send us a letter of authority signed by the account holder.",
+ "The account holder will need to call us to add you to the account.",
+ "You are not authorised on the account.", "You are not registered as a third party on this account.",
+ "We are unable to discuss this account with you as you are not the account holder.",
+ "For data protection reasons we can only speak to the account holder.",
+ "We need the account holder's consent before we can discuss the account.",
+ "We don't have authority on file for you to discuss this account.",
+ "We'll need a letter of authority from the landlord.",
+ "Could you send us a signed letter of authority?",
+ "We can't discuss this without the account holder's permission.",
+ "Due to GDPR we cannot discuss the account with a third party.",
+ "We have no record of you being authorised on this account.",
+];
+const AUTH_NO = [
+ "If you are not the intended recipient you are not authorised to use, copy or disclose it",
+ "This message has not been authorised by the company",
+ "No further action is required, you are now authorised on the account.",
+ "We have not received authorisation for the direct debit.",
+ "If you have any questions, the account holder should contact us.",
+ "There is no need for a letter of authority, we have it.",
+ "If you are not happy the bill payer can contact the Ombudsman.",
+ "Thank you, we can now see you are authorised on the account.",
+ "Greenco is registered on the account as a third party.",
+ "you are authorised to discuss the account.", "Mr Lau is registered on the account since 2021.",
+ "We are unable to discuss your complaint until we receive the meter readings, unless the account holder confirms the move date.",
+ "The account holder must contact us to set up a payment plan with consent of the court.",
+ "We don't have a direct debit authorisation on file.", "Your final bill is attached.",
+];
+test('authority requests: the wordings seen, and the look-alikes', () => {
+  for (const s of AUTH_YES) assert.ok(asksForAuthority(s), s);
+  for (const s of AUTH_NO) assert.equal(asksForAuthority(s), false, s);
+});
+
+test('a gap is a gap in capitals too; a reference or mail tag is not', () => {
+  for (const g of ['[NAME]', '[DATE]', '[AMOUNT]', '[ACCOUNT NUMBER]', '[XX/XX/XXXX]', '[£___]', '[Case notes here]',
+    '[Re-attach the bill]', '[External link]', '[Ref: insert]', '[Our email of 16 September]', '[TBC]']) assert.equal(gapIn('', `Hi ${g}`), g, g);
+  for (const ok of ['[GC-C-BLV2WK]', '[EXTERNAL]', '[Ticket #12345]', '[850123456]', '[sic]', '[image: logo]', '[Ref: AB-1234]', '[PDF]'])
+    assert.equal(gapIn('', `Hi ${ok}`), null, ok);
+  assert.equal(gapIn('Re: your complaint [GC-C-BLV2WK]', ''), null);
+  assert.equal(gapIn('Complaint about [NAME]', ''), '[NAME]');
+});
