@@ -531,6 +531,9 @@ function OverdueDraftsModal({ onClose }) {
 // is up to date, otherwise the one the dates give (for each organisation,
 // named, when there is more than one), never an out-of-date one.
 function nextStepOf(c) {
+  // The organisation waits on the landlord's authority: that is the step
+  // (as on the complaint page and in the morning email), whatever else.
+  if (c.authority?.action && c.state === 'open') return c.authority.text;
   const ai = c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action);
   if (ai) return ai;
   const tracks = [c, ...(c.parties || [])].filter((t) => t.nextAction);

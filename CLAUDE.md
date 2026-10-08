@@ -761,6 +761,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — the landlord's authority is the step in the morning email and the list too
+- A complaint waiting on the landlord's authority (on file to send, or to
+  ask the landlord for) that was also overdue and lately chased read
+  "Nothing to send yet: … wait for their reply" in the morning email, the
+  dashboard and the Complaints list's "Next:", beside an Action needed
+  badge; only the complaint page said to send the authority. The authority
+  step now comes first in all three (`collectComplaintDueItems`:
+  "Complaint ACTION NEEDED" with `authority.text`; `nextStepOf` in
+  `pages/Complaints.jsx`).
+
 ### 2026-10-08 — marking an email: no date before the complaint; Accept all files nothing away
 - **Marking an email as their acknowledgement or response** (`POST
   /:id/emails/:emailId/review`) refuses a date before the complaint was made

@@ -17,7 +17,7 @@ import { refreshStaleReviews } from '../services/complaintReview.js';
 import { withNumbers } from '../lib/money.js';
 import { todayISO, addDays } from '../lib/dates.js';
 import { plural } from '../lib/words.js';
-import { theOmbudsman, ukDate } from '../services/complaintRules.js';
+import { theOmbudsman, trackOpen, ukDate } from '../services/complaintRules.js';
 
 const router = Router();
 
@@ -162,6 +162,21 @@ export async function collectComplaintDueItems(days = 30) {
       // is overdue from them while they wait on us. What they asked for and
       // isn't on file is named, so the person knows to find it. (An overdue
       // part keeps its own OVERDUE line below, with this step as its detail.)
+      // The organisation is waiting on the landlord's authority (send the
+      // one on file, or ask the landlord): that is the step, whatever the
+      // dates say. A chase "held" because Greenco wrote lately, or an
+      // overdue date, must not hide it: nothing moves until it is sent.
+      const authHere = c.authority?.action && trackOpen(t) &&
+        (c.authority.party_id || null) === (i ? t.id : null);
+      if (authHere) {
+        items.push({
+          type: 'complaint', id: c.id,
+          label: `Complaint ACTION NEEDED: ${c.subject}`,
+          due_date: todayISO(), company_name: t.org_name, overdue: true,
+          detail: c.authority.text, link,
+        });
+        continue;
+      }
       if (t.action_now && (aiOwn || t.action_why) && !t.needs_chasing) {
         const what = t.action_why || aiOwn;
         const missing = (t.asked_for || []).filter((x) => !x.attachment_id && !x.given && !x.not_ours).map((x) => x.item);
