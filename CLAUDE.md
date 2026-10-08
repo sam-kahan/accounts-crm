@@ -761,6 +761,12 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — each complaint line carries its GC-C reference
+- Dashboard and morning email complaint lines end with the complaint's
+  reference ("Wrong meter (GC-C-BKAVBN)", `about` in
+  `collectComplaintDueItems`): two complaints with the same subject read
+  identically.
+
 ### 2026-10-08 — the morning email leads with what to do now
 - **`buildDigest`** puts complaint items to act on (`badge`: Action needed,
   Confirm it, Not sent yet) under their own **To do now** heading first,

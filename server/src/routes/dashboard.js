@@ -113,12 +113,15 @@ export async function collectComplaintDueItems(days = 30) {
     // its review is up to date, otherwise the one worked out from the dates.
     const aiStep = (c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action)) || null;
     const link = `${config.appUrl.replace(/\/+$/, '')}/complaints/${c.id}`;
+    // Two complaints can share a subject ("Wrong meter", Octopus, twice):
+    // the GC-C reference tells them apart on the dashboard and in the email.
+    const about = c.ref_code ? `${c.subject} (${c.ref_code})` : c.subject;
     // An email says it has been put right: confirm it (top of the list).
     if (c.resolution_suggested) {
       const r = c.resolution_suggested;
       items.push({
         type: 'complaint', id: c.id,
-        label: `Complaint LOOKS RESOLVED${r.org_name ? ` (${r.org_name})` : ''}: ${c.subject}`, badge: 'confirm',
+        label: `Complaint LOOKS RESOLVED${r.org_name ? ` (${r.org_name})` : ''}: ${about}`, badge: 'confirm',
         due_date: r.on || todayISO(), company_name: r.org_name || c.org_name, overdue: true,
         detail: `${r.outcome || 'An email says it has been put right'}. Confirm it on the complaint.`,
         link,
@@ -138,7 +141,7 @@ export async function collectComplaintDueItems(days = 30) {
         const passed = t.ombudsman_deadline < todayISO();
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint ${passed ? 'REFER-BY DATE PASSED' : 'last day to refer to the ombudsman'}: ${c.subject}`,
+          label: `Complaint ${passed ? 'REFER-BY DATE PASSED' : 'last day to refer to the ombudsman'}: ${about}`,
           due_date: t.ombudsman_deadline, company_name: t.org_name, overdue: passed,
           detail: passed
             ? `The time to refer it to ${theOmbudsman(t.rule?.ombudsman)} ended on ${ukDate(t.ombudsman_deadline)}. Check with them whether they will still take it.`
@@ -151,7 +154,7 @@ export async function collectComplaintDueItems(days = 30) {
       if (t.status === 'not_sent') {
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint NOT SENT YET: ${c.subject}`, badge: 'not_sent',
+          label: `Complaint NOT SENT YET: ${about}`, badge: 'not_sent',
           due_date: todayISO(), company_name: t.org_name, overdue: false, detail: t.nextAction, link,
         });
         continue;
@@ -171,7 +174,7 @@ export async function collectComplaintDueItems(days = 30) {
       if (authHere) {
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint ACTION NEEDED: ${c.subject}`, badge: 'action',
+          label: `Complaint ACTION NEEDED: ${about}`, badge: 'action',
           due_date: todayISO(), company_name: t.org_name, overdue: true,
           detail: c.authority.text, link,
         });
@@ -182,7 +185,7 @@ export async function collectComplaintDueItems(days = 30) {
         const missing = (t.asked_for || []).filter((x) => !x.attachment_id && !x.given && !x.not_ours).map((x) => x.item);
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint ACTION NEEDED: ${c.subject}`, badge: 'action',
+          label: `Complaint ACTION NEEDED: ${about}`, badge: 'action',
           due_date: todayISO(), company_name: t.org_name, overdue: true,
           detail: missing.length ? `${what} Not on file yet: ${missing.join(', ')}.` : what,
           link,
@@ -197,7 +200,7 @@ export async function collectComplaintDueItems(days = 30) {
         if (t.chase_held_until > horizon) continue;
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint: chased, waiting for their reply: ${c.subject}`,
+          label: `Complaint: chased, waiting for their reply: ${about}`,
           due_date: t.chase_held_until, company_name: t.org_name, overdue: false, detail, link,
         });
         continue;
@@ -206,7 +209,7 @@ export async function collectComplaintDueItems(days = 30) {
         items.push({
           type: 'complaint',
           id: c.id,
-          label: `Complaint NOT ACKNOWLEDGED: ${c.subject}`,
+          label: `Complaint NOT ACKNOWLEDGED: ${about}`,
           due_date: t.ack_due,
           company_name: t.org_name,
           overdue: true,
@@ -221,7 +224,7 @@ export async function collectComplaintDueItems(days = 30) {
         if (t.ack_due > horizon) continue;
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint acknowledgement due: ${c.subject}`,
+          label: `Complaint acknowledgement due: ${about}`,
           due_date: t.ack_due, company_name: t.org_name, overdue: false, detail, link,
         });
         continue;
@@ -230,7 +233,7 @@ export async function collectComplaintDueItems(days = 30) {
       items.push({
         type: 'complaint',
         id: c.id,
-        label: `Complaint ${t.overdue ? 'response OVERDUE' : 'response due'}: ${c.subject}`,
+        label: `Complaint ${t.overdue ? 'response OVERDUE' : 'response due'}: ${about}`,
         due_date: t.response_due,
         company_name: t.org_name,
         overdue: t.overdue,
