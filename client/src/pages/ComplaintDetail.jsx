@@ -2123,6 +2123,11 @@ export default function ComplaintDetail() {
                       {markingEmail?.id === em.id && markingEmail.as === 'correspondence' ? 'Filing…' : 'Just correspondence'}
                     </button>
                   </div>
+                  {multi && !tr && (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                      Choose which organisation it is from to record it as their acknowledgement or response.
+                    </div>
+                  )}
                   {emailErr?.id === em.id && <div className="login-error" role="alert" style={{ marginTop: 8 }}>{emailErr.msg}</div>}
                 </div>
               );
