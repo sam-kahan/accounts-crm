@@ -1438,7 +1438,12 @@ export default function ComplaintDetail() {
       <div style={{ marginBottom: 16 }}>
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
-      {msg && <div className="inline-note warn" style={{ marginBottom: 16 }}>{msg}</div>}
+      {msg && (
+        <div className="page-message" role="alert">
+          <div>{msg}</div>
+          <button type="button" aria-label="Close the message" onClick={() => setMsg(null)}>✕</button>
+        </div>
+      )}
       {/* The emails put the complaint itself in question (a re-check found no
           formal complaint, or a different date it was made): answered here,
           and until it is, nothing says it can go to the ombudsman. */}

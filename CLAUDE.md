@@ -775,6 +775,10 @@ the page says how far each date can be trusted.
 - **Undo** and **Send again…** on an email wait while they run and show a
   refusal under that email. An email only filed (nothing dated recorded)
   reads "Filed automatically as correspondence", not "Recorded automatically".
+- **The complaint page's message** (an error, or what a button did) is a bar
+  fixed at the bottom of the screen with a ✕ (`.page-message` in
+  `index.css`), not a note at the top of the page: pressed far down a long
+  page on a phone, a refusal looked like nothing happening.
 
 ### 2026-10-08 — fixes from a review of the plain chaser and the kept steps
 - **No plain chaser or Stage 2 request while the complaint itself is in

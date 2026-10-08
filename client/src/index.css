@@ -735,3 +735,17 @@ th.num .th-sort { justify-content: flex-end; width: 100%; }
   color: rgba(255, 255, 255, 0.45); font-size: 11px; text-transform: uppercase;
   letter-spacing: 0.04em; margin-top: 1px;
 }
+
+/* The complaint page's message (an error or what a button did), fixed at the
+   bottom of the screen so it is seen wherever the button was: at the top of
+   a long page it was off screen on a phone. Below any open window. */
+.page-message {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  z-index: 40; width: min(640px, calc(100vw - 32px));
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn);
+  border-radius: 10px; padding: 10px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  font-size: 14px; line-height: 1.35;
+}
+.page-message > div { flex: 1; max-height: 40vh; overflow-y: auto; }
+.page-message button { background: none; border: 0; color: inherit; font-size: 16px; cursor: pointer; padding: 0 2px; }
