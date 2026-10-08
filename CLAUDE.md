@@ -761,6 +761,14 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — a window on a phone is solid to the bottom
+- On a phone every window (the Send window with its documents, and any other
+  long one) was stretched to the screen's height, so what didn't fit ran on
+  past its white box and the page showed through behind the documents and
+  the Send / Cancel buttons. It now grows with its contents (`index.css`,
+  phone rules: `.overlay` `align-items: flex-start`), and the buttons stay
+  on screen at the bottom while the rest scrolls (`.modal-foot` sticky).
+
 ### 2026-10-08 — dates that can't be right are refused; fourth review
 - **Complaint dates** (`routes/complaints.js#stepDatesProblem`, on Log and
   Edit details, and `POST /:id/events`): a complaint made in the future, a
