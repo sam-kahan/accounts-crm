@@ -1233,6 +1233,33 @@ export default function ComplaintDetail() {
     if (multi) plain.body = withReferences(plain.body, referenceLines(complaintTracks(c), partyIdOf(t) || 'main'));
     return plain;
   };
+  // A chaser from the facts on file (no AI), for an organisation that has
+  // missed its date while the AI's email for it is being written again (its
+  // part has just changed) or there is none: "Action needed" must always come
+  // with something to press. Only states what the dates show.
+  const chaserDraft = (t) => {
+    const accounts = (c.account_numbers || []).join(', ');
+    const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
+    // "Under your procedure" only when the date is theirs: a standard
+    // timescale filled in for them is never passed off as their rule.
+    const stageKey = t.stage === 'stage_2' ? 'stage2' : 'stage1';
+    const theirs = !(t.rule?.defaulted || []).some((k) => String(k).startsWith(stageKey));
+    const missed = t.status === 'response_overdue' && t.response_due
+      ? `${theirs ? 'Under your complaints procedure we' : 'We'} expected your ${t.stage === 'stage_2' ? 'Stage 2 (final) response' : 'response'} by ` +
+        `${formatDate(t.response_due)}, and we have not yet received it.`
+      : 'We have not yet received an acknowledgement of it.';
+    const plain = {
+      subject: `Our complaint of ${formatDate(t.raised_on)}${about ? ` (${about})` : ''}: follow-up [${c.ref_code}]`,
+      body:
+        `Dear ${t.org_name} Complaints Team,\n\n` +
+        `Re: ${about || c.subject} (our reference ${c.ref_code})\n\n` +
+        `I am following up our complaint of ${formatDate(t.raised_on)}. ${missed}\n\n` +
+        `Please could you let us know where things stand and when we can expect to hear from you.\n\n` +
+        'Kind regards,\n\n[Name]\n[Job title]\nGreenco',
+    };
+    if (multi) plain.body = withReferences(plain.body, referenceLines(complaintTracks(c), partyIdOf(t) || 'main'));
+    return plain;
+  };
 
   // How to refer, next to a step that says to. Where the scheme takes a new
   // complaint by email (register: refer_email, found on their own site) it is
@@ -1587,6 +1614,39 @@ export default function ComplaintDetail() {
                         </button>
                       </div>
                     )}
+                    {!draft && c.state === 'open' && (() => {
+                      // No AI email for this organisation to send now (its
+                      // part has just changed, so the review is being written
+                      // again, or there is none): the step its dates give,
+                      // with a button, never "Action needed" with nothing to
+                      // press.
+                      const respondedAt1 = t.stage === 'stage_1' && t.responded_on && !t.final_response_on;
+                      const chase = t.chase_now && !t.responded_on;
+                      if (!respondedAt1 && !chase) return null;
+                      const rewriting = aiEnabled && c.ai_review && !reviewStands(i);
+                      return (
+                        <>
+                          {rewriting && (
+                            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                              {t.org_name}’s part has changed, so the AI is writing its email again. Until then, this
+                              one is drafted from the dates on file.
+                            </div>
+                          )}
+                          <div className="btn-row" style={{ marginTop: 6 }}>
+                            {chase && (
+                              <button className="btn-primary btn-sm" onClick={() => openSend(chaserDraft(t), null, t)}>
+                                Chase {t.org_name}…
+                              </button>
+                            )}
+                            {t.stage === 'stage_1' && !t.final_response_on && (respondedAt1 || t.status === 'response_overdue') && (
+                              <button className={chase ? 'btn btn-sm' : 'btn-primary btn-sm'} onClick={() => openSend(stage2Draft(t), 'escalate', t)}>
+                                Send {t.org_name} the Stage 2 request…
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
                     {referSection(t, text, Boolean(own?.refer_step))}
                   </div>
                 );

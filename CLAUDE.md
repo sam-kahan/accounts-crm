@@ -761,6 +761,19 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — "Action needed" always has a button, also right after filing an email
+- Filing an email for one organisation (their response, say) changes ITS
+  part, so its AI email is held back until the review is written again (10
+  to 30 minutes); the top "Next steps" box then said "Action needed" with
+  nothing to press. Now, with no AI email for that organisation to send now,
+  the box offers the step its dates give, drafted from the facts on file
+  (no AI): **Chase <org>…** when it is overdue and not held
+  (`chaserDraft`: "We expected your response by <date>", said to be under
+  their procedure only when that date is theirs, not a standard one) and
+  **Send <org> the Stage 2 request…** after their Stage 1 response or a
+  missed Stage 1 date (`stage2Draft`, which escalates on sending). It says
+  the AI is writing its email again when that is why.
+
 ### 2026-10-08 — two organisations: one's change doesn't take the other's email away
 - LCS and EDF on one complaint: sending LCS its Stage 2 request moved LCS's
   part, so the whole review counted as out of date until it was written
