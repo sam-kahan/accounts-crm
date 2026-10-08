@@ -2050,6 +2050,14 @@ router.post(
     const partyId = track.party?.id || null;
     const on = d.date || em.analysis?.sent_on || londonDateOf(new Date(em.received_at));
     if (on > todayISO()) throw new HttpError(400, 'That date is in the future');
+    // As the step buttons: an acknowledgement or response can't come before
+    // the complaint was made to that organisation (a date mistyped, or an
+    // earlier email read as their answer).
+    const madeOn = complaint.raised_on;
+    if (d.as !== 'correspondence' && madeOn && on < madeOn) {
+      throw new HttpError(400, `${readable(on)} is before the complaint was made to them (${readable(madeOn)}). ` +
+        'Check the date on their email, or mark it as correspondence if it came before the complaint.');
+    }
     const subject = em.subject || '(no subject)';
 
     const cid = req.params.id;

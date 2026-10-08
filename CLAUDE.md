@@ -761,6 +761,18 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — marking an email: no date before the complaint; Accept all files nothing away
+- **Marking an email as their acknowledgement or response** (`POST
+  /:id/emails/:emailId/review`) refuses a date before the complaint was made
+  to that organisation, as the step buttons already did (it only refused
+  the future).
+- **Accept the AI's reading for all** no longer files an acknowledgement or
+  response it can't place on an organisation as correspondence (its date
+  was lost: the check meant to leave it for a person could never be
+  reached); it waits for a person. One email refused no longer stops the
+  rest, and the result ("2 emails accepted… Not accepted: …") shows in the
+  card, not at the top of the page.
+
 ### 2026-10-08 — fixes from a review of the plain chaser and the kept steps
 - **No plain chaser or Stage 2 request while the complaint itself is in
   question** (`doubtOpen`: a re-check found no formal complaint, not yet
