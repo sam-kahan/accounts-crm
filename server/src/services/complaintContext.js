@@ -9,6 +9,7 @@ import {
   deriveStatus,
   procedureSteps,
   reviewSignature,
+  tracksUnchanged,
   effectiveRule,
   trackOpen,
   isStage2Request,
@@ -197,7 +198,11 @@ export async function decorateMany(rows) {
     const live = c.ai_review_current && c.state === 'open' && !doubt;
     const today = todayISO();
     [c, ...c.parties].forEach((t, i) => {
-      const step = live && trackOpen(t) && t.status !== 'not_sent'
+      // With more than one organisation, each one's step stands while its
+      // own part is unchanged (track_review_current), whatever moved on
+      // another's.
+      const liveHere = c.parties.length ? Boolean(c.track_review_current?.[i]) && c.state === 'open' && !doubt : live;
+      const step = liveHere && trackOpen(t) && t.status !== 'not_sent'
         ? (c.parties.length ? c.ai_review?.by_org?.[i] : c.ai_review) : null;
       // Their response is in and the complaint is still open: someone must
       // decide the next step, whatever the review's wording (an undated
@@ -249,6 +254,9 @@ export function stage2Asked(tracks) {
 // needs chasing, and every name and reference on it.
 function withParties(c, parties) {
   const all = { ...c, parties };
+  const outrun = reviewOutrun(c.ai_review, [all, ...(all.parties || [])], todayISO(), c.ai_reviewed_at ? londonDateOf(new Date(c.ai_reviewed_at)) : null);
+  const current = Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all) &&
+    (!parties.length || Array.isArray(c.ai_review.by_org)) && !outrun;
   return {
     ...all,
     org_names: [c.org_name, ...parties.map((p) => p.org_name)],
@@ -262,9 +270,13 @@ function withParties(c, parties) {
     // on any organisation's track.
     // With more than one organisation it must give each its own step
     // (by_org); one written before that is out of date.
-    ai_review_current: Boolean(c.ai_review) && c.ai_review_status === reviewSignature(all) &&
-      (!parties.length || Array.isArray(c.ai_review.by_org)) &&
-      !reviewOutrun(c.ai_review, [all, ...(all.parties || [])], todayISO(), c.ai_reviewed_at ? londonDateOf(new Date(c.ai_reviewed_at)) : null),
+    ai_review_current: current,
+    // Per organisation (main first): its own part unchanged since the review
+    // was written, so its step and email still stand when another's moved.
+    track_review_current: current ? [c, ...parties].map(() => true)
+      : Boolean(c.ai_review) && parties.length && Array.isArray(c.ai_review.by_org) && !outrun
+        ? tracksUnchanged(c.ai_review_status, [c, ...parties])
+        : [c, ...parties].map(() => false),
   };
 }
 

@@ -128,7 +128,7 @@ export async function collectComplaintDueItems(days = 30) {
     for (const [i, t] of [c, ...(c.parties || [])].entries()) {
       // Each organisation's own step (the review gives one per organisation
       // when there is more than one), never another organisation's.
-      const aiOwn = c.ai_review_current ? (multi ? c.ai_review?.by_org?.[i]?.headline : aiStep) : null;
+      const aiOwn = multi ? (c.track_review_current?.[i] ? c.ai_review?.by_org?.[i]?.headline : null) : (c.ai_review_current ? aiStep : null);
       const detail = aiOwn || t.nextAction || null;
       // (Whose it is is company_name, shown after the label: never twice.)
       // The last day to refer to the ombudsman: after it the complaint can't

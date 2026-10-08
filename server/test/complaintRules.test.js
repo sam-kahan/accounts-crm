@@ -385,3 +385,17 @@ test('procedureSteps: a referral date that has come but is held says "held", not
   // Still in the future: later, as before.
   assert.equal(step(complaint({ raised_on: todayISO(), stage_started_on: todayISO() })).state, 'upcoming');
 });
+
+test('a change to one organisation leaves the other organisations’ steps standing', async () => {
+  const { reviewSignature, tracksUnchanged } = await import('../src/services/complaintRules.js');
+  const lcs = { status: 'response_overdue', stage: 'stage_1', state: 'open', response_due: '2026-09-20' };
+  const edf = { id: 'p1', status: 'response_overdue', stage: 'stage_1', state: 'open', response_due: '2026-09-25' };
+  const sig = reviewSignature({ ...lcs, parties: [edf] });
+  // LCS asked for Stage 2: its part moved, EDF's didn't.
+  const lcsNow = { ...lcs, stage: 'stage_2', status: 'awaiting_response', response_due: '2026-11-01' };
+  assert.deepEqual(tracksUnchanged(sig, [lcsNow, edf]), [false, true]);
+  assert.deepEqual(tracksUnchanged(sig, [lcs, { ...edf, acknowledged_on: '2026-10-01' }]), [true, false]);
+  assert.deepEqual(tracksUnchanged(sig, [lcs, edf]), [true, true]);
+  // An organisation added since the review has no step of its own yet.
+  assert.deepEqual(tracksUnchanged(sig, [lcs, edf, { id: 'p2', stage: 'stage_1' }]), [true, true, false]);
+});

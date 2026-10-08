@@ -1201,10 +1201,16 @@ export default function ComplaintDetail() {
   // rather than a second set of instructions.
   // The Stage 2 request for one organisation: the AI's draft when its review
   // has one for them, otherwise a plain one from the facts on file (no AI).
+  // Whether the review's step for organisation i still stands: the whole
+  // review is up to date, or (with more than one organisation) that
+  // organisation's own part hasn't changed since it was written, so a
+  // change to one (LCS moved to Stage 2) doesn't take away another's email
+  // (EDF's chaser) until the review is written again.
+  const reviewStands = (i) => Boolean(c.ai_review_current || (multi && c.track_review_current?.[i]));
   const stage2Draft = (t) => {
     const i = tracks.findIndex((x) => x.id === t.id);
     const own = multi ? c.ai_review?.by_org?.[i] : c.ai_review;
-    if (c.ai_review_current && own?.email?.body && own.email_step === 'stage2_request') return own.email;
+    if (reviewStands(i) && own?.email?.body && own.email_step === 'stage2_request') return own.email;
     const accounts = (c.account_numbers || []).join(', ');
     const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
     // Quoted as theirs only when their procedure states it: a standard figure
@@ -1550,7 +1556,7 @@ export default function ComplaintDetail() {
                     </div>
                   );
                 }
-                const own = c.ai_review_current ? c.ai_review?.by_org?.[i] : null;
+                const own = reviewStands(i) ? c.ai_review?.by_org?.[i] : null;
                 const text = own?.headline || t.nextAction;
                 const draft = own && c.state === 'open' && emailIsForNow(own) ? own.email : null;
                 const esc = Boolean(draft) && t.stage === 'stage_1' &&
@@ -1921,8 +1927,8 @@ export default function ComplaintDetail() {
                 )}
 
                 {multi ? (
-                  c.ai_review_current && Array.isArray(c.ai_review.by_org) && tracks.map((t, i) => {
-                    const own = c.ai_review.by_org[i];
+                  Array.isArray(c.ai_review?.by_org) && tracks.map((t, i) => {
+                    const own = reviewStands(i) ? c.ai_review.by_org[i] : null;
                     if (!own || !trackOpen(t)) return null;
                     return (
                       <div key={t.id} style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border, #e5e7eb)' }}>
@@ -2060,7 +2066,7 @@ export default function ComplaintDetail() {
               {(() => {
                 // The same step as the top of the page: the AI's for this
                 // organisation while its review is current, else the dates'.
-                const own = c.ai_review_current ? c.ai_review?.by_org?.[tracks.findIndex((x) => x.id === t.id)]?.headline : null;
+                const own = reviewStands(tracks.findIndex((x) => x.id === t.id)) ? c.ai_review?.by_org?.[tracks.findIndex((x) => x.id === t.id)]?.headline : null;
                 const step = own || t.nextAction;
                 return step ? (
                   <div className={`inline-note ${t.needs_chasing ? 'warn' : ''}`} style={{ marginBottom: 10 }}>

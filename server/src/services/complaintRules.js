@@ -845,10 +845,35 @@ export function describeChanges(before, after) {
 // Each further organisation's track counts too (appended only when there is
 // one, so a complaint with a single organisation keeps the signature its
 // stored review was written against).
+const trackSig = (t) => [t.status, t.stage, t.state, t.acknowledged_on, t.responded_on, t.final_response_on,
+  t.response_due].map((v) => v ?? '').join('|');
 export function reviewSignature(c) {
-  const one = (t) => [t.status, t.stage, t.state, t.acknowledged_on, t.responded_on, t.final_response_on,
-    t.response_due].map((v) => v ?? '').join('|');
-  return [one(c), ...(c.parties || []).map((p) => `${p.id}:${one(p)}`)].join('||');
+  return [trackSig(c), ...(c.parties || []).map((p) => `${p.id}:${trackSig(p)}`)].join('||');
+}
+// Which organisations' parts are as they were when the review was written:
+// a change to one (LCS moved to Stage 2) leaves the others' steps and drafted
+// emails standing (EDF's chaser), instead of every organisation losing its
+// email until the review is written again. `tracks`: main first, then the
+// further organisations (with `id`). Returns one boolean per track.
+// Each part is found by its organisation's id ("||<id>:"), never by
+// splitting on "||", which blank dates inside one part also make. A part
+// whose neighbour can't be placed (an organisation since taken off) reads as
+// changed: never a stale step kept by mistake.
+export function tracksUnchanged(signature, tracks) {
+  const s = String(signature || '');
+  const marks = tracks.slice(1)
+    .map((t) => ({ id: String(t.id), at: s.indexOf(`||${t.id}:`) }))
+    .filter((m) => m.at >= 0)
+    .sort((a, b) => a.at - b.at);
+  const segment = (from) => {
+    const next = marks.find((m) => m.at >= from);
+    return s.slice(from, next ? next.at : s.length);
+  };
+  return tracks.map((t, i) => {
+    if (i === 0) return segment(0) === trackSig(t);
+    const m = marks.find((x) => x.id === String(t.id));
+    return Boolean(m) && segment(m.at + `||${t.id}:`.length) === trackSig(t);
+  });
 }
 
 // The one-click actions a review may recommend, each mapped to a button that

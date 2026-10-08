@@ -761,6 +761,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — two organisations: one's change doesn't take the other's email away
+- LCS and EDF on one complaint: sending LCS its Stage 2 request moved LCS's
+  part, so the whole review counted as out of date until it was written
+  again (up to 30 minutes, `REVIEW_MAX_WAIT_MS`), and EDF's section fell
+  back to the dates' step: "chase EDF" with no drafted email and no Send
+  button. Now each organisation's step stands while ITS OWN part is
+  unchanged: `complaintRules.js#tracksUnchanged` reads the stored review
+  signature part by part (found by the organisation's id, never by splitting
+  on "||", which blank dates also make; an organisation it can't place reads
+  as changed), `decorateMany` returns `track_review_current` (one per
+  organisation, main first) and uses it for each one's Action needed; the
+  page (`reviewStands(i)`: the next-steps box, the AI card, each
+  organisation's section, the Stage 2 draft) and the dashboard / morning
+  email lines use it too. The organisation that moved shows its dates' step
+  until the review is rewritten.
+
 ### 2026-10-08 — a window on a phone is solid to the bottom
 - On a phone every window (the Send window with its documents, and any other
   long one) was stretched to the screen's height, so what didn't fit ran on
