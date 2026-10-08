@@ -42,6 +42,8 @@ export default function CommissionInvoices() {
   const [unwithdrawn, setUnwithdrawn] = useState([]);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  // Raise all: "3 of 12" while it runs, null otherwise.
+  const [bulk, setBulk] = useState(null);
   const [sendingId, setSendingId] = useState(null);
   const [msg, setMsg] = useState(null);
 
@@ -135,6 +137,68 @@ export default function CommissionInvoices() {
     } finally {
       setBusyId(null);
     }
+  }
+
+  // Raise every contractor's invoice for the month in one go. Each one is the
+  // same raise as its own row's button (its own transaction, its lines locked),
+  // made one after another so a refusal for one contractor never stops the
+  // rest, and every result is reported.
+  async function raiseAll() {
+    const rows = (summary?.contractors || []).filter(
+      (r) => r.raises && Number(r.pending_commission) > 0,
+    );
+    if (rows.length === 0) return;
+    const total = rows.reduce((acc, r) => acc + Math.round(Number(r.raises.total_amount) * 100), 0) / 100;
+    const offices = [...new Set(rows.map((r) => officeOf(r.region) || r.region_label))];
+    if (
+      !confirm(
+        `Raise ${plural(rows.length, 'commission invoice')} for ${monthLabel(month)}, ` +
+          `${formatMoney(total)} in all (incl. VAT), from ${offices.join(' and ')}?\n\n` +
+          'Each contractor gets their own invoice, exactly as if you pressed Raise invoice on each row. ' +
+          'Nothing is emailed to the contractors from here.',
+      )
+    ) {
+      return;
+    }
+    setMsg(null);
+    const raised = [];
+    const notPushed = [];
+    const failed = [];
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        setBulk({ done: i, of: rows.length });
+        setBusyId(rowKey(row));
+        try {
+          const res = await api.commissionInvoices.raise({
+            contractor_id: row.contractor_id,
+            region: row.region,
+            month,
+          });
+          raised.push(res.invoice_number);
+          if (res.push_error) notPushed.push(`${res.invoice_number} (${row.contractor_name})`);
+        } catch (e) {
+          failed.push(`${row.contractor_name}, ${row.region_label}: ${e.message}`);
+        }
+      }
+    } finally {
+      setBusyId(null);
+      setBulk(null);
+    }
+    setMsg(
+      [
+        raised.length
+          ? `Raised ${plural(raised.length, 'invoice')}: ${raised.join(', ')}.`
+          : 'No invoices were raised.',
+        notPushed.length
+          ? `Not sent to Greenco Invoicing yet: ${notPushed.join(', ')}. Use Send it now below.`
+          : '',
+        failed.length ? `Not raised: ${failed.join('; ')}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    );
+    await load();
   }
 
   // Invoices raised here that never made it across. Only worth saying when the
@@ -244,8 +308,23 @@ export default function CommissionInvoices() {
       )}
 
       <div className="card">
-        <div className="card-head">
+        <div className="card-head flex-between">
           <h2>{monthLabel(month)} — by contractor</h2>
+          {(() => {
+            const ready = (summary?.contractors || []).filter(
+              (r) => r.raises && Number(r.pending_commission) > 0,
+            ).length;
+            return ready > 1 || bulk ? (
+              <button
+                className="btn-primary btn-sm"
+                disabled={!!bulk || busyId !== null}
+                onClick={raiseAll}
+                title="Raise every contractor's commission invoice for this month"
+              >
+                {bulk ? `Raising ${bulk.done + 1} of ${bulk.of}…` : `Raise all ${ready} invoices`}
+              </button>
+            ) : null;
+          })()}
         </div>
         {!summary ? (
           err ? (
@@ -322,7 +401,7 @@ export default function CommissionInvoices() {
                     </Link>
                     <button
                       className="btn-primary btn-sm"
-                      disabled={busyId === rowKey(r) || Number(r.pending_commission) <= 0}
+                      disabled={!!bulk || busyId === rowKey(r) || Number(r.pending_commission) <= 0}
                       onClick={() => raise(r)}
                       title={
                         Number(r.pending_commission) > 0

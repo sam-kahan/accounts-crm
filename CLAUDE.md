@@ -770,6 +770,16 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — raise every month-end invoice in one go
+- **Raise all N invoices** on the month's "by contractor" table
+  (`pages/CommissionInvoices.jsx#raiseAll`): one confirm with the count, the
+  total incl. VAT and the offices, then each contractor's raise in turn
+  through the same `POST /commission-invoices` as its row's button (its own
+  transaction and line locks), so a refusal for one never stops the rest. It
+  reports what was raised, what didn't reach Greenco Invoicing, and what was
+  refused and why. Nothing is emailed. The month tile says "To invoice (incl.
+  VAT)" with the net + VAT split.
+
 ### 2026-10-08 — each complaint line carries its GC-C reference
 - Dashboard and morning email complaint lines end with the complaint's
   reference ("Wrong meter (GC-C-BKAVBN)", `about` in
