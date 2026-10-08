@@ -226,9 +226,9 @@ export default function CommissionInvoices() {
             </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
               {totals.raises && Number(totals.pending_commission) > 0
-                ? `${formatMoney(totals.raises.net_amount)} + ${formatMoney(totals.raises.vat_amount)} VAT. `
-                  + `Contractors collected ${formatMoney(totals.pending_commission)}; `
-                  + 'VAT goes on top where they are VAT registered.'
+                ? `${formatMoney(totals.raises.net_amount)} + ${formatMoney(totals.raises.vat_amount)} VAT, `
+                  + `from ${formatMoney(totals.pending_commission)} collected. VAT is added to what `
+                  + 'VAT-registered contractors collected, and taken out of what the others collected.'
                 : 'nothing left to raise'}
             </div>
           </div>
