@@ -761,6 +761,15 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — the Log form keeps the account number
+- **The Log a complaint form had no account number**, and filling it from
+  the email or letter dropped the account numbers the AI read
+  (`toInitial` didn't carry them), so a complaint logged by hand started
+  with none: nothing filed by number, no duplicate warning, no reference
+  search until someone used Edit details. The form now has **Account
+  number** (commas, semicolons or new lines between two), filled from the
+  reading, and sends `account_numbers` on create.
+
 ### 2026-10-08 — commission on part of an invoice shown on the paperwork; review of the "To check" rule
 - **A commission invoice line whose commission was on part of the
   contractor's invoice says so** (`commission.js#partNote`: "commission on

@@ -37,6 +37,9 @@ function toInitial(p) {
     property: clean(p.property),
     reference: clean(p.reference),
     our_reference: clean(p.our_reference),
+    // The key to every complaint (matching, filing emails, duplicates): read
+    // off the email or letter, and kept, never dropped on the way to the form.
+    account_numbers: (Array.isArray(p.account_numbers) ? p.account_numbers : []).filter(Boolean).join(', '),
     channel: p.channel || 'email',
     raised_on: p.raised_on || todayISO(),
     acknowledged_on: clean(p.acknowledged_on),
@@ -78,6 +81,7 @@ function NewComplaintModal({
     channel: 'email',
     reference: '',
     our_reference: '',
+    account_numbers: '',
     raised_on: today,
     description: '',
     stage: 'stage_1',
@@ -202,6 +206,8 @@ function NewComplaintModal({
     try {
       const created = await api.complaints.create({
         ...form,
+        // "A123, B456" (commas, semicolons or new lines between them).
+        account_numbers: String(form.account_numbers || '').split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean),
         organisation_id: form.organisation_id || null,
         acknowledged_on: form.acknowledged_on || null,
         responded_on: form.responded_on || null,
@@ -410,6 +416,14 @@ function NewComplaintModal({
               <option value="letter">Letter</option>
               <option value="other">Other</option>
             </select>
+          </label>
+          <label className="field">
+            <span className="lbl">Account number</span>
+            <input
+              value={form.account_numbers}
+              placeholder="As on their bills; commas between two"
+              onChange={(e) => setForm({ ...form, account_numbers: e.target.value })}
+            />
           </label>
           <label className="field">
             <span className="lbl">Their reference</span>
