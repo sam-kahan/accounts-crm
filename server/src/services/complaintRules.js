@@ -415,21 +415,32 @@ export function holdToComplaintWord(r) {
 
 // A complaint the system creates from Greenco's own email (the watcher, or a
 // forward) needs a person to check it only where something in it was a
-// guess. Nothing was when the reading is sure, the organisation is one already
-// on file (none set up new), the sentence that makes the complaint is in this
-// email's own words (not a quoted earlier one), and the complaint is dated the
-// day this email went. Returns what to check (empty: nothing). Pure.
-export function ownEmailCheckReasons({ confidence, orgOnFile, quote, ownWords, raisedOn, sentOn } = {}) {
+// guess. Nothing was when: a colleague wrote it (`ownEmail`: from our domain,
+// not a forward, `emailAnalysis.js#isOurOwnEmail`) and it isn't read as a
+// forward; the reading is sure; the organisation is certainly the one on
+// file (`orgCertain`: its name exactly, or the one outside domain the email
+// went to is its complaints address's), none set up new; the sentence that
+// makes the complaint is in this email's own words (not a quoted earlier
+// one); the reading itself dates the complaint (`raisedOn`, never a fallback)
+// the day this email went; and a property postcode it read is in the email.
+// Returns what to check (empty: nothing). Pure.
+const POSTCODE = /\b([A-Z]{1,2}[0-9][A-Z0-9]?)\s*([0-9][A-Z]{2})\b/i;
+export function ownEmailCheckReasons({
+  ownEmail, forwarded, confidence, orgCertain, quote, ownWords, raisedOn, sentOn, property,
+} = {}) {
   const norm = (t) => String(t || '').toLowerCase()
     .replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2013\u2014]/g, '-')
     .replace(/\s+/g, ' ').trim();
   const own = norm(ownWords);
   const parts = norm(quote).split(/\s*(?:\.\.\.|\u2026)\s*/).filter((x) => x.length >= 8);
   const reasons = [];
+  if (!ownEmail || forwarded) reasons.push('it was not written by a colleague in this email (a forward, or from outside)');
   if (confidence !== 'high') reasons.push('the reading of the email was not certain');
-  if (!orgOnFile) reasons.push('the organisation was set up new from the email');
+  if (!orgCertain) reasons.push('which organisation it is against was matched by a similar name, or set up new');
   if (!parts.length || !parts.every((x) => own.includes(x))) reasons.push('the sentence making the complaint is not in this email\'s own words');
   if (!raisedOn || !sentOn || raisedOn !== sentOn) reasons.push('the date it was made is not the day this email was sent');
+  const pc = String(property || '').match(POSTCODE);
+  if (pc && !own.replace(/\s+/g, '').includes(`${pc[1]}${pc[2]}`.toLowerCase())) reasons.push('the property\'s postcode is not in the email');
   return reasons;
 }
 

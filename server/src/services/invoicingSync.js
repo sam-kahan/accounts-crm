@@ -50,7 +50,7 @@ async function loadForPush(id) {
   const { rows: lines } = await query(
     `SELECT id, invoice_number, invoice_date, property, description,
             net_amount, vat_amount, total_amount, commission_rate, commission_amount,
-            commission_vat_inclusive, commission_vat_exempt
+            commission_vat_inclusive, commission_vat_exempt, commissionable_amount, commissionable_note
        FROM contractor_invoices
       WHERE commission_invoice_id = $1
       ORDER BY invoice_date, created_at`,

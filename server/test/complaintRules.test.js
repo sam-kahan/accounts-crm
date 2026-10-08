@@ -403,15 +403,21 @@ test('a change to one organisation leaves the other organisations’ steps stand
 test('ownEmailCheckReasons: a clear complaint email of ours needs no check; any guess does', async () => {
   const { ownEmailCheckReasons } = await import('../src/services/complaintRules.js');
   const base = {
-    confidence: 'high', orgOnFile: true,
+    ownEmail: true, forwarded: false, confidence: 'high', orgCertain: true,
     quote: 'I would like to raise a formal complaint on this account',
-    ownWords: 'Good morning,\n\nI would like to raise a formal  complaint on this account - thanks',
-    raisedOn: '2026-10-08', sentOn: '2026-10-08',
+    ownWords: 'Good morning,\n\n168 Chepstow Avenue, Sale, M33 4GE\n\nI would like to raise a formal  complaint on this account - thanks',
+    raisedOn: '2026-10-08', sentOn: '2026-10-08', property: '168 Chepstow Avenue, Sale, Cheshire, M33 4GE',
   };
   assert.deepEqual(ownEmailCheckReasons(base), []);
-  assert.equal(ownEmailCheckReasons({ ...base, confidence: 'medium' }).length, 1);
-  assert.equal(ownEmailCheckReasons({ ...base, orgOnFile: false }).length, 1);
-  assert.equal(ownEmailCheckReasons({ ...base, quote: 'We wish to complain about the bill' }).length, 1);
-  assert.equal(ownEmailCheckReasons({ ...base, raisedOn: '2026-09-30' }).length, 1);
-  assert.equal(ownEmailCheckReasons({ ...base, quote: '' }).length, 1);
+  const one = (x) => assert.equal(ownEmailCheckReasons({ ...base, ...x }).length, 1, JSON.stringify(x));
+  one({ ownEmail: false });                          // from outside, or an FW:
+  one({ forwarded: true });                          // read as a forward
+  one({ confidence: 'medium' });
+  one({ orgCertain: false });                        // a similar name, or set up new
+  one({ quote: 'We wish to complain about the bill' }); // not in its own words
+  one({ quote: '' });
+  one({ raisedOn: '2026-09-30' });
+  one({ raisedOn: null });                           // the reading gave no date: a guess
+  one({ property: '9 Other Road, M7 1AA' });         // postcode not in the email
+  assert.deepEqual(ownEmailCheckReasons({ ...base, property: '168 Chepstow Avenue' }), []); // no postcode read
 });

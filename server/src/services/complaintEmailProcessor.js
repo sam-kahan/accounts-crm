@@ -15,7 +15,7 @@ import { buildNumberIndex, complaintByNumber } from './numberMatch.js';
 import { scheduleReview } from './complaintReview.js';
 import { parseImportedComplaint } from './complaintAssistant.js';
 import { createComplaint } from './complaintCreate.js';
-import { findOrgByName, findExistingMatch, PARTY_COLS } from './orgMatch.js';
+import { findOrgByName, findExistingMatch, PARTY_COLS, orgKey } from './orgMatch.js';
 import { researchOrganisation } from './orgResearch.js';
 
 // ---------------------------------------------------------------------------
@@ -697,7 +697,12 @@ async function createFromEmail(em, analysis) {
   const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
   const outside = [...new Set((em.to_addresses || []).map((a) => String(a).toLowerCase().split('@')[1]).filter((d) => d && d !== ourDomain))];
   let org = await findOrgByName(p.org_name, { domains: outside.length === 1 ? outside : [], ourDomain });
-  const orgOnFile = Boolean(org);
+  // Certainly that organisation: its name exactly (after cleaning), or the one
+  // outside domain the email went to is its complaints address's. A looser
+  // match (a shortening, a typo) may be another body, so it is checked.
+  const orgCertain = Boolean(org) && (
+    orgKey(org.name) === orgKey(p.org_name) ||
+    (outside.length === 1 && String(org.complaints_email || '').toLowerCase().split('@')[1] === outside[0]));
   if (!org) {
     const type = p.org_type || 'other';
     let prof = {};
@@ -746,10 +751,12 @@ async function createFromEmail(em, analysis) {
     || analysis.sent_on || londonDateOf(new Date(em.received_at));
   // Marked To check only where something was a guess (complaintRules.js#ownEmailCheckReasons):
   // a colleague's own clear complaint email sets up nothing to look over.
+  const readOn = /^\d{4}-\d{2}-\d{2}$/.test(p.raised_on || '') && p.raised_on <= londonDateOf(new Date()) ? p.raised_on : null;
   const toCheck = ownEmailCheckReasons({
-    confidence: p.confidence, orgOnFile, quote: p.complaint_evidence?.quote,
-    ownWords: ownText(em.body_text || em.body_preview || ''), raisedOn: raised,
-    sentOn: analysis.sent_on || londonDateOf(new Date(em.received_at)),
+    ownEmail: isOurOwnEmail(em, analysis, ourDomain), forwarded: Boolean(analysis.forwarded),
+    confidence: p.confidence, orgCertain, quote: p.complaint_evidence?.quote,
+    ownWords: ownText(em.body_text || em.body_preview || ''), raisedOn: readOn,
+    sentOn: analysis.sent_on || londonDateOf(new Date(em.received_at)), property: p.property,
   });
   const created = await createComplaint(
     {

@@ -531,14 +531,25 @@ function OverdueDraftsModal({ onClose }) {
 // is up to date, otherwise the one the dates give (for each organisation,
 // named, when there is more than one), never an out-of-date one.
 function nextStepOf(c) {
-  // The organisation waits on the landlord's authority: that is the step
-  // (as on the complaint page and in the morning email), whatever else.
-  if (c.authority?.action && c.state === 'open') return c.authority.text;
-  const ai = c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action);
-  if (ai) return ai;
-  const tracks = [c, ...(c.parties || [])].filter((t) => t.nextAction);
-  if ((c.parties || []).length) return tracks.map((t) => `${t.org_name}: ${t.nextAction}`).join(' ') || null;
-  return c.nextAction || null;
+  // An organisation waits on the landlord's authority: that is its step (as
+  // on the complaint page and in the morning email) while its part is open.
+  const all = [c, ...(c.parties || [])];
+  const authTrack = c.authority?.action && c.state === 'open'
+    ? all.find((t) => (c.authority.party_id ? t.id === c.authority.party_id : t === c)) : null;
+  const auth = authTrack && authTrack.action_now ? c.authority.text : null;
+  if (!(c.parties || []).length) {
+    const ai = c.ai_review_current && (c.ai_review?.headline || c.ai_review?.recommended_action);
+    return auth || ai || c.nextAction || null;
+  }
+  // One step per organisation, as the page gives them: the authority for
+  // the one that waits on it, else its own AI step while that part is
+  // unchanged, else its dates' step. One never hides another's.
+  return all.map((t, i) => {
+    if (t === authTrack && auth) return auth;
+    const own = c.track_review_current?.[i] ? c.ai_review?.by_org?.[i]?.headline : null;
+    const step = own || t.nextAction;
+    return step ? `${t.org_name}: ${String(step).replace(/[.\s]*$/, ".")}` : null;
+  }).filter(Boolean).join(' ') || null;
 }
 
 // Why an open complaint is under Needs attention when the reason isn't its

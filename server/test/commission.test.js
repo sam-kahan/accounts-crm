@@ -1310,3 +1310,16 @@ test('the sender’s signature goes above the company footer on a commission inv
   assert.ok(mail.text.indexOf('Sam Kahan') < mail.text.indexOf('VAT registration: GB123'));
   assert.ok(mail.html.indexOf('SIGNATURE') < mail.html.indexOf('VAT registration GB123'));
 });
+
+test('a line with commission on part of the invoice says so on the paperwork', async () => {
+  const { partNote, buildCommissionInvoiceEmail } = await import('../src/services/commission.js');
+  assert.equal(partNote({ commissionable_amount: '220.00', commissionable_note: 'labour only' }), 'commission on £220.00 of it (labour only)');
+  assert.equal(partNote({ commissionable_amount: null }), '');
+  const { text, html } = buildCommissionInvoiceEmail({
+    invoice: { invoice_number: 'GC-COM-1', period_start: '2026-07-01', period_end: '2026-07-31', issue_date: '2026-08-01', due_date: '2026-08-31', net_amount: '20.00', vat_rate: 0, vat_amount: '0', total_amount: '20.00' },
+    contractor: { name: 'X' },
+    lines: [{ invoice_date: '2026-07-15', invoice_number: 'A2', property: '10 Dale St', total_amount: '500.00', commission_amount: '20.00', commissionable_amount: '220.00', commissionable_note: 'labour only' }],
+  });
+  assert.match(text, /invoice £500\.00, commission on £220\.00 of it \(labour only\)/);
+  assert.match(html, /Commission on £220\.00 of it \(labour only\)/);
+});

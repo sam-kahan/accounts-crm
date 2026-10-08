@@ -363,6 +363,17 @@ export function exemptVat(lines) {
   return { exempt: exempt.length > 0, mixed, note };
 }
 
+// A line whose commission was on part of the contractor's invoice only
+// (materials at cost, a permit): said on the paperwork, so a contractor
+// checking the rate against the whole invoice total sees why it is less.
+// "commission on £220.00 of it (labour only)". Empty for a whole invoice.
+export function partNote(line) {
+  const part = toPence(line?.commissionable_amount);
+  if (part === null || part === undefined) return '';
+  const why = String(line.commissionable_note || '').trim();
+  return `commission on ${formatPence(part)} of it${why ? ` (${why})` : ''}`;
+}
+
 export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billing = {}, signature = null }) {
   const period = `${fmtDate(invoice.period_start)} - ${fmtDate(invoice.period_end)}`;
   const subject = `${billing.name || 'Greenco'} commission invoice ${invoice.invoice_number} - ${monthLabel(
@@ -390,7 +401,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
     (l) =>
       `  ${fmtDate(l.invoice_date)}  ${l.invoice_number || '(no number)'}  ${
         l.property || l.description || 'Works'
-      }  invoice ${formatPence(toPence(l.total_amount) ?? 0)}  commission ${formatPence(
+      }  invoice ${formatPence(toPence(l.total_amount) ?? 0)}${partNote(l) ? `, ${partNote(l)}` : ''}  commission ${formatPence(
         toPence(l.commission_amount) ?? 0,
       )}${ofCollected(l)}${mixed && l.commission_vat_exempt ? ' (exempt from VAT)' : ''}`,
   );
@@ -440,7 +451,7 @@ export function buildCommissionInvoiceEmail({ invoice, contractor, lines, billin
         )}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(
           l.property || l.description || 'Works',
-        )}</td>
+        )}${partNote(l) ? `<div style="color:#6b7280;font-size:12px;">${escapeHtml(partNote(l).replace(/^c/, 'C'))}</div>` : ''}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap;">${formatPence(
           toPence(l.total_amount) ?? 0,
         )}</td>

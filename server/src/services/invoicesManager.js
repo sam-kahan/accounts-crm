@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { toPence, fromPence } from '../lib/money.js';
-import { commissionNetPence, lineVatRate, exemptVat } from './commission.js';
+import { commissionNetPence, lineVatRate, exemptVat, partNote } from './commission.js';
 import { REGIONS, REGION_LABEL, isRegion } from './regions.js';
 
 // ---------------------------------------------------------------------------
@@ -71,9 +71,12 @@ export function lineFor(row, vatRate = 0) {
   if (row.property) parts.push(row.property);
   const head = parts.length ? parts.join(', ') : 'works';
   const works = row.description ? ` (${row.description})` : '';
+  // Commission on part of their invoice only: said, or the line reads wrong
+  // against the invoice it came from.
+  const part = partNote(row) ? `; ${partNote(row)}` : '';
   return {
     // Marked, so the note's "Lines marked exempt from VAT" points somewhere.
-    description: `Commission - ${head}${works}${row.commission_vat_exempt ? ' (exempt from VAT)' : ''}`.slice(0, 500),
+    description: `Commission - ${head}${works}${part}${row.commission_vat_exempt ? ' (exempt from VAT)' : ''}`.slice(0, 500),
     quantity: 1,
     // The NET commission: the invoicing system adds VAT to the unit price it
     // is given. For a contractor who isn't VAT registered that is the amount

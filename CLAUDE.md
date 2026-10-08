@@ -761,6 +761,25 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — commission on part of an invoice shown on the paperwork; review of the "To check" rule
+- **A commission invoice line whose commission was on part of the
+  contractor's invoice says so** (`commission.js#partNote`: "commission on
+  £220.00 of it (labour only)") on the invoice page, in the email to the
+  contractor and in the line sent to Greenco Invoicing. It showed the £500
+  invoice at 10% beside £20, which reads as a mistake (10% of £500).
+  Checked by raising a month end: not registered £9.00 → £7.50 + £1.50,
+  registered £9.00 + £1.80, exempt £10.00 at 0%, £13.72 → £11.43 + £2.29.
+- **`ownEmailCheckReasons` tightened (from a review)**: a complaint skips
+  To check only when a colleague wrote the email (`isOurOwnEmail`, not read
+  as a forward: a forward's body has no "own words" cut), the reading itself
+  dated the complaint (never the sent-date fallback), the organisation is
+  certain (`orgKey` name exactly, or the one outside domain is its
+  complaints address's: a shortening or typo match is checked), and a
+  property postcode it read is in the email.
+- **The list's "Next:"** shows the authority step only while that
+  organisation's part needs it (`action_now`), and with two organisations
+  gives each its own step (the authority for one never hides the other's).
+
 ### 2026-10-08 — Needs attention says what to do; a colleague's clear complaint email isn't "To check"
 - **The Complaints list says why a complaint is under Needs attention**
   when it isn't its next step (`attentionTodo` in `pages/Complaints.jsx`):

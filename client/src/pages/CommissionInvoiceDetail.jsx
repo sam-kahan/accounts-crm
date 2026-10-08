@@ -440,6 +440,14 @@ export default function CommissionInvoiceDetail() {
                   {l.property && l.description && (
                     <div className="muted" style={{ fontSize: 12 }}>{l.description}</div>
                   )}
+                  {/* Commission on part of their invoice only: said, so the
+                      rate isn't read against the whole invoice total. */}
+                  {l.commissionable_amount !== null && l.commissionable_amount !== undefined && (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      Commission on {formatMoney(l.commissionable_amount)} of it
+                      {l.commissionable_note ? ` (${l.commissionable_note})` : ''}
+                    </div>
+                  )}
                 </td>
                 <td className="num">{formatMoney(l.total_amount)}</td>
                 <td className="num muted">{Number(l.commission_rate) ? `${Number(l.commission_rate)}%` : '—'}</td>
