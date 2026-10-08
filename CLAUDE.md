@@ -736,6 +736,15 @@ the page says how far each date can be trusted.
   re-check and save after the 0-days fix — don't research again); a CDER
   duplicate (GC-C-3NXGAW / GC-C-SN58SC) offered in Tidy up; forwarded CDER
   emails that may be waiting under "Emails to file".
+- **Last session (8 Oct 2026)** was a round of testing and fixing, all
+  pushed to `main` and listed under Recent changes (2026-10-08). It covered
+  two organisations on one complaint (each keeps its own step and Send
+  button), when To check applies, the authority step, the Log form's account
+  number, part-invoice commission on the paperwork, phone layout (dashboard
+  side space, windows), and the dashboard / morning email (badges, a To do
+  now section, GC-C references). The owner agreed that a colleague's
+  complaint email only goes to To check when something in it was a guess.
+  Nothing was left half-done. 475 tests pass and the client builds.
 - **See the live picture** without changing anything: on the server,
   `cd /var/www/accounts-crm/server && node src/scripts/complaints-report.mjs`
   (set-up, automatic import state, each complaint, found complaints waiting
