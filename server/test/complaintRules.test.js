@@ -399,3 +399,19 @@ test('a change to one organisation leaves the other organisations’ steps stand
   // An organisation added since the review has no step of its own yet.
   assert.deepEqual(tracksUnchanged(sig, [lcs, edf, { id: 'p2', stage: 'stage_1' }]), [true, true, false]);
 });
+
+test('ownEmailCheckReasons: a clear complaint email of ours needs no check; any guess does', async () => {
+  const { ownEmailCheckReasons } = await import('../src/services/complaintRules.js');
+  const base = {
+    confidence: 'high', orgOnFile: true,
+    quote: 'I would like to raise a formal complaint on this account',
+    ownWords: 'Good morning,\n\nI would like to raise a formal  complaint on this account - thanks',
+    raisedOn: '2026-10-08', sentOn: '2026-10-08',
+  };
+  assert.deepEqual(ownEmailCheckReasons(base), []);
+  assert.equal(ownEmailCheckReasons({ ...base, confidence: 'medium' }).length, 1);
+  assert.equal(ownEmailCheckReasons({ ...base, orgOnFile: false }).length, 1);
+  assert.equal(ownEmailCheckReasons({ ...base, quote: 'We wish to complain about the bill' }).length, 1);
+  assert.equal(ownEmailCheckReasons({ ...base, raisedOn: '2026-09-30' }).length, 1);
+  assert.equal(ownEmailCheckReasons({ ...base, quote: '' }).length, 1);
+});

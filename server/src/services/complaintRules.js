@@ -413,6 +413,26 @@ export function holdToComplaintWord(r) {
   return { ...r, raised_on: date || r.raised_on || null };
 }
 
+// A complaint the system creates from Greenco's own email (the watcher, or a
+// forward) needs a person to check it only where something in it was a
+// guess. Nothing was when the reading is sure, the organisation is one already
+// on file (none set up new), the sentence that makes the complaint is in this
+// email's own words (not a quoted earlier one), and the complaint is dated the
+// day this email went. Returns what to check (empty: nothing). Pure.
+export function ownEmailCheckReasons({ confidence, orgOnFile, quote, ownWords, raisedOn, sentOn } = {}) {
+  const norm = (t) => String(t || '').toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2013\u2014]/g, '-')
+    .replace(/\s+/g, ' ').trim();
+  const own = norm(ownWords);
+  const parts = norm(quote).split(/\s*(?:\.\.\.|\u2026)\s*/).filter((x) => x.length >= 8);
+  const reasons = [];
+  if (confidence !== 'high') reasons.push('the reading of the email was not certain');
+  if (!orgOnFile) reasons.push('the organisation was set up new from the email');
+  if (!parts.length || !parts.every((x) => own.includes(x))) reasons.push('the sentence making the complaint is not in this email\'s own words');
+  if (!raisedOn || !sentOn || raisedOn !== sentOn) reasons.push('the date it was made is not the day this email was sent');
+  return reasons;
+}
+
 // A value for a sentence: an ISO date as ukDate, anything else unchanged.
 export function readable(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? ukDate(v) : v;

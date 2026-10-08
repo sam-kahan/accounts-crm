@@ -895,6 +895,7 @@ export default function ComplaintDetail() {
   // while it runs and a refusal shows under that email, where the person is
   // looking, not at the top of the page.
   const [markingEmail, setMarkingEmail] = useState(null); // { id, as }
+  const [markingChecked, setMarkingChecked] = useState(false);
   const [emailErr, setEmailErr] = useState(null); // { id, msg }
   async function reviewEmail(emailId, as, date, partyId = null) {
     if (markingEmail) return;
@@ -1997,7 +1998,9 @@ export default function ComplaintDetail() {
             <strong>To check:</strong> the system created this from emails by itself. Look over the
             organisation, dates and timeline (use Edit details for anything wrong), then confirm.
           </span>
-          <button className="btn-primary btn-sm" onClick={async () => {
+          <button className="btn-primary btn-sm" disabled={markingChecked} onClick={async () => {
+            if (markingChecked) return;
+            setMarkingChecked(true);
             try {
               const r = await api.complaints.markChecked(id);
               // Straight on to the next one waiting, so a batch is quick to go through.
@@ -2007,9 +2010,9 @@ export default function ComplaintDetail() {
                 await load();
                 setMsg('Checked. That was the last one to check.');
               }
-            } catch (e) { setMsg(e.message); }
+            } catch (e) { setMsg(e.message); } finally { setMarkingChecked(false); }
           }}>
-            Looks right, next ›
+            {markingChecked ? 'Saving…' : 'Looks right, next ›'}
           </button>
         </div>
       )}

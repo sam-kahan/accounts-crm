@@ -761,6 +761,24 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — Needs attention says what to do; a colleague's clear complaint email isn't "To check"
+- **The Complaints list says why a complaint is under Needs attention**
+  when it isn't its next step (`attentionTodo` in `pages/Complaints.jsx`):
+  "To do now: check what the system set up from the emails…, then press
+  Looks right; research <org>'s complaints procedure; mark the 2 new
+  emails; confirm it is resolved", then "Then: <the step with them>". A
+  complaint made automatically from a colleague's email read "Next: Wait
+  for British Gas to acknowledge…" under Needs attention, with nothing
+  saying the To check was why. **Looks right, next ›** waits while it saves.
+- **A complaint created from our own email is marked To check only when
+  something in it was a guess** (`complaintRules.js#ownEmailCheckReasons`,
+  pure, tested; used by `complaintEmailProcessor.js#createFromEmail`): not
+  when the reading is high confidence, the organisation was already on file
+  (none set up new), the sentence making the complaint is in that email's
+  own words (`authority.js#ownText`, not a quoted earlier email) and it is
+  dated the day that email went. The "raised" timeline note says either
+  what to check or why nothing needed checking.
+
 ### 2026-10-08 — the landlord's authority is the step in the morning email and the list too
 - A complaint waiting on the landlord's authority (on file to send, or to
   ask the landlord for) that was also overdue and lately chased read

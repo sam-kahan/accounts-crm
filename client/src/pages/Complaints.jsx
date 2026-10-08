@@ -541,6 +541,21 @@ function nextStepOf(c) {
   return c.nextAction || null;
 }
 
+// Why an open complaint is under Needs attention when the reason isn't its
+// next step (chasing and Action needed already are): what to do now, in the
+// order to do it. Its next step may well be to wait; this is what isn't.
+function attentionTodo(c) {
+  if (c.state !== 'open') return [];
+  const todo = [];
+  if (c.resolution_suggested) todo.push('an email says it has been put right: confirm it on the complaint');
+  if (c.new_emails > 0) todo.push(`mark the ${plural(c.new_emails, 'new email')} on the complaint`);
+  if (c.needs_check) todo.push('check what the system set up from the emails by itself, then press "Looks right" on the complaint');
+  if (c.unresearched_orgs?.length) {
+    todo.push(`research ${c.unresearched_orgs.join(' and ')}'s complaints procedure (the dates are the standard ones until then)`);
+  }
+  return todo;
+}
+
 // "British Gas · Account 850123456 · 10 Dale St, L2 2BT"
 // `lead`: the organisation to name first (a complaint with more than one is
 // offered under each, so an email from EDF finds it under E, not under LCS).
@@ -887,9 +902,15 @@ export default function Complaints() {
                     {c.state === 'open' && c.any_action_now && !c.any_chase_now && (
                       <span className="badge amber" style={{ marginLeft: 6 }}><strong>Action needed</strong></span>
                     )}
+                    {attentionTodo(c).length > 0 && (
+                      <div style={{ fontSize: 12, marginTop: 2, color: 'var(--warn)' }}>
+                        <span style={{ fontWeight: 600 }}>To do now:</span>{' '}
+                        {attentionTodo(c).map((x, i) => (i ? `; ${x}` : x.charAt(0).toUpperCase() + x.slice(1))).join('')}.
+                      </div>
+                    )}
                     {c.state === 'open' && nextStepOf(c) && (
                       <div className="clamp-3" style={{ fontSize: 12, marginTop: 2 }}>
-                        <span style={{ fontWeight: 600 }}>Next:</span> {nextStepOf(c)}
+                        <span style={{ fontWeight: 600 }}>{attentionTodo(c).length ? 'Then:' : 'Next:'}</span> {nextStepOf(c)}
                       </div>
                     )}
                     {c.property && <div className="muted" style={{ fontSize: 12 }}>{c.property}</div>}

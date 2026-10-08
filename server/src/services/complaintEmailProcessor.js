@@ -1,9 +1,9 @@
 import { query } from '../db/pool.js';
-import { LANDLORD } from './authority.js';
+import { LANDLORD, ownText } from './authority.js';
 import { config } from '../config.js';
 import { HttpError } from '../lib/http.js';
 import { londonDateOf, todayISO } from '../lib/dates.js';
-import { ukDate, trackOpen, readable, saysReturnedToClient, awaitingFirstEmail, usesComplaintWord } from './complaintRules.js';
+import { ukDate, trackOpen, readable, saysReturnedToClient, awaitingFirstEmail, usesComplaintWord, ownEmailCheckReasons } from './complaintRules.js';
 import { startFormalComplaint } from './complaintFormal.js';
 import { overallState } from './complaintParties.js';
 import { fetchMessageDetail } from './graphMail.js';
@@ -697,6 +697,7 @@ async function createFromEmail(em, analysis) {
   const ourDomain = String(config.complaintEmail.domain || '').toLowerCase();
   const outside = [...new Set((em.to_addresses || []).map((a) => String(a).toLowerCase().split('@')[1]).filter((d) => d && d !== ourDomain))];
   let org = await findOrgByName(p.org_name, { domains: outside.length === 1 ? outside : [], ourDomain });
+  const orgOnFile = Boolean(org);
   if (!org) {
     const type = p.org_type || 'other';
     let prof = {};
@@ -743,6 +744,13 @@ async function createFromEmail(em, analysis) {
   // The date the complaint was made, from the thread (a forward is often a later email in it).
   const raised = (/^\d{4}-\d{2}-\d{2}$/.test(p.raised_on || '') && p.raised_on <= londonDateOf(new Date()) ? p.raised_on : null)
     || analysis.sent_on || londonDateOf(new Date(em.received_at));
+  // Marked To check only where something was a guess (complaintRules.js#ownEmailCheckReasons):
+  // a colleague's own clear complaint email sets up nothing to look over.
+  const toCheck = ownEmailCheckReasons({
+    confidence: p.confidence, orgOnFile, quote: p.complaint_evidence?.quote,
+    ownWords: ownText(em.body_text || em.body_preview || ''), raisedOn: raised,
+    sentOn: analysis.sent_on || londonDateOf(new Date(em.received_at)),
+  });
   const created = await createComplaint(
     {
       organisation_id: org.id,
@@ -757,7 +765,12 @@ async function createFromEmail(em, analysis) {
       channel: 'email',
       raised_on: raised,
     },
-    { by: AUTO_BY, needsCheck: true, raisedNote: `Complaint created automatically from your email "${em.subject || '(no subject)'}". Check the details.` },
+    {
+      by: AUTO_BY,
+      needsCheck: toCheck.length > 0,
+      raisedNote: `Complaint created automatically from your email "${em.subject || '(no subject)'}".` +
+        (toCheck.length ? ` Please check the details: ${toCheck.join('; ')}.` : ' Nothing in it was a guess (the email makes the complaint in its own words, on the day it was sent, to an organisation already on file), so it isn\'t marked To check.'),
+    },
   );
   await query(`UPDATE complaint_emails SET complaint_id = $2, match_method = 'auto_created' WHERE id = $1`, [em.id, created.id]);
   await query('UPDATE complaints SET accounts_read_at = now() WHERE id = $1', [created.id]);
