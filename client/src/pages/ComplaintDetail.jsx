@@ -550,6 +550,7 @@ export default function ComplaintDetail() {
   async function openResend(em) {
     setResending(em.id);
     setMsg(null);
+    setEmailErr(null);
     try {
       const d = await api.complaints.resendDraft(id, em.id);
       setSend({
@@ -558,7 +559,8 @@ export default function ComplaintDetail() {
         attachment_ids: d.attachment_ids || [], attach_why: d.attach_why || null, caution: d.caution || null, then: null,
       });
     } catch (e) {
-      setMsg(e.message);
+      // Under that email, where the button was pressed.
+      setEmailErr({ id: em.id, msg: e.message });
     } finally {
       setResending(null);
     }
@@ -957,15 +959,21 @@ export default function ComplaintDetail() {
     setAcceptingAll(false);
   }
   async function undoEmail(em) {
+    if (markingEmail) return;
     if (!confirm('Undo what was recorded from this email? The dates it set go back to what they were, and the email goes back to “New” for you to decide.')) return;
-    setMsg(null);
+    setMarkingEmail({ id: em.id, as: 'undo' });
+    setEmailErr(null);
     try {
       await api.complaints.undoEmail(id, em.id);
       await load();
     } catch (e) {
-      setMsg(e.message);
+      // Shown on the email itself (e.g. its dates were changed since).
+      setEmailErr({ id: em.id, msg: e.message });
+    } finally {
+      setMarkingEmail(null);
     }
   }
+
   // Search the mailboxes for every reference and account number on it. It
   // runs in the background; the page looks again until it has finished.
   async function searchEmails(all) {
@@ -2325,7 +2333,10 @@ export default function ComplaintDetail() {
                     )}
                     {em.applied && (
                       <div className="inline-note" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }}>
-                        {em.applied.by ? `Recorded by ${em.applied.by}` : 'Recorded automatically'}
+                        {Object.keys(em.applied.after || {}).length
+                          ? (em.applied.by ? `Recorded by ${em.applied.by}` : 'Recorded automatically')
+                          // Nothing dated was recorded: it was only filed.
+                          : `Filed ${em.applied.by ? `by ${em.applied.by}` : 'automatically'} as ${(REVIEWED_AS[em.reviewed_as] || 'correspondence').toLowerCase()}`}
                         {em.applied.after?.acknowledged_on && <>: acknowledged {formatDate(em.applied.after.acknowledged_on)}</>}
                         {em.applied.after?.responded_on && <>: responded {formatDate(em.applied.after.responded_on)}</>}
                         {em.applied.after?.stage === 'stage_2' && <>: moved to Stage 2 from {formatDate(em.applied.after.stage_started_on)} (our Stage 2 request)</>}
@@ -2333,9 +2344,12 @@ export default function ComplaintDetail() {
                         {em.applied.after?.reference && <> · their reference {em.applied.after.reference}</>}
                         {em.applied.party_id && partyName(em.applied.party_id) && <> · for {partyName(em.applied.party_id)}</>}
                         .{' '}
-                        <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={() => undoEmail(em)}>Undo</button>
+                        <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} disabled={Boolean(markingEmail)} onClick={() => undoEmail(em)}>
+                          {markingEmail?.id === em.id && markingEmail.as === 'undo' ? 'Undoing…' : 'Undo'}
+                        </button>
                       </div>
                     )}
+                    {emailErr?.id === em.id && <div className="login-error" role="alert" style={{ marginTop: 6 }}>{emailErr.msg}</div>}
                     {em.body_text && (
                       <details style={{ marginTop: 4 }}>
                         <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>Show the full email</summary>

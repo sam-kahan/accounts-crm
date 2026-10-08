@@ -772,6 +772,9 @@ the page says how far each date can be trusted.
   reached); it waits for a person. One email refused no longer stops the
   rest, and the result ("2 emails accepted… Not accepted: …") shows in the
   card, not at the top of the page.
+- **Undo** and **Send again…** on an email wait while they run and show a
+  refusal under that email. An email only filed (nothing dated recorded)
+  reads "Filed automatically as correspondence", not "Recorded automatically".
 
 ### 2026-10-08 — fixes from a review of the plain chaser and the kept steps
 - **No plain chaser or Stage 2 request while the complaint itself is in
