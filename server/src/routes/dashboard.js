@@ -118,7 +118,7 @@ export async function collectComplaintDueItems(days = 30) {
       const r = c.resolution_suggested;
       items.push({
         type: 'complaint', id: c.id,
-        label: `Complaint LOOKS RESOLVED${r.org_name ? ` (${r.org_name})` : ''}: ${c.subject}`,
+        label: `Complaint LOOKS RESOLVED${r.org_name ? ` (${r.org_name})` : ''}: ${c.subject}`, badge: 'confirm',
         due_date: r.on || todayISO(), company_name: r.org_name || c.org_name, overdue: true,
         detail: `${r.outcome || 'An email says it has been put right'}. Confirm it on the complaint.`,
         link,
@@ -151,7 +151,7 @@ export async function collectComplaintDueItems(days = 30) {
       if (t.status === 'not_sent') {
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint NOT SENT YET: ${c.subject}`,
+          label: `Complaint NOT SENT YET: ${c.subject}`, badge: 'not_sent',
           due_date: todayISO(), company_name: t.org_name, overdue: false, detail: t.nextAction, link,
         });
         continue;
@@ -171,7 +171,7 @@ export async function collectComplaintDueItems(days = 30) {
       if (authHere) {
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint ACTION NEEDED: ${c.subject}`,
+          label: `Complaint ACTION NEEDED: ${c.subject}`, badge: 'action',
           due_date: todayISO(), company_name: t.org_name, overdue: true,
           detail: c.authority.text, link,
         });
@@ -182,7 +182,7 @@ export async function collectComplaintDueItems(days = 30) {
         const missing = (t.asked_for || []).filter((x) => !x.attachment_id && !x.given && !x.not_ours).map((x) => x.item);
         items.push({
           type: 'complaint', id: c.id,
-          label: `Complaint ACTION NEEDED: ${c.subject}`,
+          label: `Complaint ACTION NEEDED: ${c.subject}`, badge: 'action',
           due_date: todayISO(), company_name: t.org_name, overdue: true,
           detail: missing.length ? `${what} Not on file yet: ${missing.join(', ')}.` : what,
           link,

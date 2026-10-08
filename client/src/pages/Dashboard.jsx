@@ -13,7 +13,18 @@ const CATEGORY_LABEL = {
   custom: 'Other',
 };
 
-function DueBadge({ date }) {
+// What a complaint item is when it isn't a date running out (the server
+// says): something to do now, an email to confirm, or one not sent yet.
+// Counting days on those read "Due today" in the Overdue list, or a
+// "Looks resolved" as days overdue from the date of the email.
+const KIND_BADGE = {
+  action: <span className="badge amber">Action needed</span>,
+  confirm: <span className="badge ok">Confirm it</span>,
+  not_sent: <span className="badge grey">Not sent yet</span>,
+};
+
+function DueBadge({ date, kind }) {
+  if (kind && KIND_BADGE[kind]) return KIND_BADGE[kind];
   const n = daysUntil(date);
   if (n === null) return null;
   if (n < 0) return <span className="badge red">{Math.abs(n)}d overdue</span>;
@@ -61,7 +72,7 @@ function ItemRow({ item, onDismiss, onError }) {
       </td>
       <td className="muted">{item.company_name || '—'}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-        <DueBadge date={item.deadline || item.due_date} />
+        <DueBadge date={item.deadline || item.due_date} kind={item.badge} />
         {mayDismiss && item.type !== 'complaint' && <button
           className="btn-ghost btn-sm"
           style={{ marginLeft: 8 }}

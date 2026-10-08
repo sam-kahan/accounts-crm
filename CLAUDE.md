@@ -769,6 +769,11 @@ the page says how far each date can be trusted.
 - The dashboard's tiles are only as tall as what they say on a phone
   (`.stat-row` `align-items: start`): Overdue stretched into a tall empty
   box beside the Complaints tile.
+- **A complaint item's badge says what it is** (`badge` on
+  `collectComplaintDueItems` items: `action` / `confirm` / `not_sent`,
+  `KIND_BADGE` in `pages/Dashboard.jsx`): "Action needed", "Confirm it",
+  "Not sent yet". An ACTION NEEDED line in the Overdue list said "Due
+  today", and a Looks resolved one counted days overdue from the email.
 
 ### 2026-10-08 — the Log form keeps the account number
 - **The Log a complaint form had no account number**, and filling it from
