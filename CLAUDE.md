@@ -787,7 +787,10 @@ the page says how far each date can be trusted.
   their procedure only when that date is theirs, not a standard one) and
   **Send <org> the Stage 2 request…** after their Stage 1 response or a
   missed Stage 1 date (`stage2Draft`, which escalates on sending). It says
-  the AI is writing its email again when that is why.
+  the AI is writing its email again when that is why. A single-organisation
+  complaint gets the same **Chase <org>…** in its Next step box when it is
+  overdue and the review isn't current. A plain email's "Re:" line leaves out
+  their reference when it is the account number again (`aboutLine`).
 
 ### 2026-10-08 — two organisations: one's change doesn't take the other's email away
 - LCS and EDF on one complaint: sending LCS its Stage 2 request moved LCS's

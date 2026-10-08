@@ -1216,12 +1216,20 @@ export default function ComplaintDetail() {
   // change to one (LCS moved to Stage 2) doesn't take away another's email
   // (EDF's chaser) until the review is written again.
   const reviewStands = (i) => Boolean(c.ai_review_current || (multi && c.track_review_current?.[i]));
+  // What a plain email is about: the property, the account number, and their
+  // reference unless it is the account number again (often it is).
+  const aboutLine = (t) => {
+    const key = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const nums = (c.account_numbers || []).filter(Boolean);
+    const refIsAccount = t.reference && nums.some((a) => key(a) === key(t.reference));
+    return [c.property, nums.length && `account ${nums.join(', ')}`, t.reference && !refIsAccount && `your reference ${t.reference}`]
+      .filter(Boolean).join(', ');
+  };
   const stage2Draft = (t) => {
     const i = tracks.findIndex((x) => x.id === t.id);
     const own = multi ? c.ai_review?.by_org?.[i] : c.ai_review;
     if (reviewStands(i) && own?.email?.body && own.email_step === 'stage2_request') return own.email;
-    const accounts = (c.account_numbers || []).join(', ');
-    const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
+    const about = aboutLine(t);
     // Quoted as theirs only when their procedure states it: a standard figure
     // filled in for them is never passed off as their rule.
     const days = t.rule?.defaulted?.includes('stage2Days') ? null : t.rule?.stage2Days;
@@ -1247,8 +1255,7 @@ export default function ComplaintDetail() {
   // part has just changed) or there is none: "Action needed" must always come
   // with something to press. Only states what the dates show.
   const chaserDraft = (t) => {
-    const accounts = (c.account_numbers || []).join(', ');
-    const about = [c.property, accounts && `account ${accounts}`, t.reference && `your reference ${t.reference}`].filter(Boolean).join(', ');
+    const about = aboutLine(t);
     // "Under your procedure" only when the date is theirs: a standard
     // timescale filled in for them is never passed off as their rule.
     const stageKey = t.stage === 'stage_2' ? 'stage2' : 'stage1';
@@ -1704,6 +1711,11 @@ export default function ComplaintDetail() {
             // Asking for Stage 2 is done BY the email: one button for both.
             const withEscalate = Boolean(draft) && !multi && c.stage === 'stage_1' &&
               (c.ai_review.next_action?.type === 'escalate_stage2' || c.ai_review.email_step === 'stage2_request');
+            // Overdue with no AI step to follow (its review is being written
+            // again, or there is none): a chaser from the facts on file, so
+            // the step comes with a button.
+            const plainChase = !live && !authFirst && c.state === 'open' && trackOpen(c) && c.chase_now && !c.responded_on
+              ? chaserDraft(c) : null;
             return (
               <div className={`inline-note ${c.any_needs_chasing || c.action_now ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 16 }}>
@@ -1713,7 +1725,7 @@ export default function ComplaintDetail() {
                 {c.action_why && c.action_why !== text && c.action_why !== c.authority?.text && <div style={{ marginTop: 4 }}><strong>Still to decide:</strong> {c.action_why}</div>}
                 {draft?.figure_check?.note && <div style={{ marginTop: 6 }}><FigureNote check={draft.figure_check} /></div>}
                 {askedForList(c)}
-                {(draft || btn) && (
+                {(draft || btn || plainChase) && (
                   <div className="btn-row" style={{ marginTop: 8 }}>
                     {draft && withEscalate ? (
                       // The email IS the Stage 2 request: one press sends it
@@ -1739,6 +1751,8 @@ export default function ComplaintDetail() {
                           {markingSent ? 'Updating…' : '✓ I sent it from Outlook'}
                         </button>
                       </>
+                    ) : plainChase ? (
+                      <button className="btn-primary btn-sm" onClick={() => openSend(plainChase)}>Chase {c.org_name || 'them'}…</button>
                     ) : btn}
                   </div>
                 )}
