@@ -539,8 +539,14 @@ function nextStepOf(c) {
 }
 
 // "British Gas · Account 850123456 · 10 Dale St, L2 2BT"
-function fileChoiceLabel(c) {
-  const company = (c.org_names?.length ? c.org_names : [c.org_name || 'No organisation']).join(' + ');
+// `lead`: the organisation to name first (a complaint with more than one is
+// offered under each, so an email from EDF finds it under E, not under LCS).
+function fileChoiceLabel(c, lead = null) {
+  const listed = (c.org_names || []).filter(Boolean);
+  const names = listed.length ? listed : [c.org_name || 'No organisation'];
+  const company = lead && names.length > 1
+    ? `${lead} (with ${names.filter((n) => n !== lead).join(' and ')})`
+    : names.join(' + ');
   const accounts = (c.account_numbers || []).filter(Boolean);
   const account = accounts.length
     ? `${accounts.length === 1 ? 'Account' : 'Accounts'} ${accounts.join(', ')}`
@@ -573,22 +579,42 @@ export default function Complaints() {
   const loadUnfiled = () =>
     api.complaints.unfiledEmails().then(setUnfiled).catch(() => setUnfiled([]));
 
+  // Filing reads the email there and then (it can take a few seconds), so
+  // the email's buttons wait, and a failure is shown under that email: the
+  // page-level error only shows when the list itself can't load.
+  const [filing, setFiling] = useState(null); // { id, what }
+  const [fileErr, setFileErr] = useState(null); // { id, msg }
   async function fileEmail(emailId, complaintId) {
-    if (!complaintId) return;
+    if (filing) return;
+    if (!complaintId) {
+      setFileErr({ id: emailId, msg: 'Choose the complaint it is about first.' });
+      return;
+    }
+    setFiling({ id: emailId, what: 'file' });
+    setFileErr(null);
     try {
       await api.complaints.fileEmail(emailId, complaintId);
       await Promise.all([loadUnfiled(), load()]);
     } catch (e) {
-      setErr(e.message);
+      setFileErr({ id: emailId, msg: e.message });
+      loadUnfiled();
+    } finally {
+      setFiling(null);
     }
   }
   async function dismissEmail(emailId) {
+    if (filing) return;
     if (!confirm('Remove this email? Only do this if it isn’t about any complaint.')) return;
+    setFiling({ id: emailId, what: 'dismiss' });
+    setFileErr(null);
     try {
       await api.complaints.dismissEmail(emailId);
       await loadUnfiled();
     } catch (e) {
-      setErr(e.message);
+      setFileErr({ id: emailId, msg: e.message });
+      loadUnfiled();
+    } finally {
+      setFiling(null);
     }
   }
 
@@ -649,8 +675,15 @@ export default function Complaints() {
   // Filing an email: each complaint offered by its company and account
   // number (what the email will quote), then the property or subject to tell
   // apart two on the same company with no number. Sorted by company.
-  const fileChoices = [...open].sort((a, b) =>
-    fileChoiceLabel(a).localeCompare(fileChoiceLabel(b), 'en-GB', { sensitivity: 'base' }));
+  const fileChoices = open
+    .flatMap((c) => ((c.org_names || []).filter(Boolean).length > 1
+      ? c.org_names.filter(Boolean).map((n) => ({ c, label: fileChoiceLabel(c, n) }))
+      : [{ c, label: fileChoiceLabel(c) }]))
+    // Two open complaints on the same company, account and property read
+    // the same: each then also carries its own reference.
+    .map((x, _, all) => (all.filter((y) => y.label === x.label).length > 1
+      ? { ...x, label: `${x.label} · ${x.c.ref_code}` } : x))
+    .sort((a, b) => a.label.localeCompare(b.label, 'en-GB', { sensitivity: 'base' }));
 
   const byFilter =
     filter === 'attention' ? attention :
@@ -700,21 +733,24 @@ export default function Complaints() {
                 <div className="btn-row" style={{ marginTop: 8 }}>
                   <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}>
                     <option value="">Choose the complaint…</option>
-                    {fileChoices.map((c) => (
-                      <option key={c.id} value={c.id}>{fileChoiceLabel(c)}</option>
+                    {fileChoices.map(({ c, label }) => (
+                      <option key={`${c.id}:${label}`} value={c.id}>{label}</option>
                     ))}
                   </select>
-                  <button className="btn-primary btn-sm"
+                  <button className="btn-primary btn-sm" disabled={Boolean(filing)}
                     onClick={() => fileEmail(em.id, document.getElementById(`file-${em.id}`).value)}>
-                    File it
+                    {filing?.id === em.id && filing.what === 'file' ? 'Filing and reading it…' : 'File it'}
                   </button>
                   {aiEnabled && (
-                    <button className="btn btn-sm" onClick={() => setNewFromEmail(em.id)}>
+                    <button className="btn btn-sm" disabled={Boolean(filing)} onClick={() => setNewFromEmail(em.id)}>
                       It’s a new complaint: start it
                     </button>
                   )}
-                  <button className="btn-ghost btn-sm" onClick={() => dismissEmail(em.id)}>Not about a complaint</button>
+                  <button className="btn-ghost btn-sm" disabled={Boolean(filing)} onClick={() => dismissEmail(em.id)}>
+                    {filing?.id === em.id && filing.what === 'dismiss' ? 'Removing…' : 'Not about a complaint'}
+                  </button>
                 </div>
+                {fileErr?.id === em.id && <div className="login-error" role="alert" style={{ marginTop: 8 }}>{fileErr.msg}</div>}
               </div>
             ))}
           </div>

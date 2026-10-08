@@ -889,13 +889,22 @@ export default function ComplaintDetail() {
     }
   }
 
+  // Marking an email records a step (it moves deadlines), so its buttons wait
+  // while it runs and a refusal shows under that email, where the person is
+  // looking, not at the top of the page.
+  const [markingEmail, setMarkingEmail] = useState(null); // { id, as }
+  const [emailErr, setEmailErr] = useState(null); // { id, msg }
   async function reviewEmail(emailId, as, date, partyId = null) {
-    setMsg(null);
+    if (markingEmail) return;
+    setMarkingEmail({ id: emailId, as });
+    setEmailErr(null);
     try {
       await api.complaints.reviewEmail(id, emailId, as, date, partyId);
       await load();
     } catch (e) {
-      setMsg(e.message);
+      setEmailErr({ id: emailId, msg: e.message });
+    } finally {
+      setMarkingEmail(null);
     }
   }
   // Every new email as the AI read it, in one press: its kind, the date on
@@ -2030,7 +2039,7 @@ export default function ComplaintDetail() {
           <div className="card-head">
             <h2>New email{newEmails.length === 1 ? '' : 's'} to review <span className="badge amber">{newEmails.length}</span></h2>
             {newEmails.some((em) => em.analysis) && (
-              <button className="btn-primary btn-sm" disabled={acceptingAll} onClick={() => acceptAllReadings(newEmails)}>
+              <button className="btn-primary btn-sm" disabled={acceptingAll || Boolean(markingEmail)} onClick={() => acceptAllReadings(newEmails)}>
                 {acceptingAll ? 'Accepting…' : newEmails.length === 1 ? 'Accept the AI’s reading' : `Accept the AI’s reading for all ${newEmails.length}`}
               </button>
             )}
@@ -2086,20 +2095,21 @@ export default function ComplaintDetail() {
                     )}
                     {tr && tr.stage === 'stage_1' && !tr.acknowledged_on && trackOpen(tr) && (
                       <button className={`btn btn-sm ${a?.kind === 'acknowledgement' ? 'btn-primary' : ''}`}
-                        onClick={() => reviewEmail(em.id, 'acknowledgement', date, partyIdOf(tr))}>
-                        Their acknowledgement
+                        disabled={Boolean(markingEmail) || acceptingAll} onClick={() => reviewEmail(em.id, 'acknowledgement', date, partyIdOf(tr))}>
+                        {markingEmail?.id === em.id && markingEmail.as === 'acknowledgement' ? 'Recording…' : 'Their acknowledgement'}
                       </button>
                     )}
                     {tr && (tr.stage === 'stage_1' || tr.stage === 'stage_2') && trackOpen(tr) && (
                       <button className={`btn btn-sm ${a?.kind === 'stage1_response' || a?.kind === 'final_response' ? 'btn-primary' : ''}`}
-                        onClick={() => reviewEmail(em.id, 'response', date, partyIdOf(tr))}>
-                        Their {tr.stage === 'stage_2' ? 'final' : 'Stage 1'} response
+                        disabled={Boolean(markingEmail) || acceptingAll} onClick={() => reviewEmail(em.id, 'response', date, partyIdOf(tr))}>
+                        {markingEmail?.id === em.id && markingEmail.as === 'response' ? 'Recording…' : `Their ${tr.stage === 'stage_2' ? 'final' : 'Stage 1'} response`}
                       </button>
                     )}
-                    <button className="btn-ghost btn-sm" onClick={() => reviewEmail(em.id, 'correspondence', date)}>
-                      Just correspondence
+                    <button className="btn-ghost btn-sm" disabled={Boolean(markingEmail) || acceptingAll} onClick={() => reviewEmail(em.id, 'correspondence', date)}>
+                      {markingEmail?.id === em.id && markingEmail.as === 'correspondence' ? 'Filing…' : 'Just correspondence'}
                     </button>
                   </div>
+                  {emailErr?.id === em.id && <div className="login-error" role="alert" style={{ marginTop: 8 }}>{emailErr.msg}</div>}
                 </div>
               );
             })}

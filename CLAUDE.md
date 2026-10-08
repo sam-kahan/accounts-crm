@@ -761,6 +761,21 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — filing an email: buttons wait, errors show by the email, every organisation listed
+- **Emails to file** (Complaints page): File it / Not about a complaint
+  wait while they run ("Filing and reading it…") and a refusal shows under
+  that email; the page's own error only showed when the list failed to
+  load, so a failed filing looked like nothing happening. File it with no
+  complaint chosen says so.
+- A complaint with more than one organisation is offered under EACH
+  ("EDF Energy (with LCS) · Account …"), so an email from EDF finds it
+  under E; two open complaints that would read the same (same company,
+  account and property) each carry their GC-C reference.
+- **New emails to review** (complaint page): Their acknowledgement / Their
+  response / Just correspondence wait while they run (and Accept all waits
+  for them), and a refusal shows under that email rather than at the top of
+  the page, off screen on a phone.
+
 ### 2026-10-08 — "Action needed" always has a button, also right after filing an email
 - Filing an email for one organisation (their response, say) changes ITS
   part, so its AI email is held back until the review is written again (10
