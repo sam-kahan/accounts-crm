@@ -761,6 +761,22 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — fixes from a review of the plain chaser and the kept steps
+- **No plain chaser or Stage 2 request while the complaint itself is in
+  question** (`doubtOpen`: a re-check found no formal complaint, not yet
+  answered): "following up our complaint" would be untrue. Nor next to an
+  up-to-date AI step that is not an email (mark it resolved, wait), nor
+  while the authority box is that organisation's step.
+- **A kept organisation's drafted email is held to more than its step**
+  (`emailStands` in `ComplaintDetail.jsx`): while only its own part is
+  unchanged, an email naming another organisation (whose part moved) may
+  state its old position, so the plain email is offered instead and the page
+  says why. The step itself still stands.
+- **A hand-typed due date** (`response_due_manual`) is never called "under
+  your complaints procedure" in the chaser.
+- The filing list names each organisation once (two saved organisations
+  can share a name).
+
 ### 2026-10-08 — filing an email: buttons wait, errors show by the email, every organisation listed
 - **Emails to file** (Complaints page): File it / Not about a complaint
   wait while they run ("Filing and reading it…") and a refusal shows under

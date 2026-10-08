@@ -542,7 +542,7 @@ function nextStepOf(c) {
 // `lead`: the organisation to name first (a complaint with more than one is
 // offered under each, so an email from EDF finds it under E, not under LCS).
 function fileChoiceLabel(c, lead = null) {
-  const listed = (c.org_names || []).filter(Boolean);
+  const listed = [...new Set((c.org_names || []).filter(Boolean))];
   const names = listed.length ? listed : [c.org_name || 'No organisation'];
   const company = lead && names.length > 1
     ? `${lead} (with ${names.filter((n) => n !== lead).join(' and ')})`
@@ -676,9 +676,13 @@ export default function Complaints() {
   // number (what the email will quote), then the property or subject to tell
   // apart two on the same company with no number. Sorted by company.
   const fileChoices = open
-    .flatMap((c) => ((c.org_names || []).filter(Boolean).length > 1
-      ? c.org_names.filter(Boolean).map((n) => ({ c, label: fileChoiceLabel(c, n) }))
-      : [{ c, label: fileChoiceLabel(c) }]))
+    .flatMap((c) => {
+      // Each organisation once (two saved organisations can share a name).
+      const names = [...new Set((c.org_names || []).filter(Boolean))];
+      return names.length > 1
+        ? names.map((n) => ({ c, label: fileChoiceLabel(c, n) }))
+        : [{ c, label: fileChoiceLabel(c) }];
+    })
     // Two open complaints on the same company, account and property read
     // the same: each then also carries its own reference.
     .map((x, _, all) => (all.filter((y) => y.label === x.label).length > 1

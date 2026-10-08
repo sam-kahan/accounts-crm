@@ -1215,7 +1215,21 @@ export default function ComplaintDetail() {
   // organisation's own part hasn't changed since it was written, so a
   // change to one (LCS moved to Stage 2) doesn't take away another's email
   // (EDF's chaser) until the review is written again.
+  // The emails put the complaint itself in question (no formal complaint
+  // found): nothing is chased or escalated from the dates until answered.
+  const doubtOpen = c.complaint_doubt?.kind === 'not_complaint' && !c.complaint_doubt.answered;
   const reviewStands = (i) => Boolean(c.ai_review_current || (multi && c.track_review_current?.[i]));
+  // The drafted EMAIL is held to more than the step: when only this
+  // organisation's part is unchanged (another's moved), an email that speaks
+  // of another organisation may state its old position ("LCS's Stage 1
+  // response is still outstanding"), so it isn't offered until the review is
+  // written again; the plain email from the facts on file is offered instead.
+  const emailStands = (i, email) => {
+    if (!email?.body || !reviewStands(i)) return false;
+    if (c.ai_review_current) return true;
+    const text = `${email.subject || ''}\n${email.body}`.toLowerCase();
+    return !tracks.some((t, j) => j !== i && t.org_name && text.includes(String(t.org_name).toLowerCase()));
+  };
   // What a plain email is about: the property, the account number, and their
   // reference unless it is the account number again (often it is).
   const aboutLine = (t) => {
@@ -1228,7 +1242,7 @@ export default function ComplaintDetail() {
   const stage2Draft = (t) => {
     const i = tracks.findIndex((x) => x.id === t.id);
     const own = multi ? c.ai_review?.by_org?.[i] : c.ai_review;
-    if (reviewStands(i) && own?.email?.body && own.email_step === 'stage2_request') return own.email;
+    if (emailStands(i, own?.email) && own.email_step === 'stage2_request') return own.email;
     const about = aboutLine(t);
     // Quoted as theirs only when their procedure states it: a standard figure
     // filled in for them is never passed off as their rule.
@@ -1259,7 +1273,7 @@ export default function ComplaintDetail() {
     // "Under your procedure" only when the date is theirs: a standard
     // timescale filled in for them is never passed off as their rule.
     const stageKey = t.stage === 'stage_2' ? 'stage2' : 'stage1';
-    const theirs = !(t.rule?.defaulted || []).some((k) => String(k).startsWith(stageKey));
+    const theirs = !t.response_due_manual && !(t.rule?.defaulted || []).some((k) => String(k).startsWith(stageKey));
     const missed = t.status === 'response_overdue' && t.response_due
       ? `${theirs ? 'Under your complaints procedure we' : 'We'} expected your ${t.stage === 'stage_2' ? 'Stage 2 (final) response' : 'response'} by ` +
         `${formatDate(t.response_due)}, and we have not yet received it.`
@@ -1601,7 +1615,7 @@ export default function ComplaintDetail() {
                 }
                 const own = reviewStands(i) ? c.ai_review?.by_org?.[i] : null;
                 const text = own?.headline || t.nextAction;
-                const draft = own && c.state === 'open' && emailIsForNow(own) ? own.email : null;
+                const draft = own && c.state === 'open' && emailIsForNow(own) && emailStands(i, own.email) ? own.email : null;
                 const esc = Boolean(draft) && t.stage === 'stage_1' &&
                   (own.next_action?.type === 'escalate_stage2' || own.email_step === 'stage2_request');
                 return (
@@ -1630,7 +1644,8 @@ export default function ComplaintDetail() {
                         </button>
                       </div>
                     )}
-                    {!draft && c.state === 'open' && (() => {
+                    {!draft && c.state === 'open' && !doubtOpen && !(own && !(emailIsForNow(own) && !emailStands(i, own.email))) &&
+                      !(c.authority?.action && c.authority.party_id === partyIdOf(t)) && (() => {
                       // No AI email for this organisation to send now (its
                       // part has just changed, so the review is being written
                       // again, or there is none): the step its dates give,
@@ -1639,13 +1654,16 @@ export default function ComplaintDetail() {
                       const respondedAt1 = t.stage === 'stage_1' && t.responded_on && !t.final_response_on;
                       const chase = t.chase_now && !t.responded_on;
                       if (!respondedAt1 && !chase) return null;
-                      const rewriting = aiEnabled && c.ai_review && !reviewStands(i);
+                      const held = own && emailIsForNow(own) && !emailStands(i, own.email);
+                      const rewriting = held || (aiEnabled && c.ai_review && !reviewStands(i));
                       return (
                         <>
                           {rewriting && (
                             <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                              {t.org_name}’s part has changed, so the AI is writing its email again. Until then, this
-                              one is drafted from the dates on file.
+                              {held
+                                ? `The AI’s email to ${t.org_name} speaks of another organisation whose part has changed, so it is being written again.`
+                                : `${t.org_name}’s part has changed, so the AI is writing its email again.`}{' '}
+                              Until then, this one is drafted from the dates on file.
                             </div>
                           )}
                           <div className="btn-row" style={{ marginTop: 6 }}>
@@ -1714,7 +1732,7 @@ export default function ComplaintDetail() {
             // Overdue with no AI step to follow (its review is being written
             // again, or there is none): a chaser from the facts on file, so
             // the step comes with a button.
-            const plainChase = !live && !authFirst && c.state === 'open' && trackOpen(c) && c.chase_now && !c.responded_on
+            const plainChase = !live && !authFirst && !doubtOpen && c.state === 'open' && trackOpen(c) && c.chase_now && !c.responded_on
               ? chaserDraft(c) : null;
             return (
               <div className={`inline-note ${c.any_needs_chasing || c.action_now ? 'warn' : ''}`} style={{ marginBottom: 14 }}>
