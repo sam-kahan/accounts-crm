@@ -123,3 +123,18 @@ test('only a PDF or a photo is ever shown in the browser, as a type from the fix
   assert.match(attachmentDisposition('Title.pdf', 'x', { inline: true }), /^inline; filename="Title\.pdf"/);
   assert.match(attachmentDisposition('Title.pdf'), /^attachment;/);
 });
+
+test('digest lists things to do now first, saying what they are, never as overdue', () => {
+  const d = buildDigest([
+    { due_date: '2026-09-01', label: 'Chase E.ON', overdue: true },
+    { due_date: '2026-10-08', label: 'Complaint ACTION NEEDED: x', overdue: true, badge: 'action' },
+    { due_date: '2026-10-06', label: 'Complaint LOOKS RESOLVED: y', overdue: true, badge: 'confirm' },
+    { due_date: '2026-10-08', label: 'Complaint NOT SENT YET: z', overdue: false, badge: 'not_sent' },
+  ]);
+  assert.equal(d.subject, 'Greenco Accounts: 3 to do now, 1 overdue');
+  assert.ok(d.text.indexOf('ACTION NEEDED') < d.text.indexOf('OVERDUE (1)'));
+  assert.ok(d.text.includes('- Action needed  Complaint ACTION NEEDED: x'));
+  assert.ok(d.text.includes('Confirm it (email of Tue 6 Oct 2026)'));
+  assert.ok(d.text.includes('- Not sent yet  Complaint NOT SENT YET: z'));
+  assert.ok(!d.text.includes('Thu 8 Oct 2026'));
+});

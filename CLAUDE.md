@@ -761,6 +761,14 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — the morning email leads with what to do now
+- **`buildDigest`** puts complaint items to act on (`badge`: Action needed,
+  Confirm it, Not sent yet) under their own **To do now** heading first,
+  each saying what it is instead of a date ("Confirm it (email of Tue 6 Oct
+  2026)"), then Overdue, then Coming up; the subject counts them ("2 to do
+  now, 2 overdue, 4 coming up"). They were under Overdue with today's date
+  in red, read as a deadline missed today.
+
 ### 2026-10-08 — phone lists have their side space back
 - On a phone every heading-less table (the dashboard's Overdue / Upcoming,
   a complaint's emails, Staff & access) had its words on the card's left

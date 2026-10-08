@@ -160,7 +160,11 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({
 })[ch]);
 const safeLink = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : null);
 
-// The morning reminder email: what is overdue first, then what is coming up.
+// What a complaint item to act on is (the dashboard's KIND_BADGE says the same).
+const BADGE = { action: 'Action needed', confirm: 'Confirm it', not_sent: 'Not sent yet' };
+
+// The morning reminder email: what to do now first, then what is overdue,
+// then what is coming up.
 // Each item is one block (date, what, whose, the next step and a link) rather
 // than table columns, because it is mostly read on a phone. An item may carry
 // `detail` (what to do) and `link` (where to do it).
@@ -178,17 +182,25 @@ export function buildDigest(items, { notes = [] } = {}) {
       html: `${noteHtml}<p>No key dates, tasks or complaint deadlines are due or overdue right now.</p>`,
     };
   }
-  const overdue = items.filter((i) => i.overdue);
-  const coming = items.filter((i) => !i.overdue);
+  // Things to do now (a complaint needing action, one to confirm as
+  // resolved, one not sent yet) aren't dated deadlines: under "Overdue" with
+  // today's date in red they read as a day missed. They lead, under their
+  // own heading, each saying what it is instead of a date.
+  const now = items.filter((i) => BADGE[i.badge]);
+  const overdue = items.filter((i) => !BADGE[i.badge] && i.overdue);
+  const coming = items.filter((i) => !BADGE[i.badge] && !i.overdue);
+  const when = (i) => (BADGE[i.badge]
+    ? BADGE[i.badge] + (i.badge === 'confirm' && i.due_date ? ` (email of ${ukDate(i.due_date)})` : '')
+    : ukDate(i.due_date));
 
   const textOf = (list) => list
-    .map((i) => `- ${ukDate(i.due_date)}  ${i.label}${i.company_name ? ` (${i.company_name})` : ''}` +
+    .map((i) => `- ${when(i)}  ${i.label}${i.company_name ? ` (${i.company_name})` : ''}` +
       `${i.detail ? `\n    Next: ${i.detail}` : ''}${safeLink(i.link) ? `\n    ${i.link}` : ''}`)
     .join('\n');
   const htmlOf = (list, colour) => list
     .map((i) => `
       <div style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
-        <div style="font-size:13px;font-weight:600;color:${colour};">${esc(ukDate(i.due_date))}</div>
+        <div style="font-size:13px;font-weight:600;color:${colour};">${esc(when(i))}</div>
         <div style="margin-top:2px;">${
           safeLink(i.link) ? `<a href="${esc(i.link)}" style="color:#1e2235;">${esc(i.label)}</a>` : esc(i.label)
         }${i.company_name ? `<span style="color:#6b7280;"> · ${esc(i.company_name)}</span>` : ''}</div>${
@@ -200,12 +212,14 @@ export function buildDigest(items, { notes = [] } = {}) {
     `<h3 style="margin:20px 0 4px;font-size:15px;color:${colour};border-bottom:2px solid #a2c533;padding-bottom:4px;">${t}</h3>`;
 
   const counts = [
+    now.length ? `${now.length} to do now` : null,
     overdue.length ? `${overdue.length} overdue` : null,
     coming.length ? `${coming.length} coming up` : null,
   ].filter(Boolean).join(', ');
   return {
     subject: `Greenco Accounts: ${counts}`,
     text: noteText + [
+      now.length ? `TO DO NOW (${now.length})\n\n${textOf(now)}` : null,
       overdue.length ? `OVERDUE (${overdue.length})\n\n${textOf(overdue)}` : null,
       coming.length ? `COMING UP (${coming.length})\n\n${textOf(coming)}` : null,
     ].filter(Boolean).join('\n\n'),
@@ -213,6 +227,7 @@ export function buildDigest(items, { notes = [] } = {}) {
       <div style="font-family:Arial,Helvetica,sans-serif;color:#1e2235;max-width:640px;">
         <h2 style="color:#1e2235;margin-bottom:0;">Greenco Accounts reminders</h2>
         ${noteHtml}
+        ${now.length ? heading(`To do now (${now.length})`, '#b45309') + htmlOf(now, '#b45309') : ''}
         ${overdue.length ? heading(`Overdue (${overdue.length})`, '#b91c1c') + htmlOf(overdue, '#b91c1c') : ''}
         ${coming.length ? heading(`Coming up (${coming.length})`, '#1e2235') + htmlOf(coming, '#1e2235') : ''}
       </div>`,
