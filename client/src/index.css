@@ -465,7 +465,9 @@ textarea { resize: vertical; min-height: 70px; }
   .content { padding: 16px 14px; }
 
   /* Stat tiles + forms stack */
-  .stat-row { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  /* Each box only as tall as what it says: beside the long Complaints box the
+     Overdue box stretched into a tall empty card. */
+  .stat-row { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; align-items: start; }
   .stat .value { font-size: 24px; }
   .form-grid { grid-template-columns: 1fr; }
   .bulk-fields { grid-template-columns: 1fr 1fr; }
@@ -561,7 +563,10 @@ textarea { resize: vertical; min-height: 70px; }
   table:not(:has(th)):not(.steps-table):not(.timeline-table) { min-width: 0; }
   table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr {
     display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
-    padding: 10px 0; border-bottom: 1px solid var(--border);
+    /* The same side space as the stacked tables: with none, every word sat
+       on the card's left border (the dashboard's Overdue / Upcoming lists,
+       a complaint's emails, Staff & access). */
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
   }
   table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr:last-child { border-bottom: none; }
   table:not(:has(th)):not(.steps-table):not(.timeline-table) > tbody > tr > td {

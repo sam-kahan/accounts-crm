@@ -761,6 +761,15 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-08 — phone lists have their side space back
+- On a phone every heading-less table (the dashboard's Overdue / Upcoming,
+  a complaint's emails, Staff & access) had its words on the card's left
+  border: the flowing rule set the rows' side padding to 0. Rows now have
+  14px each side, as the stacked tables do (`index.css`, phone rules).
+- The dashboard's tiles are only as tall as what they say on a phone
+  (`.stat-row` `align-items: start`): Overdue stretched into a tall empty
+  box beside the Complaints tile.
+
 ### 2026-10-08 — the Log form keeps the account number
 - **The Log a complaint form had no account number**, and filling it from
   the email or letter dropped the account numbers the AI read
