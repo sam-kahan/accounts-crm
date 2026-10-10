@@ -18,10 +18,15 @@ export default function Login() {
     try {
       await login(email, password);
     } catch (err) {
+      // A deactivated account (403) or a server that couldn't be reached
+      // says so: "Invalid email or password" sent people to reset a
+      // password that was never the problem.
       setError(
         err.status === 429
           ? 'Too many attempts — please wait a few minutes.'
-          : 'Invalid email or password.',
+          : err.status === 401
+            ? 'Invalid email or password.'
+            : err.message || 'Something went wrong. Please try again.',
       );
       setBusy(false);
     }

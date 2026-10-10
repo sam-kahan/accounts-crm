@@ -497,7 +497,15 @@ export async function classifyComplaintStatus(input) {
   });
   const result = extractJson(text);
   if (!result) throw new HttpError(502, 'Status check returned nothing usable.');
-  return result;
+  // Clamped before anything is kept: only a real true marks it ready (a
+  // "false" written as a string would otherwise count).
+  return {
+    final_response: result.final_response === true,
+    deadlock: result.deadlock === true,
+    ombudsman_ready: result.ombudsman_ready === true,
+    reason: typeof result.reason === 'string' ? result.reason.trim().slice(0, 500) : '',
+    suggested_next_stage: ['stage_2', 'ombudsman', 'none'].includes(result.suggested_next_stage) ? result.suggested_next_stage : 'none',
+  };
 }
 
 // --- Ombudsman referral grounds --------------------------------------------

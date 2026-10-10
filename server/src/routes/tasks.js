@@ -24,6 +24,7 @@ router.get(
     const conditions = [];
     const params = [];
     if (req.query.company_id) {
+      if (!z.string().uuid().safeParse(req.query.company_id).success) throw new HttpError(400, 'Invalid company id');
       params.push(req.query.company_id);
       conditions.push(`t.company_id = $${params.length}`);
     }

@@ -83,8 +83,11 @@ function ItemRow({ item, onDismiss, onError }) {
             try {
               await onDismiss(item);
             } catch (e) {
-              setBusy(false);
               onError?.(e.message);
+            } finally {
+              // A recurring date rolled on to a date still in the same list
+              // keeps this row (same key): it must not stay on "…" for good.
+              setBusy(false);
             }
           }}
         >

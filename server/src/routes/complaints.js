@@ -1502,7 +1502,16 @@ router.get(
     res.setHeader('Content-Type', view || a.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', attachmentDisposition(a.filename, 'attachment', { inline: Boolean(view) }));
-    a.stream().pipe(res);
+    // A file gone from storage: a stream 'error' with no listener would take
+    // the whole server down, so it is answered (404) instead.
+    const stream = a.stream();
+    stream.on('error', (err) => {
+      console.error(`[attachments] ${a.id} couldn’t be read:`, err.message);
+      if (res.headersSent) return res.destroy();
+      res.removeHeader('Content-Disposition');
+      res.status(404).json({ error: 'That document couldn’t be read from storage.' });
+    });
+    stream.pipe(res);
   }),
 );
 
@@ -1924,11 +1933,17 @@ router.delete(
     if (!z.string().uuid().safeParse(req.params.emailId).success) {
       throw new HttpError(400, 'Invalid email id');
     }
-    const { rowCount } = await query(
-      'DELETE FROM complaint_emails WHERE id = $1 AND complaint_id IS NULL',
+    const { rows } = await query(
+      'DELETE FROM complaint_emails WHERE id = $1 AND complaint_id IS NULL RETURNING message_id, source_mailbox',
       [req.params.emailId],
     );
-    if (!rowCount) throw new HttpError(404, 'That email is not waiting to be filed');
+    if (!rows[0]) throw new HttpError(404, 'That email is not waiting to be filed');
+    // Remembered, so the next check (which looks back an hour over the
+    // last) doesn't store it again and put it back under Emails to file.
+    if (rows[0].message_id) {
+      await query('INSERT INTO complaint_email_discards (message_id, mailbox) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [rows[0].message_id, rows[0].source_mailbox]);
+    }
     res.status(204).end();
   }),
 );
@@ -2168,6 +2183,10 @@ router.post(
     let note;
     if (d.answer === 'use_date') {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(doubt.date || '') || doubt.date > todayISO()) throw new HttpError(400, 'The date from the emails isn’t usable; correct it with Edit details.');
+      // Held to the same rule as Edit details: a later date can't put a step
+      // already recorded (their acknowledgement, say) before the complaint.
+      const bad = stepDatesProblem({ ...c, raised_on: doubt.date, stage_started_on: c.stage === 'stage_1' ? doubt.date : c.stage_started_on });
+      if (bad) throw new HttpError(400, `${bad} Correct the dates with Edit details instead.`);
       // Claimed on the value the page saw, so two presses can't apply it twice.
       const r = await query(
         `UPDATE complaints
@@ -2481,6 +2500,10 @@ async function escalateTrack(complaintId, partyId, date, by, { to = null } = {})
 
     const escalatedOn = date || todayISO();
     if (escalatedOn > todayISO()) throw new HttpError(400, 'That date is in the future');
+    // As the other step buttons: never before the complaint was made to them.
+    if (complaint.raised_on && escalatedOn < complaint.raised_on) {
+      throw new HttpError(400, `${readable(escalatedOn)} is before the complaint was made (${readable(complaint.raised_on)}).`);
+    }
     const { rule } = await ruleForComplaint(complaint);
 
     // Assignments read the row as it was, so a Stage 2 response recorded as

@@ -387,7 +387,16 @@ router.get(
     res.setHeader('Content-Type', doc.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', attachmentDisposition(doc.filename, 'procedure'));
-    doc.stream().pipe(res);
+    // A file gone from storage: a stream 'error' with no listener would take
+    // the whole server down, so it is answered (404) instead.
+    const stream = doc.stream();
+    stream.on('error', (err) => {
+      console.error(`[organisation documents] ${doc.id} couldn’t be read:`, err.message);
+      if (res.headersSent) return res.destroy();
+      res.removeHeader('Content-Disposition');
+      res.status(404).json({ error: 'That document couldn’t be read from storage.' });
+    });
+    stream.pipe(res);
   }),
 );
 

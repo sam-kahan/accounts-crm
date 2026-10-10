@@ -2,6 +2,7 @@ import { pool, query } from '../db/pool.js';
 import { getCompanyProfile } from './companiesHouse.js';
 import { config } from '../config.js';
 import { todayISO } from '../lib/dates.js';
+import { ukDate } from './complaintRules.js';
 
 // ---------------------------------------------------------------------------
 // Keeping a company's statutory dates in step with Companies House.
@@ -51,7 +52,7 @@ export async function applyProfile(client, id, company) {
   if (before && company.name && before.name.trim().toLowerCase() !== company.name.trim().toLowerCase()) {
     await client.query(
       `UPDATE companies SET notes = concat_ws(E'\n', NULLIF(notes, ''), $2::text) WHERE id = $1`,
-      [id, `Name updated from Companies House on ${todayISO()}: "${before.name}" is now "${company.name}". If this isn't the same company, check the company number.`],
+      [id, `Name updated from Companies House on ${ukDate(todayISO())}: "${before.name}" is now "${company.name}". If this isn't the same company, check the company number.`],
     );
   }
   await client.query(
@@ -96,7 +97,7 @@ export async function syncCompany(id, companyNumber) {
         WHERE company_id = $1 AND source = 'companies_house' AND status = 'pending'
           AND NOT (category = ANY($2::text[]))`,
       [id, keyDates.map((k) => k.category),
-        `Closed by the Companies House sync on ${todayISO()}: Companies House no longer gives this date.`],
+        `Closed by the Companies House sync on ${ukDate(todayISO())}: Companies House no longer gives this date.`],
     );
     await client.query('COMMIT');
   } catch (err) {

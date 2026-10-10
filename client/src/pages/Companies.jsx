@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, formatDate, dueClass } from '../api';
 import Modal from '../components/Modal.jsx';
+import { useAuth } from '../auth.jsx';
 
 const STATUS_BADGE = {
   active: 'ok',
@@ -202,6 +203,7 @@ export default function Companies() {
   const [showAdd, setShowAdd] = useState(false);
   const [err, setErr] = useState(null);
   const navigate = useNavigate();
+  const mayEdit = useAuth().canEdit('companies');
   const reqSeq = useRef(0);
 
   // Single debounced loader (also fires on mount with search=''). A sequence
@@ -233,9 +235,11 @@ export default function Companies() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <button className="btn-primary" onClick={() => setShowAdd(true)}>
-          + Add company
-        </button>
+        {mayEdit && (
+          <button className="btn-primary" onClick={() => setShowAdd(true)}>
+            + Add company
+          </button>
+        )}
       </div>
 
       {err && (

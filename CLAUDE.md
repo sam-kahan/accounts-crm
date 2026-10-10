@@ -770,6 +770,28 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-10 — review of every section: fixes found by testing the workflows
+- **No crash on a missing file**: a document gone from storage (complaint,
+  organisation or contractor invoice download) answered with an unhandled
+  stream error that stopped the server; it is now a 404. A failed past search
+  can no longer stop the server or leave searching blocked until a restart.
+- **Commission**: the month-end table counts lines carried in from an
+  invoiced month (it read "0 invoices, £0.00 collected" beside £10.00 to
+  raise); Amend can clear an invoice number, property, works or notes (a
+  cleared box was ignored); a VAT or net bigger than the total is refused
+  (`amountsDisagree`) instead of saved as amounts that don't add up; the batch
+  screen re-checks a row's "already logged" once it is corrected.
+- **Complaints**: escalating, and "Use <date>" on a date question, refuse a
+  date before the complaint was made; an email removed from Emails to file
+  stays removed (`complaint_email_discards` for inbox mail); the status check's
+  AI output is clamped (a string "false" read as ready for the ombudsman).
+- **Server**: a foreign-key error is a 400/409, not a 500; `?days=` is clamped;
+  login takes the same time whether or not the address has an account.
+- **Screens**: windows no longer move focus to ✕ after every keystroke (the
+  Send window); Dismiss, task ticks, Waive/Delete and the email set-up buttons
+  wait; a deactivated login says so; edit buttons hidden for view-only access;
+  raw values ("stage_2", ISO dates) shown as words and UK dates.
+
 ### 2026-10-08 — raise every month-end invoice in one go
 - **Raise all N invoices** on the month's "by contractor" table
   (`pages/CommissionInvoices.jsx#raiseAll`): one confirm with the count, the

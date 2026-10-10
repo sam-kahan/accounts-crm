@@ -10,9 +10,19 @@ import { api, formatDate, londonDay } from '../api';
 export default function BouncedEmails({ refreshKey }) {
   const [list, setList] = useState(null);
   const [err, setErr] = useState(null);
-  const load = () => api.complaints.bounces().then(setList).catch((e) => setErr(e.message));
+  const load = () => {
+    setErr(null);
+    return api.complaints.bounces().then(setList).catch((e) => setErr(e.message));
+  };
   useEffect(() => { load(); }, [refreshKey]);
-  if (err) return <div className="inline-note warn" style={{ marginBottom: 20 }}>Couldn’t load bounced emails: {err}</div>;
+  if (err) {
+    return (
+      <div className="inline-note warn" style={{ marginBottom: 20 }}>
+        Couldn’t load bounced emails: {err}{' '}
+        <button type="button" className="btn btn-sm" onClick={load}>Retry</button>
+      </div>
+    );
+  }
   if (!list?.length) return null;
   return (
     <div className="card" style={{ marginBottom: 20, borderTop: '3px solid var(--red, #c0392b)' }}>

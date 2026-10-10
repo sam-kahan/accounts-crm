@@ -62,12 +62,20 @@ export async function startScan({ mailboxes, months, by }) {
   if (!config.anthropic.enabled) throw Object.assign(new Error('The AI isn’t set up on the server.'), { status: 503 });
   if (running) throw Object.assign(new Error('A search is already running.'), { status: 409 });
   running = true;
-  await setSetting('past_scan', {
-    status: 'running', mailboxes, months, by, started_at: new Date().toISOString(),
-    stage: 'Searching the mailboxes', threads: 0, read: 0, found: 0, skipped: 0, errors: [],
-  });
+  try {
+    await setSetting('past_scan', {
+      status: 'running', mailboxes, months, by, started_at: new Date().toISOString(),
+      stage: 'Searching the mailboxes', threads: 0, read: 0, found: 0, skipped: 0, errors: [],
+    });
+  } catch (err) {
+    running = false; // never left "running" by a search that didn't start
+    throw err;
+  }
+  // Never an unhandled rejection (which stops the server): a failure to
+  // record the failure is only logged.
   runScan({ mailboxes, months })
-    .catch(async (err) => progress({ status: 'failed', error: err.message }))
+    .catch((err) => progress({ status: 'failed', error: err.message })
+      .catch((e) => console.error('[complaints] past search failed:', err.message, '; not recorded:', e.message)))
     .finally(() => { running = false; });
 }
 
@@ -786,9 +794,10 @@ export async function resumeInterruptedScan() {
     return false;
   }
   running = true;
-  await progress({ stage: 'Carrying on after a restart' });
+  await progress({ stage: 'Carrying on after a restart' }).catch(() => {}); // a label only: never leaves it "running"
   runScan({ mailboxes: (s.mailboxes || []).filter(mailboxAllowed), months: s.months || 12, carry: { read: s.read || 0, found: s.found || 0 } })
-    .catch(async (err) => progress({ status: 'failed', error: err.message }))
+    .catch((err) => progress({ status: 'failed', error: err.message })
+      .catch((e) => console.error('[complaints] past search failed:', err.message, '; not recorded:', e.message)))
     .finally(() => { running = false; });
   return true;
 }

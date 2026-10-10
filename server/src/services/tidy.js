@@ -562,7 +562,7 @@ export async function mergeOrganisations(keepId, mergeId, by) {
     if (!keep.researched_at && gone.researched_at) fill.researched_at = gone.researched_at;
     const RANK = { none: 0, failed: 0, manual: 1, researched: 2, document: 3 };
     if ((RANK[gone.research_status] || 0) > (RANK[keep.research_status] || 0)) fill.research_status = gone.research_status;
-    const note = `${keep.notes ? `${keep.notes}\n` : ''}Merged in "${gone.name}" on ${todayISO()} by ${by || 'someone'}.`;
+    const note = `${keep.notes ? `${keep.notes}\n` : ''}Merged in "${gone.name}" on ${ukDate(todayISO())} by ${by || 'someone'}.`;
     const cols = Object.keys(fill);
     await client.query(
       `UPDATE organisations SET notes = $2${cols.map((c, i) => `, ${c} = $${i + 3}`).join('')} WHERE id = $1`,

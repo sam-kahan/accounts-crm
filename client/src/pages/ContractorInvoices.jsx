@@ -11,7 +11,7 @@ import {
   REGIONS,
   REGION_LABEL,
 } from '../api';
-import { previewCommission, describePart, ceilingFor } from '../commission';
+import { previewCommission, describePart, ceilingFor, onGross } from '../commission';
 import Modal from '../components/Modal.jsx';
 import BulkLogModal from '../components/BulkLogModal.jsx';
 import { useWindowFileDrop, FileDropPrompt } from '../components/FileDrop.jsx';
@@ -51,7 +51,7 @@ function defaultDateFor(month) {
 function CommissionPartFields({ value, note, onChange, onNote, contractor, amounts }) {
   const [on, setOn] = useState(value !== '' && value !== null && value !== undefined);
   const ceiling = ceilingFor(contractor, amounts);
-  const measure = contractor?.commission_on === 'gross' ? 'invoice total' : 'net';
+  const measure = onGross(contractor) ? 'invoice total' : 'net';
 
   return (
     <div style={{ margin: '-4px 0 14px' }}>
@@ -421,7 +421,16 @@ function LogInvoiceModal({
       onContractorAdded(created);
       set('contractor_id', created.id);
       setSuggestion(null);
-      setMatch({ name: created.name, confident: true, name_on_invoice: suggestion.name });
+      // In the shape the note below reads: without `selected_by` and
+      // `chosen` it said "No contractor on file matches" about the one just
+      // set up.
+      setMatch({
+        name_on_invoice: suggestion.name,
+        selected_by: 'matched',
+        mismatch: false,
+        candidate: created.name,
+        chosen: created.name,
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1216,6 +1225,8 @@ export default function ContractorInvoices() {
   // Earlier months whose commission was never raised.
   const [outstanding, setOutstanding] = useState(null);
   const [err, setErr] = useState(null);
+  // The row whose Waive / Delete is running: its buttons wait.
+  const [rowBusy, setRowBusy] = useState(null);
 
   const contractorId = params.get('contractor_id') || '';
   const status = params.get('status') || '';
@@ -1291,21 +1302,28 @@ export default function ContractorInvoices() {
       ? null
       : prompt('Why is this commission not being reclaimed?', 'Not chargeable');
     if (!row.waived && reason === null) return;
+    setRowBusy(row.id);
     try {
       await api.contractorInvoices.waive(row.id, !row.waived, reason);
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setRowBusy(null);
     }
   }
 
   async function remove(row) {
-    if (!confirm(`Delete the logged invoice ${row.invoice_number || ''}?`)) return;
+    const which = [row.ref, row.invoice_number && `(their no. ${row.invoice_number})`].filter(Boolean).join(' ');
+    if (!confirm(`Delete the logged invoice ${which || 'from ' + row.contractor_name}?`)) return;
+    setRowBusy(row.id);
     try {
       await api.contractorInvoices.remove(row.id);
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setRowBusy(null);
     }
   }
 
@@ -1560,13 +1578,13 @@ export default function ContractorInvoices() {
                       </span>
                     ) : (
                       <>
-                        <button className="btn-ghost btn-sm" onClick={() => setEditing(r)}>
+                        <button className="btn-ghost btn-sm" disabled={rowBusy === r.id} onClick={() => setEditing(r)}>
                           Amend
                         </button>
-                        <button className="btn-ghost btn-sm" onClick={() => waive(r)}>
+                        <button className="btn-ghost btn-sm" disabled={rowBusy === r.id} onClick={() => waive(r)}>
                           {r.waived ? 'Un-waive' : 'Waive'}
                         </button>
-                        <button className="btn-danger btn-sm" onClick={() => remove(r)}>Delete</button>
+                        <button className="btn-danger btn-sm" disabled={rowBusy === r.id} onClick={() => remove(r)}>Delete</button>
                       </>
                     )}
                   </td>

@@ -14,6 +14,9 @@ import { useWindowFileDrop, FileDropPrompt } from './FileDrop.jsx';
 // queues at the other end and makes the first result slower.
 const READERS = 3;
 
+// The fields "is this invoice already on file?" was asked about.
+const DUPLICATE_KEYS = ['contractor_id', 'invoice_number', 'invoice_date', 'net_amount', 'vat_amount', 'total_amount'];
+
 let counter = 0;
 const nextId = () => {
   counter += 1;
@@ -572,7 +575,16 @@ export default function BulkLogModal({ files, contractors, aiEnabled, month, onC
           key={row.id}
           row={row}
           contractors={contractors}
-          onChange={(fields) => patch(row.id, { fields })}
+          onChange={(fields) =>
+            // What the read found on file was found for the contractor, number,
+            // date and money it read. Once any of those is corrected it no
+            // longer applies: kept, an "Already logged" would block the row for
+            // good after its number was fixed. Log checks again before saving.
+            patch(row.id, {
+              fields,
+              ...(DUPLICATE_KEYS.some((k) => fields[k] !== row.fields[k]) ? { duplicates: null } : {}),
+            })
+          }
           onRemove={() => setRows((list) => list.filter((r) => r.id !== row.id))}
           onRetry={() => patch(row.id, { state: 'queued', note: null, readFailed: false })}
         />

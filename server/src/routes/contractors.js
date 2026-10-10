@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { COMMISSION_TYPES, COMMISSION_ON, COMMISSION_BASES, describeDeal } from '../services/commission.js';
 import { REGION_KEYS } from '../services/regions.js';
 import { emailListProblem, parseEmailList } from '../lib/emailList.js';
+import { plural } from '../lib/words.js';
 
 const router = Router();
 // Every :id route on this router is a UUID primary key — reject anything else
@@ -241,7 +242,7 @@ router.delete(
     if (used[0].n > 0) {
       throw new HttpError(
         409,
-        `This contractor has ${used[0].n} logged invoice(s). Mark them inactive instead of deleting.`,
+        `This contractor has ${plural(used[0].n, 'logged invoice')}, so it is kept: mark it inactive instead.`,
       );
     }
     const { rowCount } = await query('DELETE FROM contractors WHERE id = $1', [req.params.id]);

@@ -97,7 +97,7 @@ router.get(
           kind: 'Contractor invoice', id: r.id,
           url: `/commission/invoices?month=${r.invoice_date.slice(0, 7)}&search=${encodeURIComponent(r.ref)}`,
           title: `${r.ref}${r.invoice_number ? ` (their ${r.invoice_number})` : ''}`,
-          detail: [r.contractor, r.property, r.invoice_date].filter(Boolean).join(' · '),
+          detail: [r.contractor, r.property, readable(r.invoice_date)].filter(Boolean).join(' · '),
         });
       }
       const raised = (await query(

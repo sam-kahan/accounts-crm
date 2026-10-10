@@ -41,14 +41,14 @@ const permissionsInput = z.record(z.enum(SECTION_KEYS), z.enum(LEVELS)).optional
 
 const createInput = z.object({
   email: z.string().email().max(320),
-  name: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
   job_title: z.string().max(200).optional().nullable(),
   role: z.enum(ROLES).optional(),
   permissions: permissionsInput,
 });
 
 const updateInput = z.object({
-  name: z.string().min(1).max(200).optional(),
+  name: z.string().trim().min(1).max(200).optional(),
   job_title: z.string().max(200).optional().nullable(),
   // Their email signature's details (lib/emailSignature.js); blank clears.
   post_nominals: z.string().max(60).optional().nullable(),

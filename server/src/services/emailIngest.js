@@ -104,7 +104,9 @@ export async function ingestEmails(emails, { mailbox = null } = {}) {
 export async function storeEmail(e, { complaintId = null, method, mailbox = null }) {
   // Found by watching (not deliberately forwarded): an email that was ruled
   // out, or was on a complaint since deleted, is not brought back.
-  if (e.messageId && ['watch', 'watch_new', 'account', 'thread'].includes(method)) {
+  // Also one that came to the general inbox and a person removed as not about
+  // a complaint: each check looks back an hour, and would bring it back.
+  if (e.messageId && ['watch', 'watch_new', 'account', 'thread', 'inbox'].includes(method)) {
     // Already read and found unrelated: not stored (or paid for) again.
     const gone = await query('SELECT 1 FROM complaint_email_discards WHERE message_id = $1', [e.messageId]);
     if (gone.rows.length) return null;

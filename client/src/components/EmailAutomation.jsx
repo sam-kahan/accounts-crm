@@ -31,6 +31,8 @@ export default function EmailAutomation({ onChanged }) {
   const [scanBoxes, setScanBoxes] = useState('');
   const [cands, setCands] = useState([]);
   const [busyId, setBusyId] = useState(null);
+  // Saving the watched mailboxes / starting a search: the button waits.
+  const [saving, setSaving] = useState(null);
 
   const load = () =>
     api.complaints.automation().then((r) => { setA(r); setErr(null); return r; }).catch((e) => setErr(e.message));
@@ -52,7 +54,14 @@ export default function EmailAutomation({ onChanged }) {
     return () => clearInterval(t);
   }, [running, importing]);
 
-  if (!a) return err ? <div className="inline-note warn" style={{ marginBottom: 16 }}>Email status: {err}</div> : null;
+  if (!a) {
+    return err ? (
+      <div className="inline-note warn" style={{ marginBottom: 16 }}>
+        Email status: {err}{' '}
+        <button type="button" className="btn btn-sm" onClick={() => { load(); loadCands(); }}>Retry</button>
+      </div>
+    ) : null;
+  }
 
   const lc = a.last_check;
   const stale = lc && Date.now() - new Date(lc.at).getTime() > 20 * 60000;
@@ -75,6 +84,9 @@ export default function EmailAutomation({ onChanged }) {
   }
 
   async function saveWatched() {
+    if (saving) return;
+    setSaving('watched');
+    setErr(null);
     try {
       const list = mailboxes.split(/[,\s;]+/).map((m) => m.trim()).filter(Boolean);
       await api.complaints.setWatched(list);
@@ -82,9 +94,14 @@ export default function EmailAutomation({ onChanged }) {
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setSaving(null);
     }
   }
   async function startScan() {
+    if (saving) return;
+    setSaving('scan');
+    setErr(null);
     try {
       const list = scanBoxes.split(/[,\s;]+/).map((m) => m.trim()).filter(Boolean);
       await api.complaints.startPastScan(list, 12);
@@ -92,6 +109,8 @@ export default function EmailAutomation({ onChanged }) {
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setSaving(null);
     }
   }
   // Import and Link answer at once (the server claims the complaint, so a
@@ -168,7 +187,7 @@ export default function EmailAutomation({ onChanged }) {
               <div className="btn-row" style={{ marginTop: 8 }}>
                 <input value={mailboxes} onChange={(e) => setMailboxes(e.target.value)} style={{ maxWidth: 420 }}
                   placeholder="accounts@greenco.co.uk" />
-                <button className="btn-primary btn-sm" onClick={saveWatched}>Save</button>
+                <button className="btn-primary btn-sm" onClick={saveWatched} disabled={Boolean(saving)}>{saving === 'watched' ? 'Saving…' : 'Save'}</button>
                 <button className="btn-ghost btn-sm" onClick={() => setEditing(false)}>Cancel</button>
               </div>
             )}
@@ -195,7 +214,7 @@ export default function EmailAutomation({ onChanged }) {
                 <div className="btn-row">
                   <input value={scanBoxes} onChange={(e) => setScanBoxes(e.target.value)} style={{ maxWidth: 380 }}
                     placeholder="accounts@greenco.co.uk, your.name@greenco.co.uk" />
-                  <button className="btn-primary btn-sm" onClick={startScan} disabled={!a.mailbox_connected || !a.ai}>Start</button>
+                  <button className="btn-primary btn-sm" onClick={startScan} disabled={Boolean(saving) || !a.mailbox_connected || !a.ai}>{saving === 'scan' ? 'Starting…' : 'Start'}</button>
                   <button className="btn-ghost btn-sm" onClick={() => setScanOpen(false)}>Cancel</button>
                 </div>
               </div>

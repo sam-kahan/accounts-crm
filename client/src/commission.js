@@ -58,7 +58,7 @@ function reconcile({ net, vat, total }) {
 
 // A markup is added to the contractor's own price, which never includes VAT,
 // so it is always taken on the net (dealFor() on the server says the same).
-const onGross = (c) => c?.commission_on === 'gross' && (c?.commission_basis || 'markup') !== 'markup';
+export const onGross = (c) => c?.commission_on === 'gross' && (c?.commission_basis || 'markup') !== 'markup';
 
 export function previewCommission(contractor, { net, vat, total, commissionable }) {
   if (!contractor) return 0;

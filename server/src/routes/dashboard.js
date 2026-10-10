@@ -249,7 +249,8 @@ router.get(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const days = Number(req.query.days) || 30;
+    // A whole number of days, within a year (a huge one overflowed the interval: a 500).
+    const days = Math.min(Math.max(Math.trunc(Number(req.query.days)) || 30, 1), 366);
     // The dashboard summarises other sections, so it shows only the ones this
     // user may see — otherwise it would leak the very figures their access was
     // meant to withhold.
@@ -448,7 +449,7 @@ router.post(
     if (reminderRun?.status === 'running') {
       return res.status(409).json({ error: 'The reminders are already being sent. They take a minute or two.', run: reminderRun });
     }
-    const days = Number(req.body?.days) || 14;
+    const days = Math.min(Math.max(Math.trunc(Number(req.body?.days)) || 14, 1), 366);
     // A person pressing the button gets the email themselves; the morning
     // run (the cron key) goes to the reminder list.
     const to = req.user?.email ? [req.user.email] : undefined;

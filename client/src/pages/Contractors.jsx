@@ -305,6 +305,7 @@ export default function Contractors() {
   const [search, setSearch] = useState('');
   const [err, setErr] = useState(null);
   const [saveNote, setSaveNote] = useState(null);
+  const [removing, setRemoving] = useState(null); // the one being deleted
 
   const load = () => {
     setErr(null);
@@ -321,11 +322,14 @@ export default function Contractors() {
 
   async function remove(c) {
     if (!confirm(`Delete ${c.name}?`)) return;
+    setRemoving(c.id);
     try {
       await api.contractors.remove(c.id);
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setRemoving(null);
     }
   }
 
@@ -449,7 +453,9 @@ export default function Contractors() {
                       Invoices
                     </Link>
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(c)}>Edit</button>
-                    <button className="btn-danger btn-sm" onClick={() => remove(c)}>Delete</button>
+                    <button className="btn-danger btn-sm" disabled={removing === c.id} onClick={() => remove(c)}>
+                      {removing === c.id ? 'Deleting…' : 'Delete'}
+                    </button>
                   </td>
                 </tr>
               ))}

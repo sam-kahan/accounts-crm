@@ -496,8 +496,10 @@ function OverdueDraftsModal({ onClose }) {
       {error && <div className="login-error">{error}</div>}
       {!data && !error && <div className="spinner">Drafting chasers…</div>}
       {data && data.count === 0 && <div className="empty">No overdue complaints, so nothing to chase. 🎉</div>}
-      {data?.drafts?.map((d) => (
-        <div className="card" key={d.id} style={{ marginBottom: 12 }}>
+      {/* Keyed by position: a complaint with two organisations overdue has
+          a chaser for each, under the same complaint id. */}
+      {data?.drafts?.map((d, i) => (
+        <div className="card" key={`${d.id}:${i}`} style={{ marginBottom: 12 }}>
           <div className="card-head">
             <div>
               <strong>{d.subject}</strong>
@@ -506,8 +508,8 @@ function OverdueDraftsModal({ onClose }) {
             <button className="btn btn-sm" onClick={() => navigate(`/complaints/${d.id}`)}>Open</button>
           </div>
           <div className="card-body">
-            {d.error ? (
-              <div className="inline-note warn">Couldn’t draft: {d.error}</div>
+            {d.error || !d.draft?.email ? (
+              <div className="inline-note warn">Couldn’t draft: {d.error || 'no email came back. Open the complaint and use its Next step instead.'}</div>
             ) : (
               <>
                 <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{d.draft.email?.subject}</div>
@@ -522,14 +524,14 @@ function OverdueDraftsModal({ onClose }) {
                         await navigator.clipboard?.writeText(
                           `Subject: ${d.draft.email?.subject}\n\n${signEmail(d.draft.email?.body, me)}`,
                         );
-                        setCopiedId(d.id);
-                        setTimeout(() => setCopiedId((c) => (c === d.id ? null : c)), 1500);
+                        setCopiedId(i);
+                        setTimeout(() => setCopiedId((c) => (c === i ? null : c)), 1500);
                       } catch {
                         /* clipboard unavailable */
                       }
                     }}
                   >
-                    {copiedId === d.id ? 'Copied ✓' : 'Copy'}
+                    {copiedId === i ? 'Copied ✓' : 'Copy'}
                   </button>
                 </div>
               </>
@@ -778,7 +780,8 @@ export default function Complaints() {
                 </div>
                 {em.analysis?.summary && <div style={{ fontSize: 13, marginTop: 4 }}>{em.analysis.summary}</div>}
                 <div className="btn-row" style={{ marginTop: 8 }}>
-                  <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}>
+                  <select defaultValue={em.analysis?.complaint_id || ''} id={`file-${em.id}`} style={{ maxWidth: 420 }}
+                    aria-label={`The complaint “${em.subject || 'this email'}” is about`}>
                     <option value="">Choose the complaint…</option>
                     {fileChoices.map(({ c, label }) => (
                       <option key={`${c.id}:${label}`} value={c.id}>{label}</option>

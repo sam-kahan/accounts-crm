@@ -288,7 +288,10 @@ export default function Users() {
       setMsg(
         res.invite?.sent
           ? `Invitation sent again to ${u.email}.`
-          : `Email isn’t configured (${res.invite?.reason}). Send them this link yourself: ${res.invite?.link}`,
+          : res.invite?.link
+            ? `Email isn’t configured (${res.invite?.reason}). Send them this link yourself: ${res.invite.link}`
+            // The link is only shown for an account made by invitation.
+            : `The invitation couldn’t be emailed (${res.invite?.reason}). They can use “Forgot password” on the sign-in page instead.`,
       );
     } catch (e) {
       setMsg(e.message);

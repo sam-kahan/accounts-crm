@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, dueClass } from '../api';
 import Modal from '../components/Modal.jsx';
+import { useAuth } from '../auth.jsx';
 
 function AddTaskModal({ companies, onClose, onSaved }) {
   const [form, setForm] = useState({
@@ -98,6 +99,7 @@ function AddTaskModal({ companies, onClose, onSaved }) {
 }
 
 export default function Tasks() {
+  const mayEdit = useAuth().canEdit('tasks');
   const [tasks, setTasks] = useState(null);
   const [companies, setCompanies] = useState([]);
   const [filter, setFilter] = useState('open'); // open | all | done
@@ -121,22 +123,32 @@ export default function Tasks() {
     api.companies.list().then(setCompanies).catch(() => setCompanies([]));
   }, []);
 
+  // The task being ticked or deleted: its controls wait, so a double-click
+  // can't tick it done and straight back again.
+  const [working, setWorking] = useState(null);
   async function toggle(t) {
+    if (working) return;
     const next = t.status === 'done' ? 'todo' : 'done';
+    setWorking(t.id);
     try {
       await api.tasks.update(t.id, { status: next });
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setWorking(null);
     }
   }
   async function remove(t) {
-    if (!confirm('Delete this task?')) return;
+    if (working || !confirm('Delete this task?')) return;
+    setWorking(t.id);
     try {
       await api.tasks.remove(t.id);
       await load();
     } catch (e) {
       setErr(e.message);
+    } finally {
+      setWorking(null);
     }
   }
 
@@ -155,7 +167,7 @@ export default function Tasks() {
             </button>
           ))}
         </div>
-        <button className="btn-primary" onClick={() => setShowAdd(true)}>+ New task</button>
+        {mayEdit && <button className="btn-primary" onClick={() => setShowAdd(true)}>+ New task</button>}
       </div>
 
       {err && (
@@ -194,6 +206,7 @@ export default function Tasks() {
                       style={{ width: 18, height: 18 }}
                       aria-label={`Mark "${t.title}" ${t.status === 'done' ? 'not done' : 'done'}`}
                       checked={t.status === 'done'}
+                      disabled={!mayEdit || working === t.id}
                       onChange={() => toggle(t)}
                     />
                   </td>
@@ -210,7 +223,7 @@ export default function Tasks() {
                   </td>
                   <td><span className={`badge ${t.priority}`}>{t.priority}</span></td>
                   <td style={{ textAlign: 'right' }}>
-                    <button className="btn-danger btn-sm" onClick={() => remove(t)}>Delete</button>
+                    {mayEdit && <button className="btn-danger btn-sm" disabled={working === t.id} onClick={() => remove(t)}>Delete</button>}
                   </td>
                 </tr>
               ))}

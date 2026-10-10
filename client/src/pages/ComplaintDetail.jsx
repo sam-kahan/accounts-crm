@@ -253,6 +253,15 @@ function replyTarget(c, t = null) {
   return theirs.sort((a, b) => new Date(b.received_at) - new Date(a.received_at))[0] || null;
 }
 
+// A value the re-check changed, as people read it: a UK date, a stage's name
+// ("Stage 2", never "stage_2"), "blank" for nothing.
+function recheckValue(v) {
+  if (v === null || v === undefined || v === '') return 'blank';
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return formatDate(v);
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  return STAGE_LABEL[v] || String(v);
+}
+
 // Is this organisation's part still running? (complaintRules.js#trackOpen)
 const trackOpen = (t) => t.state === 'open' && !['resolved', 'closed'].includes(t.stage);
 
@@ -1439,6 +1448,13 @@ export default function ComplaintDetail() {
       <div style={{ marginBottom: 16 }}>
         <Link to="/complaints" className="btn-ghost btn-sm">← Complaints</Link>
       </div>
+      {/* A reload after an action failed: what is shown may be out of date. */}
+      {loadError && (
+        <div className="inline-note warn" style={{ marginBottom: 16 }} role="alert">
+          Couldn’t refresh this complaint ({loadError}), so what is shown may be out of date.{' '}
+          <button type="button" className="btn btn-sm" onClick={load}>Retry</button>
+        </div>
+      )}
       {msg && (
         <div className="page-message" role="alert">
           <div>{msg}</div>
@@ -1966,7 +1982,7 @@ export default function ComplaintDetail() {
           <strong>Re-checked against its emails</strong> on{' '}
           {new Date(c.last_recheck.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}:{' '}
           {Object.entries(c.last_recheck.after).filter(([k]) => k !== 'response_due_manual')
-            .map(([k, v]) => `${k.replace(/_/g, ' ')} ${c.last_recheck.before?.[k] ?? 'blank'} → ${v ?? 'blank'}`).join('; ')}.
+            .map(([k, v]) => `${k.replace(/_/g, ' ')} ${recheckValue(c.last_recheck.before?.[k])} → ${recheckValue(v)}`).join('; ')}.
           {' '}The details are on the timeline.{' '}
           <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={async () => {
             if (!confirm('Undo what the re-check changed? The values it replaced are put back.')) return;
@@ -2247,7 +2263,7 @@ export default function ComplaintDetail() {
               multiple
               style={{ display: 'none' }}
               disabled={uploading}
-              onChange={(e) => uploadFiles(e.target.files)}
+              onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }}
             />
           </label>
         </div>
@@ -2612,7 +2628,10 @@ export default function ComplaintDetail() {
               </div>
               <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                 Final response: {statusResult.final_response ? 'yes' : 'no'} · Deadlock:{' '}
-                {statusResult.deadlock ? 'yes' : 'no'} · Suggested next: {statusResult.suggested_next_stage}
+                {statusResult.deadlock ? 'yes' : 'no'} · Suggested next:{' '}
+                {statusResult.suggested_next_stage && statusResult.suggested_next_stage !== 'none'
+                  ? STAGE_LABEL[statusResult.suggested_next_stage] || statusResult.suggested_next_stage
+                  : 'nothing yet'}
               </div>
             </div>
           )}

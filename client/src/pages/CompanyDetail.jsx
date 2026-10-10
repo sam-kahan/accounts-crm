@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, formatDate, dueClass, daysUntil } from '../api';
 import Modal from '../components/Modal.jsx';
+import { useAuth } from '../auth.jsx';
 
 const CATEGORY_LABEL = {
   year_end: 'Year end',
@@ -108,6 +109,9 @@ export default function CompanyDetail() {
     ? company.confirmation_statement_next_due : k.due_date);
   const { id } = useParams();
   const navigate = useNavigate();
+  // The buttons that change anything only for someone who may (the server
+  // refuses them to a view-only person).
+  const mayEdit = useAuth().canEdit('companies');
   const [company, setCompany] = useState(null);
   const [showAddDate, setShowAddDate] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -214,12 +218,12 @@ export default function CompanyDetail() {
             </div>
           </div>
           <div className="btn-row">
-            {company.company_number && (
+            {mayEdit && company.company_number && (
               <button className="btn-navy btn-sm" onClick={sync} disabled={syncing}>
                 {syncing ? 'Syncing…' : '⟳ Sync Companies House'}
               </button>
             )}
-            <button className="btn-danger btn-sm" onClick={removeCompany}>Delete</button>
+            {mayEdit && <button className="btn-danger btn-sm" onClick={removeCompany}>Delete</button>}
           </div>
         </div>
         <div className="card-body">
@@ -256,7 +260,7 @@ export default function CompanyDetail() {
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-head">
           <h2>Key dates {pendingDates.length > 0 && <span className="badge navy">{pendingDates.length}</span>}</h2>
-          <button className="btn-primary btn-sm" onClick={() => setShowAddDate(true)}>+ Add key date</button>
+          {mayEdit && <button className="btn-primary btn-sm" onClick={() => setShowAddDate(true)}>+ Add key date</button>}
         </div>
         {pendingDates.length === 0 ? (
           <div className="empty">No pending key dates.</div>
@@ -286,10 +290,12 @@ export default function CompanyDetail() {
                     </span>
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button className="btn-ghost btn-sm" disabled={Boolean(completing)} onClick={() => completeDate(k)}>
-                      {completing === k.id ? '…' : k.recurrence === 'none' || k.source === 'companies_house' ? 'Done' : 'Done ↻'}
-                    </button>
-                    <button className="btn-danger btn-sm" onClick={() => removeDate(k.id)}>Delete</button>
+                    {mayEdit && (<>
+                      <button className="btn-ghost btn-sm" disabled={Boolean(completing)} onClick={() => completeDate(k)}>
+                        {completing === k.id ? '…' : k.recurrence === 'none' || k.source === 'companies_house' ? 'Done' : 'Done ↻'}
+                      </button>
+                      <button className="btn-danger btn-sm" onClick={() => removeDate(k.id)}>Delete</button>
+                    </>)}
                   </td>
                 </tr>
               ))}

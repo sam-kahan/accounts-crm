@@ -151,11 +151,17 @@ export default function CommissionInvoiceDetail() {
     try {
       const res = await api.commissionInvoices.refresh(inv.id);
       await load();
+      // "Nothing outstanding" only when it says so: a reply without the
+      // figure must not read as paid.
+      const owed = res.external?.outstanding;
+      const hasOwed = owed !== null && owed !== undefined && owed !== '' && Number.isFinite(Number(owed));
       setMsg(
-        `Greenco Invoicing says ${res.external.status} — ${
-          res.external.outstanding > 0
-            ? `${formatMoney(res.external.outstanding)} still outstanding.`
-            : 'nothing outstanding.'
+        `Greenco Invoicing says ${res.external?.status || 'nothing new'}${
+          !hasOwed
+            ? '.'
+            : Number(owed) > 0
+              ? ` — ${formatMoney(owed)} still outstanding.`
+              : ' — nothing outstanding.'
         }`,
       );
     } catch (e) {

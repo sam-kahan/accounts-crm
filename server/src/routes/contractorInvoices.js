@@ -106,6 +106,9 @@ function stripEmpty(body = {}) {
   return out;
 }
 
+// The text fields an amendment can clear (see PUT /:id).
+const AMEND_CLEARABLE = ['invoice_number', 'property', 'landlord_ref', 'description', 'notes'];
+
 const money = z.coerce.number().min(0).max(1000000);
 // Multipart sends booleans as the strings 'true'/'false', and Boolean('false')
 // is true — so coerce explicitly rather than with z.coerce.boolean().
@@ -424,9 +427,16 @@ async function summarise({ from, to }) {
   const { rows } = await query(
     `SELECT c.id AS contractor_id, c.name AS contractor_name, c.email AS contractor_email,
             i.region                                                AS region,
-            count(i.id) FILTER (WHERE ${inWindow})::int             AS invoice_count,
-            COALESCE(sum(i.total_amount) FILTER (WHERE ${inWindow}), 0)      AS invoiced_total,
-            COALESCE(sum(i.commission_amount) FILTER (WHERE ${inWindow}), 0) AS commission_total,
+            -- Every line on this month end: its own month's, plus any carried in
+            -- from an earlier month already invoiced (the join below admits only
+            -- those). Counted in the window alone, a contractor whose only line
+            -- was carried in read "0 invoices, £0.00 collected" beside an
+            -- invoice to raise of £10.00. A line dated here that moved on to
+            -- the next month end is counted there instead (moved_* below), so
+            -- no line is counted in two months.
+            count(i.id) FILTER (WHERE NOT (${inWindow} AND ${carried}))::int AS invoice_count,
+            COALESCE(sum(i.total_amount) FILTER (WHERE NOT (${inWindow} AND ${carried})), 0) AS invoiced_total,
+            COALESCE(sum(i.commission_amount) FILTER (WHERE NOT (${inWindow} AND ${carried})), 0) AS commission_total,
             count(i.id) FILTER (WHERE ${claimable})::int            AS pending_count,
             COALESCE(sum(i.commission_amount) FILTER (WHERE ${claimable}), 0) AS pending_commission,
             -- Received late for a month already invoiced, so billed here.
@@ -751,7 +761,16 @@ router.post(
 router.put(
   '/:id',
   asyncHandler(async (req, res) => {
-    const d = parse(input.omit({ contractor_id: true }).partial(), stripEmpty(req.body));
+    // A text box cleared on the amend form arrives as '', which stripEmpty
+    // reads as "not sent": a misread invoice number or a tenant's name in the
+    // property could then never be removed, and the save said it worked. In
+    // an amendment a cleared text field means "clear it".
+    const body = { ...(req.body || {}) };
+    for (const k of AMEND_CLEARABLE) {
+      if (typeof body[k] === 'string' && !body[k].trim()) body[k] = null;
+    }
+    const d = parse(input.omit({ contractor_id: true }).partial(), stripEmpty(body));
+    const keep = (k) => (d[k] === undefined ? current[k] : d[k] ?? null);
     const { rows: existing } = await query('SELECT * FROM contractor_invoices WHERE id = $1', [
       req.params.id,
     ]);
@@ -801,7 +820,7 @@ router.put(
     try {
       ({ rows } = await query(
         `UPDATE contractor_invoices SET
-           invoice_number = COALESCE($2, invoice_number),
+           invoice_number = $2,
            invoice_date   = COALESCE($3, invoice_date),
            property       = $4, landlord_ref = $5, description = $6,
            net_amount = $7, vat_amount = $8, total_amount = $9,
@@ -812,9 +831,9 @@ router.put(
            commissionable_amount = $21, commissionable_note = $22
          WHERE id = $1 AND commission_invoice_id IS NULL RETURNING id`,
         [
-          req.params.id, d.invoice_number ?? null, d.invoice_date ?? null,
-          d.property ?? current.property, d.landlord_ref ?? current.landlord_ref,
-          d.description ?? current.description,
+          req.params.id, keep('invoice_number'), d.invoice_date ?? null,
+          keep('property'), keep('landlord_ref'),
+          keep('description'),
           amounts.net_amount, amounts.vat_amount, amounts.total_amount,
           commission.commission_type, commission.commission_rate, commission.commission_on,
           commission.commission_basis, commission.commission_amount, commission.commission_override,
@@ -824,7 +843,7 @@ router.put(
           // treats null the same as omitted — so it would silently keep the
           // old paid_on instead of clearing it.
           d.paid_on === undefined ? current.paid_on : d.paid_on,
-          d.notes ?? current.notes,
+          keep('notes'),
           // Only ever moved deliberately. Re-reading the address on every edit
           // would let a tidied-up property line move an invoice between two
           // companies without anyone asking for it.
@@ -971,7 +990,16 @@ router.get(
     res.setHeader('Content-Type', doc.mimetype || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', attachmentDisposition(doc.filename, 'invoice'));
-    documentStream(doc.storage_path).pipe(res);
+    // A file gone from storage: a stream 'error' with no listener would take
+    // the whole server down, so it is answered (404) instead.
+    const stream = documentStream(doc.storage_path);
+    stream.on('error', (err) => {
+      console.error(`[contractor invoices] ${req.params.id} couldn’t be read:`, err.message);
+      if (res.headersSent) return res.destroy();
+      res.removeHeader('Content-Disposition');
+      res.status(404).json({ error: 'That document couldn’t be read from storage.' });
+    });
+    stream.pipe(res);
   }),
 );
 

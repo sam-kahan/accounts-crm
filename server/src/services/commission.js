@@ -139,6 +139,14 @@ export function amountsDisagree({ net_amount, vat_amount, total_amount }) {
   const net = toPence(net_amount);
   const vat = toPence(vat_amount);
   const total = toPence(total_amount);
+  // A total smaller than the VAT (or the net) can't be settled into amounts
+  // that add up: it would be saved as net £0 beside a VAT bigger than the total.
+  if (total !== null && vat !== null && net === null && vat > total) {
+    return `The VAT (${formatPence(vat)}) is more than the total of ${formatPence(total)}. Correct whichever is wrong.`;
+  }
+  if (total !== null && net !== null && vat === null && net > total) {
+    return `The net (${formatPence(net)}) is more than the total of ${formatPence(total)}. Correct whichever is wrong.`;
+  }
   if (net === null || vat === null || total === null) return null;
   if (net + vat === total) return null;
   return `The net (${formatPence(net)}) and VAT (${formatPence(vat)}) add up to ${formatPence(net + vat)}, ` +

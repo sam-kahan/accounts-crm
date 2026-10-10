@@ -360,7 +360,16 @@ export default function CommissionInvoices() {
                   </td>
                   <td className="num muted">{r.invoice_count}</td>
                   <td className="num muted">{formatMoney(r.invoiced_total)}</td>
-                  <td className="num">{formatMoney(r.commission_total)}</td>
+                  <td className="num">
+                    {formatMoney(r.commission_total)}
+                    {/* Carried-in lines count here as well as in the invoice
+                        to raise, so the two columns reconcile. */}
+                    {r.carried_count > 0 && (
+                      <div className="cell-note muted">
+                        incl. {plural(r.carried_count, 'invoice')} from an earlier month
+                      </div>
+                    )}
+                  </td>
                   <td className="num">
                     {/* The INVOICE total leads, because that is the thing this
                         button is about to create and the figure that appears in
@@ -521,7 +530,12 @@ export default function CommissionInvoices() {
       </div>
       <div className="card">
         {!invoices ? (
-          <div className="spinner">Loading…</div>
+          // A failed fetch says so (Retry is in the note at the top), never spins.
+          err ? (
+            <div className="empty">Couldn’t load the raised invoices.</div>
+          ) : (
+            <div className="spinner">Loading…</div>
+          )
         ) : invoices.length === 0 ? (
           <div className="empty">
             {allMonths

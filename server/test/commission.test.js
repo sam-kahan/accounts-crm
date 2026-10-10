@@ -29,6 +29,7 @@ import {
   resolveContractor,
   findDuplicates,
   exemptVat,
+  amountsDisagree,
 } from '../src/services/commission.js';
 import {
   buildInvoicePayload,
@@ -1322,4 +1323,11 @@ test('a line with commission on part of the invoice says so on the paperwork', a
   });
   assert.match(text, /invoice £500\.00, commission on £220\.00 of it \(labour only\)/);
   assert.match(html, /Commission on £220\.00 of it \(labour only\)/);
+});
+
+test('amountsDisagree refuses a VAT or net bigger than the total it is settled against', () => {
+  assert.match(amountsDisagree({ vat_amount: 20, total_amount: 10 }), /VAT \(£20\.00\) is more than the total of £10\.00/);
+  assert.match(amountsDisagree({ net_amount: 50, total_amount: 40 }), /net \(£50\.00\) is more than the total of £40\.00/);
+  assert.equal(amountsDisagree({ vat_amount: 2, total_amount: 12 }), null);
+  assert.equal(amountsDisagree({ net_amount: 10, total_amount: 12 }), null);
 });

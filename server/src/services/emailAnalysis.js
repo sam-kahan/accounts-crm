@@ -438,9 +438,10 @@ export async function analyseEmail({ email, complaint = null, candidates = null,
     lines.push('The account number is the surest sign: an email giving a different account number is not about that complaint, even if the organisation is the same.');
   }
   lines.push('');
+  // The sender's name and the subject are theirs too, so inside the markers.
+  lines.push('<untrusted_content>');
   lines.push(`The email as it arrived (outer headers): from ${email.sender_name || ''} <${email.sender_email || ''}>, ` +
     `received ${email.received_at ? new Date(email.received_at).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' }) : 'unknown'} (UK time), subject "${email.subject || ''}".`);
-  lines.push('<untrusted_content>');
   lines.push(String(email.body_text || email.body_preview || '').slice(0, 40000));
   lines.push('</untrusted_content>');
   if (attachments.length) lines.push(`Its attachments follow as documents: ${attachments.map((a) => a.filename).join(', ')}.`);

@@ -14,6 +14,9 @@ const router = Router();
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
+// A hash of nothing anybody knows, compared against when no account matches.
+const NO_ACCOUNT_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), 12);
+
 const loginInput = z.object({
   email: z.string().email(),
   password: z.string().min(1),
@@ -51,7 +54,9 @@ router.post(
       [email],
     );
     const user = rows[0];
-    const ok = user && (await bcrypt.compare(password, user.password_hash));
+    // A password is checked even when there is no such account, so the time
+    // taken doesn't say which addresses have one (as Forgot password keeps).
+    const ok = await bcrypt.compare(password, user?.password_hash || NO_ACCOUNT_HASH) && Boolean(user);
     if (!ok) throw new HttpError(401, 'Invalid email or password');
     if (user.active === false) {
       throw new HttpError(403, 'This account has been deactivated. Ask an administrator.');

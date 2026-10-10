@@ -37,6 +37,7 @@ router.get(
     const params = [];
     let where = '';
     if (req.query.company_id) {
+      if (!z.string().uuid().safeParse(req.query.company_id).success) throw new HttpError(400, 'Invalid company id');
       params.push(req.query.company_id);
       where = 'WHERE company_id = $1';
     }

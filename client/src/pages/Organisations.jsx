@@ -478,14 +478,18 @@ export default function Organisations() {
     setErr(null);
     return api.organisations
       .list()
-      .then((list) => {
-        setOrgs(list);
-        const want = params.get('open');
-        const hit = want && list.find((o) => o.id === want);
-        if (hit) { setEditing(hit); setParams({}, { replace: true }); }
-      })
+      .then(setOrgs)
       .catch((e) => setErr(e.message));
   };
+  // Whenever ?open= changes, not only on the first load: a result picked in
+  // the search box while already on this page changed the address and
+  // opened nothing.
+  const want = params.get('open');
+  useEffect(() => {
+    if (!want || !orgs) return;
+    const hit = orgs.find((o) => o.id === want);
+    if (hit) { setEditing(hit); setParams({}, { replace: true }); }
+  }, [want, orgs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     load();
     api.organisations

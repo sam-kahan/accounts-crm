@@ -9,14 +9,23 @@ export default function Modal({ title, onClose, children, footer, wide = false }
   const pressedBackdrop = useRef(false);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2, 9)}`).current;
 
+  // What had focus when the dialog opened (read on the first render, before
+  // a field inside it can take focus), so it gets it back on close.
+  const opener = useRef(typeof document !== 'undefined' ? document.activeElement : null);
+  // The latest onClose, read when Escape is pressed. The effect below runs
+  // once: callers pass a new arrow on every render, and re-running it on each
+  // one moved focus out of the field being typed in (to the ✕) after every
+  // keystroke in a window whose state lives in the page (the Send window).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    // Remember what had focus so we can restore it when the dialog closes.
-    const previouslyFocused = document.activeElement;
+    const previouslyFocused = opener.current;
 
     function onKeyDown(e) {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current?.();
         return;
       }
       if (e.key === 'Tab') {
@@ -38,17 +47,20 @@ export default function Modal({ title, onClose, children, footer, wide = false }
     }
 
     document.addEventListener('keydown', onKeyDown, true);
-    // Move focus into the dialog (first field, else the dialog itself).
-    const firstField = dialogRef.current?.querySelector(
-      'input, select, textarea, button',
-    );
-    (firstField || dialogRef.current)?.focus();
+    // Move focus into the dialog (first field, else the dialog itself),
+    // unless a field in it already took it (autoFocus).
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      const firstField = dialogRef.current?.querySelector(
+        'input, select, textarea, button',
+      );
+      (firstField || dialogRef.current)?.focus();
+    }
 
     return () => {
       document.removeEventListener('keydown', onKeyDown, true);
       if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div

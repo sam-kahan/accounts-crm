@@ -197,6 +197,14 @@ app.use((err, _req, res, _next) => {
   if (err?.code === '23505') {
     return res.status(409).json({ error: 'That is already on file.' });
   }
+  // A link to a record that isn't there (a task or key date for a company
+  // deleted meanwhile, a scheme id that doesn't exist), or a delete of a
+  // record something still points at: the request's problem, not a fault.
+  if (err?.code === '23503') {
+    return /is still referenced/.test(err.detail || '')
+      ? res.status(409).json({ error: 'That is still linked to other records, so it can’t be removed.' })
+      : res.status(400).json({ error: 'That refers to a record that is no longer on file. Refresh and try again.' });
+  }
   // A date Postgres can't read (31 September) that got past a form's own
   // check: the person's mistake, said plainly.
   if (err?.code === '22008' || err?.code === '22007') {

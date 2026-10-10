@@ -11,7 +11,7 @@ export default function RecheckAll({ onChanged }) {
   const [info, setInfo] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
-  const load = () => api.complaints.recheckStatus().then(setInfo).catch((e) => setErr(e.message));
+  const load = () => api.complaints.recheckStatus().then((r) => { setInfo(r); setErr(null); }).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
   const running = info?.run?.status === 'running';
   useEffect(() => {
@@ -25,7 +25,14 @@ export default function RecheckAll({ onChanged }) {
     return () => clearInterval(t);
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!info) return err ? <div className="inline-note warn" style={{ marginBottom: 20 }}>{err}</div> : null;
+  if (!info) {
+    return err ? (
+      <div className="inline-note warn" style={{ marginBottom: 20 }}>
+        Couldn’t load the re-check status: {err}{' '}
+        <button type="button" className="btn btn-sm" onClick={load}>Retry</button>
+      </div>
+    ) : null;
+  }
   const run = info.run;
 
   async function start(force, onlyNever = false) {
