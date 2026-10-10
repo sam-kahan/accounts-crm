@@ -17,7 +17,7 @@ const ago = (iso) => {
   if (mins < 60) return `${mins} min ago`;
   const hrs = Math.round(mins / 60);
   if (hrs < 48) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
-  return formatDate(String(iso).slice(0, 10));
+  return formatDate(iso);
 };
 
 export default function EmailAutomation({ onChanged }) {

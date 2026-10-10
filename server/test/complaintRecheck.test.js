@@ -98,3 +98,12 @@ test('a response dated before the new stage began is never taken as its answer',
   const q = plan(c({ stage: 'stage_2', stage_started_on: '2026-08-01' }), x({ stage: 'stage_2', stage_started_on: '2026-08-01', responded_on: '2026-07-15' }));
   assert.equal(q.changes.responded_on, undefined);
 });
+
+test('recheckUndoneWords says what an Undo put back in words, with UK dates', async () => {
+  const { recheckUndoneWords } = await import('../src/services/complaintRecheck.js');
+  assert.deepEqual(
+    recheckUndoneWords({ stage: 'stage_1', stage_started_on: '2026-09-01', responded_on: null, response_due_manual: false, state: 'open' }),
+    ['back to Stage 1', 'stage start date back to Tue 1 Sep 2026', 'date responded back to blank', 'open again'],
+  );
+  assert.deepEqual(recheckUndoneWords({}), []);
+});

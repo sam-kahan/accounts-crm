@@ -460,7 +460,12 @@ router.post(
         buffer: textPdf({ title: `The landlord's email of ${day}`, text: copyText([em], [body]) }),
       }, em.id, { description: replyPdfDescription(day) });
     } else if (a.state === 'on_file') {
-      doc = await authorityDocHere(c.id, a.doc);
+      try {
+        doc = await authorityDocHere(c.id, a.doc);
+      } catch (err) {
+        if (err.status) throw new HttpError(err.status, err.message);
+        throw err;
+      }
     } else {
       throw new HttpError(409, 'There is no authority on file to send: ask the landlord for it.');
     }

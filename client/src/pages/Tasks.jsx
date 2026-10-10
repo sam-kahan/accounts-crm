@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, dueClass } from '../api';
 import Modal from '../components/Modal.jsx';
@@ -106,15 +106,20 @@ export default function Tasks() {
   const [showAdd, setShowAdd] = useState(false);
   const [err, setErr] = useState(null);
 
+  // Only the answer to the latest request is shown: switching filters quickly
+  // could otherwise leave an older, slower answer on screen under the new one.
+  const latest = useRef(0);
   const load = () => {
     const params = filter === 'all' ? {} : filter === 'done' ? { status: 'done' } : {};
+    const n = ++latest.current;
     setErr(null);
     return api.tasks
       .list(params)
       .then((rows) => {
+        if (n !== latest.current) return;
         setTasks(filter === 'open' ? rows.filter((t) => t.status !== 'done') : rows);
       })
-      .catch((e) => setErr(e.message));
+      .catch((e) => { if (n === latest.current) setErr(e.message); });
   };
   useEffect(() => {
     load();

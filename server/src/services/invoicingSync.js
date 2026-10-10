@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { plural } from '../lib/words.js';
 import { config } from './../config.js';
 import { pushInvoice, fetchInvoiceState } from './invoicesManager.js';
 import { applyExternalState } from './commission.js';
@@ -190,7 +191,7 @@ async function releaseOrphanedLines() {
       WHERE ci.id = i.commission_invoice_id AND ci.status = 'void' AND c.id = i.contractor_id`,
   );
   if (rowCount > 0) {
-    console.warn(`[invoicing] released ${rowCount} line(s) stranded on a voided invoice`);
+    console.warn(`[invoicing] released ${plural(rowCount, 'line')} stranded on a voided invoice`);
   }
   return { released: rowCount };
 }

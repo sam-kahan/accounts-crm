@@ -386,6 +386,13 @@ router.post(
     const invoice = decorate(rows[0]);
     if (!invoice) throw new HttpError(404, 'Commission invoice not found');
     if (invoice.status === 'void') throw new HttpError(409, 'This invoice has been voided.');
+    // Greenco Invoicing emails and chases what it holds, under its own number:
+    // a second copy from here would reach the contractor as a different
+    // document for the same money. (The page hides the button; this is the
+    // boundary.)
+    if (invoice.external_id) {
+      throw new HttpError(409, `This invoice is in Greenco Invoicing${invoice.external_number ? ` as ${invoice.external_number}` : ''}, which emails and chases it. Send it from there.`);
+    }
 
     // An invoice charging VAT must carry the VAT number of the company
     // raising it: without one it isn't a valid VAT invoice.
@@ -440,9 +447,14 @@ router.post(
       `UPDATE commission_invoices
           SET status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END,
               sent_at = now(), sent_to = $2
-        WHERE id = $1 RETURNING ${COLS.replaceAll('ci.', '')}`,
+        WHERE id = $1 AND status <> 'void' RETURNING ${COLS.replaceAll('ci.', '')}`,
       [req.params.id, to.join(', ')],
     );
+    // Voided while the email was going: it has gone, but the void stands, so
+    // say so rather than report a plain success.
+    if (!updated[0]) {
+      throw new HttpError(409, `The email went to ${to.join(', ')}, but the invoice was voided meanwhile. Let the contractor know it has been withdrawn.`);
+    }
     res.json({ sent: true, to: to.join(', '), invoice: decorate(updated[0]) });
   }),
 );

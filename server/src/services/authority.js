@@ -376,9 +376,18 @@ export async function authorityDocHere(complaintId, doc) {
   // from, so the copy is still known as that reply here (sent_reply /
   // replyDocIds) and sending it settles this complaint too.
   const reply = (row.description || '').startsWith("The landlord's email of ") && (row.description || '').endsWith('as a PDF to send on as their reply');
+  // The file gone from storage: say which and from where, not a 500.
+  let buffer;
+  try {
+    buffer = await fs.readFile(row.storage_path);
+  } catch {
+    const e = new Error(`${row.filename} on ${doc.ref_code || 'another complaint'} couldn’t be read from storage, so it can’t be copied here. Upload the authority to this complaint instead.`);
+    e.status = 409;
+    throw e;
+  }
   const saved = await saveAttachmentBuffer(
     complaintId,
-    { filename: row.filename, mimetype: row.mimetype, buffer: await fs.readFile(row.storage_path) },
+    { filename: row.filename, mimetype: row.mimetype, buffer },
     reply ? row.source_email_id : null,
     { description: reply ? row.description : `${row.description || "Landlord's authority"} (copied from ${doc.ref_code || 'another complaint'})` },
   );

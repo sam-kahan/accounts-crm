@@ -300,13 +300,19 @@ export default function Users() {
     }
   }
 
+  const [removing, setRemoving] = useState(null);
   async function remove(u) {
+    if (removing) return;
     if (!confirm(`Remove ${u.name || u.email}? They were invited and never signed in.`)) return;
+    setRemoving(u.id);
+    setMsg(null);
     try {
       await api.users.remove(u.id);
       await load();
     } catch (e) {
       setMsg(e.message);
+    } finally {
+      setRemoving(null);
     }
   }
 
@@ -420,7 +426,9 @@ export default function Users() {
                       </button>
                     )}
                     {u.removable && u.id !== me?.id && (
-                      <button className="btn-danger btn-sm" onClick={() => remove(u)}>Remove</button>
+                      <button className="btn-danger btn-sm" disabled={Boolean(removing)} onClick={() => remove(u)}>
+                        {removing === u.id ? 'Removing…' : 'Remove'}
+                      </button>
                     )}
                   </td>
                 </tr>

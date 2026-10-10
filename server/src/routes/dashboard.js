@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
-import { asyncHandler } from '../lib/http.js';
+import { asyncHandler, HttpError } from '../lib/http.js';
 import { requireAuth, sessionOrCronKey } from '../middleware/auth.js';
 import { can } from '../services/permissions.js';
 import {
@@ -468,7 +468,10 @@ router.post(
 router.get(
   '/reminders-run',
   requireAuth,
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    // Only the people who may run it see the run (who ran it, what it sent
+    // and to whom); the button is theirs alone.
+    if (!can(req.user, 'admin', 'edit')) throw new HttpError(403, 'Only an administrator can see the reminder run.');
     res.json(reminderRun || { status: 'never' });
   }),
 );

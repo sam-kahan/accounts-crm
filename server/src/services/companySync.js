@@ -24,7 +24,14 @@ import { ukDate } from './complaintRules.js';
 //   * a date completed by hand (the financial year end is marked off manually)
 //     stays done while its date is unchanged, yet a genuinely new period still
 //     surfaces as a fresh reminder when CH advances the date.
+// One more case reopens a date: the sync itself closed it because Companies
+// House stopped giving it (syncCompany, below), and now gives it again (a
+// company back from liquidation) — even at the same date. Only while that
+// closing note is the last thing on it, so a date someone has since marked
+// done by hand stays done.
+const SYNC_CLOSED = 'Closed by the Companies House sync on [^[:cntrl:]]*$';
 export async function upsertKeyDates(companyId, keyDates, client = { query }) {
+  const reopened = `Given again by Companies House on ${ukDate(todayISO())}: reopened.`;
   for (const kd of keyDates) {
     await client.query(
       `INSERT INTO key_dates
@@ -36,10 +43,14 @@ export async function upsertKeyDates(companyId, keyDates, client = { query }) {
          due_date = EXCLUDED.due_date,
          recurrence = EXCLUDED.recurrence,
          status = CASE WHEN key_dates.due_date IS DISTINCT FROM EXCLUDED.due_date
+                         OR (key_dates.status = 'done' AND key_dates.notes ~ $6)
                        THEN 'pending' ELSE key_dates.status END,
          completed_at = CASE WHEN key_dates.due_date IS DISTINCT FROM EXCLUDED.due_date
-                             THEN NULL ELSE key_dates.completed_at END`,
-      [companyId, kd.category, kd.title, kd.due_date, kd.recurrence],
+                              OR (key_dates.status = 'done' AND key_dates.notes ~ $6)
+                             THEN NULL ELSE key_dates.completed_at END,
+         notes = CASE WHEN key_dates.status = 'done' AND key_dates.notes ~ $6
+                      THEN concat_ws(E'\n', key_dates.notes, $7::text) ELSE key_dates.notes END`,
+      [companyId, kd.category, kd.title, kd.due_date, kd.recurrence, SYNC_CLOSED, reopened],
     );
   }
 }

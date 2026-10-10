@@ -137,14 +137,28 @@ export default function Dashboard() {
     setSyncing(true);
     setMsg(null);
     try {
-      const res = await api.companies.syncAll();
-      if (res.enabled === false) {
+      // It runs in the background (one Companies House call per company), so
+      // the page follows it until it has finished.
+      await api.companies.syncAll();
+      setMsg('Syncing every company from Companies House. This takes a minute or two…');
+      let res = null;
+      for (let i = 0; i < 180 && !res; i += 1) {
+        await new Promise((r) => setTimeout(r, 4000));
+        let run;
+        try { run = await api.companies.syncAllRun(); } catch { continue; }
+        if (run.status === 'running') continue;
+        if (run.status === 'failed') { setMsg(`The sync stopped: ${run.error}`); return; }
+        res = run.result || {};
+      }
+      if (!res) {
+        setMsg('The sync is still running. Reload the page in a few minutes to see the new dates.');
+      } else if (res.enabled === false) {
         setMsg('Companies House isn’t configured on the server, so nothing was synced.');
       } else {
         const failed = res.failed
           ? ` (${res.failed} couldn’t be synced — check those company numbers)`
           : '';
-        setMsg(`Synced ${res.synced} of ${res.total} companies from Companies House${failed}.`);
+        setMsg(`Synced ${res.synced} of ${plural(res.total, 'company', 'companies')} from Companies House${failed}.`);
       }
       await load();
     } catch (e) {

@@ -40,6 +40,43 @@ const COLS = `id, name, company_number, status, incorporation_date,
   confirmation_statement_next_made_up_to,
   registered_office, sic_codes, notes, ch_last_synced_at, created_at, updated_at`;
 
+// Re-sync every company from Companies House on demand (dashboard button).
+// No emails — just refreshes statutory dates so an item already filed at CH
+// rolls forward and drops off the overdue list without waiting for the nightly
+// reminder cron. Best-effort per company.
+//
+// In the background, like the reminder run: one Companies House call per
+// company (each waiting out its rate limit) outlasts nginx's 60 seconds once
+// there are a few dozen, so the button showed an error while the sync carried
+// on, and a second press started a second sync. POST answers 202 at once (409
+// while one runs) and GET /sync-all says how it went.
+let syncRun = null;
+
+router.post(
+  '/sync-all',
+  asyncHandler(async (req, res) => {
+    if (syncRun?.status === 'running') {
+      return res.status(409).json({ error: 'Companies House is already being synced. It takes a minute or two.', run: syncRun });
+    }
+    syncRun = { status: 'running', started_at: new Date().toISOString(), by: req.user?.email || null };
+    const run = syncRun;
+    syncAllCompanies()
+      .then((result) => Object.assign(run, { status: 'done', finished_at: new Date().toISOString(), result: { ...result, failures: result.failures?.slice(0, 20) } }))
+      .catch((err) => {
+        console.error('[companies] sync all failed:', err);
+        Object.assign(run, { status: 'failed', finished_at: new Date().toISOString(), error: err.message });
+      });
+    res.status(202).json({ started: true, run: syncRun });
+  }),
+);
+
+router.get(
+  '/sync-all',
+  asyncHandler(async (_req, res) => {
+    res.json(syncRun || { status: 'never' });
+  }),
+);
+
 // --- Companies House lookup (search + profile preview) ---------------------
 // These come before /:id so "search" isn't treated as an id.
 
@@ -76,7 +113,8 @@ router.get(
     const params = [];
     let where = '';
     if (search) {
-      params.push(`%${search.toLowerCase()}%`);
+      // % and _ are LIKE's wildcards: searched for as typed ("50%" isn't "50 anything").
+      params.push(`%${search.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`);
       where = `WHERE lower(name) LIKE $1 OR lower(coalesce(company_number,'')) LIKE $1`;
     }
     const { rows } = await query(
@@ -170,17 +208,6 @@ router.post(
   }),
 );
 
-// Re-sync every company from Companies House on demand (dashboard button).
-// No emails — just refreshes statutory dates so an item already filed at CH
-// rolls forward and drops off the overdue list without waiting for the nightly
-// reminder cron. Best-effort per company; returns a summary.
-router.post(
-  '/sync-all',
-  asyncHandler(async (_req, res) => {
-    const summary = await syncAllCompanies();
-    res.json(summary);
-  }),
-);
 
 // Re-sync an existing company's statutory dates from Companies House.
 router.post(

@@ -615,6 +615,15 @@ th.num { text-align: right; }
 .dropzone:hover, .dropzone.over { border-color: var(--green); background: var(--green-050); }
 .dropzone.filled { border-style: solid; border-color: var(--green); background: var(--green-050); color: var(--text); }
 .dropzone input[type="file"] { display: none; }
+/* An upload button that is a <label> around its file input: the input is out
+   of sight but still reachable by Tab (display:none took it out of the
+   keyboard's way), and the button shows the focus ring when it has it. */
+.file-input-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; opacity: 0;
+}
+label:has(> .file-input-hidden) { position: relative; }
+label:has(> .file-input-hidden:focus-visible) { outline: 2px solid var(--green); outline-offset: 2px; }
 .dropzone .dz-name { font-weight: 600; color: var(--navy); word-break: break-all; }
 .dropzone .dz-hint { font-size: 12px; margin-top: 4px; }
 

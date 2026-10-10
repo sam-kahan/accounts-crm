@@ -542,7 +542,7 @@ export async function undoRecheck(id, by) {
   const cols = Object.keys(r.before || {});
   const moved = cols.filter((k) => (c[k] ?? null) !== (r.after[k] ?? null));
   if (moved.length) {
-    const e = new Error(`Can’t undo: ${moved.map((k) => k.replace(/_/g, ' ')).join(', ')} has been changed since. Use Edit details instead.`);
+    const e = new Error(`Can’t undo: ${moved.map(undoLabel).join(', ')} ${moved.length === 1 ? 'has' : 'have'} been changed since. Use Edit details instead.`);
     e.status = 409;
     throw e;
   }
@@ -558,7 +558,8 @@ export async function undoRecheck(id, by) {
   }
   await query(
     `INSERT INTO complaint_events (complaint_id, event_date, type, note, created_by) VALUES ($1,$2,'note',$3,$4)`,
-    [id, todayISO(), `Changes from the re-check on ${ukDate(londonDateOf(new Date(r.at)))} undone (${cols.map((k) => `${k.replace(/_/g, ' ')} back to ${readable(r.before[k] instanceof Date ? r.before[k].toISOString().slice(0, 10) : r.before[k]) ?? 'blank'}`).join('; ')}).`, by],
+    [id, todayISO(), `Changes from the re-check on ${ukDate(londonDateOf(new Date(r.at)))} undone` +
+      (recheckUndoneWords(r.before).length ? ` (${recheckUndoneWords(r.before).join('; ')})` : '') + '.', by],
   );
   // The emails it marked as dealt with are new again: what they said is no
   // longer recorded, so a person should see them.
@@ -573,6 +574,33 @@ export async function undoRecheck(id, by) {
   await recomputeDeadlines(id);
   const { scheduleReview } = await import('./complaintReview.js');
   scheduleReview(id);
+}
+
+// What an Undo of a re-check put back, in words a person reads ("back to
+// Stage 1", "date responded back to blank"), with UK dates: never column
+// names or internal flags. Pure.
+const RECHECK_LABEL = {
+  stage_started_on: 'stage start date', acknowledged_on: 'date acknowledged', responded_on: 'date responded',
+  final_response_on: 'final response date', response_due: 'response due date', closed_on: 'date closed',
+  raised_on: 'date it was made', reference: 'their reference', outcome: 'outcome',
+};
+const RECHECK_STAGE = { stage_1: 'Stage 1', stage_2: 'Stage 2', ombudsman: 'the ombudsman', resolved: 'resolved', closed: 'closed' };
+const RECHECK_HIDDEN = new Set(['response_due_manual', 'needs_check', 'last_recheck']);
+function undoLabel(col) {
+  if (col === 'stage') return 'the stage';
+  if (col === 'state') return 'whether it is open';
+  return RECHECK_LABEL[col] || col.replace(/_/g, ' ');
+}
+export function recheckUndoneWords(before = {}) {
+  const out = [];
+  for (const [col, v] of Object.entries(before || {})) {
+    if (RECHECK_HIDDEN.has(col)) continue;
+    if (col === 'stage') { out.push(`back to ${RECHECK_STAGE[v] || v}`); continue; }
+    if (col === 'state') { out.push(v === 'open' ? 'open again' : `back to ${v}`); continue; }
+    const shown = v instanceof Date ? v.toISOString().slice(0, 10) : v;
+    out.push(`${undoLabel(col)} back to ${shown == null || shown === '' ? 'blank' : readable(String(shown))}`);
+  }
+  return out;
 }
 
 // --- The run over every open complaint --------------------------------------

@@ -73,7 +73,7 @@ export default function Ombudsmen() {
           <div className="card-head">
             <h2>{s.name}</h2>
             {s.verified_at
-              ? <span className="badge ok">Checked by {s.verified_by || 'a colleague'} on {formatDate(String(s.verified_at).slice(0, 10))}</span>
+              ? <span className="badge ok">Checked by {s.verified_by || 'a colleague'} on {formatDate(s.verified_at)}</span>
               : <span className="badge amber">Not checked</span>}
           </div>
           <div className="card-body">

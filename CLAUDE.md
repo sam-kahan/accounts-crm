@@ -770,6 +770,35 @@ the page says how far each date can be trusted.
 
 ## Recent changes
 
+### 2026-10-10 — the follow-ups from the review
+- **Void's payment check checked against Greenco Invoicing's code**
+  (`v2/src/app/api/external/invoices/[id]/route.ts`): it sends `status`,
+  `paidTotal`, `outstanding`, `paidAt`, `lastPaymentOn` (every payment has a
+  date, so a part-payment always sets it). `paymentRecorded` now reads
+  `paidTotal` too, with a test on that shape.
+- **A commission invoice in Greenco Invoicing isn't emailed from here**
+  (`POST /commission-invoices/:id/send` → 409, as the page already hid it),
+  and one voided while its email went says so instead of reporting success.
+- **Sync all now runs in the background** (`POST /companies/sync-all` → 202,
+  `GET /companies/sync-all`; one at a time), like the reminder run: it
+  outlasted nginx's 60 seconds with a few dozen companies.
+- **A Companies House date the sync closed reopens when CH gives it back**
+  (`companySync.js#upsertKeyDates`), even at the same date, while that
+  closing note is the last on it (one marked done by hand since stays done).
+- **Upload buttons are reachable by keyboard**: a label's file input is
+  `.file-input-hidden` (out of sight, still focusable, the button shows the
+  ring), never `display: none`.
+- **Timestamps show the UK day** (`formatDate` takes a full timestamp and
+  reads it in Europe/London; never `.slice(0, 10)` one first).
+- Smaller: the re-check Undo note and the page name fields in words
+  (`recheckUndoneWords`); a deactivated colleague is sent to sign-in;
+  Remove (Staff), Delete, Not resolved yet, Take off and the re-check Undo
+  wait; a missing authority file to copy is a 409; batch review usage is
+  recorded once the results are all read; the status-check and referral
+  prompts say marked text is data; company search treats % and _ as typed;
+  the Tasks list shows only the latest filter's answer; the reminder run's
+  status is for administrators.
+
 ### 2026-10-10 — review of every section: fixes found by testing the workflows
 - **No crash on a missing file**: a document gone from storage (complaint,
   organisation or contractor invoice download) answered with an unhandled

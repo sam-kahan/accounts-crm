@@ -386,13 +386,17 @@ export async function collectReviewBatch() {
     let applied = 0;
     let superseded = 0;
     const retry = [];
+    // Usage is recorded once the whole result set has been read, with the
+    // batch marked done: a read cut off part way is read again next time,
+    // and recording as it went would count those answers twice.
+    const usage = [];
     for await (const r of await client.messages.batches.results(b.id)) {
       const item = b.items?.[r.custom_id];
       if (!item) continue;
       if (r.result?.type !== 'succeeded') { retry.push(r.custom_id); continue; }
       const message = r.result.message;
       // Recorded at the batch price (aiUsage.js#costOf halves a "(batch)" model).
-      await recordUsage(BATCH_FEATURE, { ...message, model: `${message.model} (batch)` });
+      usage.push({ ...message, model: `${message.model} (batch)` });
       try {
         if (message.stop_reason === 'refusal') throw new Error('The assistant declined this request.');
         const text = message.content.filter((x) => x.type === 'text').map((x) => x.text).join('\n');
@@ -411,6 +415,7 @@ export async function collectReviewBatch() {
     // Failed, expired or unusable: a direct review instead, spaced out.
     retry.forEach((id, i) => scheduleReview(id, 60000 + i * 20000));
     await setSetting('review_batch', { ...b, done_at: new Date().toISOString(), applied, superseded, retried: retry.length }, 'morning reviews');
+    for (const m of usage) await recordUsage(BATCH_FEATURE, m);
     return { applied, superseded, retried: retry.length };
   } finally {
     collecting = false;

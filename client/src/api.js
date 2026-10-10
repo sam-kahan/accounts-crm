@@ -16,6 +16,12 @@ async function request(path, options = {}) {
   }
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
+  // An account deactivated while signed in: the server has ended the session
+  // (middleware/auth.js), so back to the sign-in screen, where signing in
+  // says why, rather than an error on every button.
+  if (res.status === 403 && !path.startsWith('/auth/') && /deactivated/i.test(body.error || '')) {
+    window.dispatchEvent(new Event('auth:unauthorized'));
+  }
   if (!res.ok) {
     const err = new Error(body.error || `Request failed (${res.status})`);
     err.status = res.status;
@@ -90,6 +96,7 @@ export const api = {
       }),
     sync: (id) => request(`/companies/${id}/sync`, { method: 'POST' }),
     syncAll: () => request('/companies/sync-all', { method: 'POST' }),
+    syncAllRun: () => request('/companies/sync-all'),
     // Companies House lookups
     chConfig: () => request('/companies/ch/config'),
     chSearch: (q) => request(`/companies/ch/search?q=${encodeURIComponent(q)}`),
@@ -574,12 +581,19 @@ export function accountOrReference(c) {
 
 export function formatDate(d) {
   if (!d) return '—';
-  const date = new Date(d + (d.length === 10 ? 'T00:00:00' : ''));
+  // A date (YYYY-MM-DD) is shown as it is. A timestamp ("…T23:30:00Z") is
+  // shown as the UK day it fell on: cut to its first ten characters it is the
+  // UTC day, a day early between midnight and 1am in summer.
+  const s = String(d);
+  const isDay = /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const date = new Date(isDay ? `${s}T00:00:00` : s);
+  if (Number.isNaN(date.getTime())) return '—';
   // "Sep", as the server writes it (ukDate), not the browser's "Sept".
   return date.toLocaleDateString('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
+    ...(isDay ? {} : { timeZone: 'Europe/London' }),
   }).replace('Sept', 'Sep');
 }
 

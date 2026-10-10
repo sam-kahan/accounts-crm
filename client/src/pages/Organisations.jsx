@@ -271,7 +271,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
           <div className="btn-row">
             <label className="btn-navy btn-sm" style={{ cursor: researchEnabled ? 'pointer' : 'not-allowed', margin: 0, opacity: researchEnabled ? 1 : 0.6 }}>
               {reading ? 'Reading…' : '📄 Upload their procedure document'}
-              <input type="file" style={{ display: 'none' }} disabled={reading || !researchEnabled}
+              <input type="file" className="file-input-hidden" disabled={reading || !researchEnabled}
                 accept=".pdf,.doc,.docx,.txt,image/*"
                 onChange={(e) => { readDocument(e.target.files?.[0]); e.target.value = ''; }} />
             </label>
@@ -306,7 +306,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
             if (researchedAt || Object.values(form.procedure_sources || {}).includes('research')) {
               return (
                 <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-                  ✓ Their website was researched{researchedAt ? ` on ${formatDate(String(researchedAt).slice(0, 10))}` : ''}.
+                  ✓ Their website was researched{researchedAt ? ` on ${formatDate(researchedAt)}` : ''}.
                   {standard.length ? ` ${standard.length} figure${standard.length === 1 ? ' isn’t' : 's aren’t'} published by them, so the standard is used. No need to research again.` : ''}
                 </div>
               );
@@ -333,7 +333,7 @@ function OrgModal({ initial, researchEnabled, onClose, onSaved }) {
               {docs.map((d) => (
                 <div key={d.id} className="flex-between" style={{ gap: 8 }}>
                   <a href={api.organisations.documentUrl(d.id)} target="_blank" rel="noreferrer">{d.filename}</a>
-                  <span className="muted">{formatDate(String(d.uploaded_at).slice(0, 10))}
+                  <span className="muted">{formatDate(d.uploaded_at)}
                     <button type="button" className="btn-ghost btn-sm" onClick={() => removeDoc(d)}
                       aria-label={`Remove ${d.filename}`}>✕</button>
                   </span>

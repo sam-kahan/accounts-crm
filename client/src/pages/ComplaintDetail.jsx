@@ -262,6 +262,15 @@ function recheckValue(v) {
   return STAGE_LABEL[v] || String(v);
 }
 
+// What a re-check changed, named as a person reads it (complaintRecheck.js#
+// recheckUndoneWords has the same labels).
+const RECHECK_LABEL = {
+  stage: 'stage', state: 'open or closed', stage_started_on: 'stage start date', acknowledged_on: 'date acknowledged',
+  responded_on: 'date responded', final_response_on: 'final response date', response_due: 'response due date',
+  closed_on: 'date closed', raised_on: 'date it was made', reference: 'their reference', outcome: 'outcome',
+};
+const recheckLabel = (k) => RECHECK_LABEL[k] || k.replace(/_/g, ' ');
+
 // Is this organisation's part still running? (complaintRules.js#trackOpen)
 const trackOpen = (t) => t.state === 'open' && !['resolved', 'closed'].includes(t.stage);
 
@@ -767,7 +776,7 @@ export default function ComplaintDetail() {
             ) : (
               <label className="btn btn-sm" style={{ cursor: askUpload ? 'default' : 'pointer', margin: 0 }}>
                 {askUpload === x.item ? 'Uploading and redrafting…' : 'Upload it…'}
-                <input type="file" multiple style={{ display: 'none' }} disabled={Boolean(askUpload)}
+                <input type="file" multiple className="file-input-hidden" disabled={Boolean(askUpload)}
                   onChange={(e) => { uploadAskedFor(x.item, e.target.files); e.target.value = ''; }} />
               </label>
             )}
@@ -855,7 +864,7 @@ export default function ComplaintDetail() {
           {a.state !== 'on_file' && (
             <label className="btn btn-sm" style={{ cursor: uploading ? 'default' : 'pointer', margin: 0 }}>
               {uploading ? 'Uploading…' : 'Upload the authority…'}
-              <input type="file" multiple style={{ display: 'none' }} disabled={uploading}
+              <input type="file" multiple className="file-input-hidden" disabled={uploading}
                 onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
             </label>
           )}
@@ -1027,14 +1036,28 @@ export default function ComplaintDetail() {
       setRemovingMain(false);
     }
   }
-  async function removeParty(p) {
-    if (!confirm(`Take ${p.org_name} off this complaint? Its timeline entries and emails stay on the complaint.`)) return;
+  // A one-off button (take an organisation off, Not resolved yet, Undo of a
+  // re-check, Delete) waits while its request runs: one at a time, and its
+  // refusal shown in the page's message bar.
+  const [oneOff, setOneOff] = useState(null);
+  async function runOnce(key, fn) {
+    if (oneOff) return;
+    setOneOff(key);
     setMsg(null);
     try {
-      setC(await api.complaints.removeParty(id, p.id).then(() => api.complaints.get(id)));
+      await fn();
     } catch (e) {
       setMsg(e.message);
+    } finally {
+      setOneOff(null);
     }
+  }
+
+  async function removeParty(p) {
+    if (!confirm(`Take ${p.org_name} off this complaint? Its timeline entries and emails stay on the complaint.`)) return;
+    await runOnce(`party:${p.id}`, async () => {
+      setC(await api.complaints.removeParty(id, p.id).then(() => api.complaints.get(id)));
+    });
   }
 
   async function refreshAiReview() {
@@ -1113,12 +1136,10 @@ export default function ComplaintDetail() {
       'emails won’t be brought back in.\n\nIf it has been resolved, press Cancel and use “Mark resolved” ' +
       'instead: that keeps the record of how it ended.',
     )) return;
-    try {
+    await runOnce('delete', async () => {
       await api.complaints.remove(id);
       navigate('/complaints');
-    } catch (e) {
-      setMsg(e.message);
-    }
+    });
   }
 
   if (!c) {
@@ -1372,7 +1393,7 @@ export default function ComplaintDetail() {
             )}
             <div className="muted" style={{ fontSize: 12 }}>
               From the <Link to="/ombudsmen">Ombudsmen</Link> register, checked by {sc.verified_by || 'a colleague'}
-              {sc.verified_at ? ` on ${formatDate(String(sc.verified_at).slice(0, 10))}` : ''}.
+              {sc.verified_at ? ` on ${formatDate(sc.verified_at)}` : ''}.
             </div>
           </details>
         )}
@@ -1620,7 +1641,7 @@ export default function ComplaintDetail() {
               </button>
             )}
             <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit details</button>
-            <button className="btn-danger btn-sm" onClick={remove}>Delete</button>
+            <button className="btn-danger btn-sm" onClick={remove} disabled={Boolean(oneOff)}>{oneOff === 'delete' ? 'Deleting…' : 'Delete'}</button>
           </div>
         </div>
         <div className="card-body">
@@ -1964,12 +1985,12 @@ export default function ComplaintDetail() {
                   {multi ? `Mark ${t.org_name}’s part resolved…` : 'Yes, mark it resolved…'}
                 </button>
               ))}
-              <button className="btn btn-sm" onClick={async () => {
+              <button className="btn btn-sm" disabled={Boolean(oneOff)} onClick={async () => {
                 const why = prompt('Not resolved yet. What is still outstanding? (optional)', '');
                 if (why === null) return;
-                try { setC(await api.complaints.notResolved(id, why)); } catch (e) { setMsg(e.message); }
+                await runOnce('not-resolved', async () => setC(await api.complaints.notResolved(id, why)));
               }}>
-                Not resolved yet
+                {oneOff === 'not-resolved' ? 'Saving…' : 'Not resolved yet'}
               </button>
             </div>
           </div>
@@ -1982,12 +2003,12 @@ export default function ComplaintDetail() {
           <strong>Re-checked against its emails</strong> on{' '}
           {new Date(c.last_recheck.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}:{' '}
           {Object.entries(c.last_recheck.after).filter(([k]) => k !== 'response_due_manual')
-            .map(([k, v]) => `${k.replace(/_/g, ' ')} ${recheckValue(c.last_recheck.before?.[k])} → ${recheckValue(v)}`).join('; ')}.
+            .map(([k, v]) => `${recheckLabel(k)} ${recheckValue(c.last_recheck.before?.[k])} → ${recheckValue(v)}`).join('; ')}.
           {' '}The details are on the timeline.{' '}
-          <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} onClick={async () => {
+          <button className="btn-ghost btn-sm" style={{ padding: '0 4px' }} disabled={Boolean(oneOff)} onClick={async () => {
             if (!confirm('Undo what the re-check changed? The values it replaced are put back.')) return;
-            try { setC(await api.complaints.undoRecheck(id).then(() => api.complaints.get(id))); } catch (e) { setMsg(e.message); }
-          }}>Undo</button>
+            await runOnce('undo-recheck', async () => setC(await api.complaints.undoRecheck(id).then(() => api.complaints.get(id))));
+          }}>{oneOff === 'undo-recheck' ? 'Undoing…' : 'Undo'}</button>
         </div>
       )}
 
@@ -2232,7 +2253,9 @@ export default function ComplaintDetail() {
                 {partyIdOf(t) && (
                   <>
                     <button className="btn-ghost btn-sm" onClick={() => setPartyForm(t)}>Edit {t.org_name}’s details</button>
-                    <button className="btn-ghost btn-sm" onClick={() => removeParty(t)}>Take off this complaint</button>
+                    <button className="btn-ghost btn-sm" disabled={Boolean(oneOff)} onClick={() => removeParty(t)}>
+                      {oneOff === `party:${t.id}` ? 'Taking off…' : 'Take off this complaint'}
+                    </button>
                   </>
                 )}
                 {/* The main organisation too: the next one takes its place. */}
@@ -2261,7 +2284,7 @@ export default function ComplaintDetail() {
             <input
               type="file"
               multiple
-              style={{ display: 'none' }}
+              className="file-input-hidden"
               disabled={uploading}
               onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }}
             />
@@ -2283,7 +2306,7 @@ export default function ComplaintDetail() {
                       {a.ai_readable ? ' · read by the AI assistant' : ' · not readable by the AI'}
                     </div>
                   </td>
-                  <td className="due" style={{ width: 120 }}>{formatDate((a.uploaded_at || '').slice(0, 10))}</td>
+                  <td className="due" style={{ width: 120 }}>{formatDate(a.uploaded_at)}</td>
                   <td style={{ textAlign: 'right', width: 40 }}>
                     <button
                       className="btn-ghost btn-sm"
@@ -2854,7 +2877,7 @@ function ProcedureCard({ c, title, head }) {
     trust = (
       <div className="inline-note" style={{ marginBottom: 12 }}>
         ✓ Dates follow {p.procedure_ref ? <strong>{p.procedure_ref}</strong> : 'their procedure'} —
-        checked by {p.verified_by || 'a colleague'} on {formatDate(String(p.verified_at).slice(0, 10))}.
+        checked by {p.verified_by || 'a colleague'} on {formatDate(p.verified_at)}.
         {timingDefaults.length > 0 && ' Some timescales aren’t stated in it and use the general default, marked below.'}
       </div>
     );
@@ -3187,7 +3210,7 @@ function EmailSearch({ s, busy, onSearch }) {
       : `Not yet searched for: ${list(s.pending)}. This happens by itself within a few minutes, or search now.`;
   } else if (s.searched.length) {
     text = `Every email quoting its numbers is here: the mailboxes were searched for ${list(s.searched)}` +
-      `${s.searched_at ? ` (last on ${formatDate(String(s.searched_at).slice(0, 10))})` : ''}.`;
+      `${s.searched_at ? ` (last on ${formatDate(s.searched_at)})` : ''}.`;
   } else {
     warn = true;
     text = 'There is no reference or account number on this complaint to search for yet. Add them with Edit details.';

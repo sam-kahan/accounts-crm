@@ -37,7 +37,7 @@ const PAID_STATUSES = new Set(['paid', 'partially_paid', 'part_paid', 'partial',
 export function paymentRecorded(state) {
   if (!state) return false;
   const status = String(state.status || '').toLowerCase().replace(/[\s-]+/g, '_');
-  const amount = Number(state.amountPaid ?? state.paidAmount ?? state.totalPaid ?? 0);
+  const amount = Number(state.paidTotal ?? state.amountPaid ?? state.paidAmount ?? 0);
   return PAID_STATUSES.has(status) || Boolean(state.lastPaymentOn) || Boolean(state.paidAt) || amount > 0;
 }
 export async function voidRefusal(row) {

@@ -241,7 +241,7 @@ function NewComplaintModal({
           <div className="btn-row">
             <label className="btn-navy btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
               {reading ? 'Reading…' : '📄 Upload the email or letter'}
-              <input type="file" style={{ display: 'none' }} disabled={reading}
+              <input type="file" className="file-input-hidden" disabled={reading}
                 accept=".pdf,.doc,.docx,.txt,.eml,image/*"
                 onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) fillFrom({ file: f }); }} />
             </label>
